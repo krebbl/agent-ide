@@ -72,6 +72,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     set({ projects: updated });
     try {
       await invoke("save_projects", { projects: updated });
+      if (project.type === "ssh") {
+        const conn = project.connection as { host: string; port: number; username: string; authMethod: string; keyPath?: string; path?: string };
+        const password = await invoke<string | null>("ssh_get_password", { projectId: project.id }).catch(() => null);
+        invoke("ssh_connect", {
+          projectId: project.id,
+          host: conn.host,
+          port: conn.port,
+          username: conn.username,
+          authMethod: conn.authMethod,
+          keyPath: conn.keyPath ?? null,
+          password: password ?? null,
+        }).catch(() => {});
+      }
     } catch (e) {
       set({ error: String(e) });
     }

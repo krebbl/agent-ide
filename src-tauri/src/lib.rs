@@ -30,6 +30,7 @@ pub enum Connection {
         key_path: Option<String>,
         #[serde(skip)]
         password: Option<String>,
+        path: Option<String>,
     },
 }
 
@@ -797,33 +798,39 @@ async fn run_git_command_ssh(
 
     let mut stdout = String::new();
     let mut stderr = String::new();
+    let mut exit_status: Option<u32> = None;
 
-    loop {
-        if let Some(msg) = channel.wait().await {
-            match msg {
-                russh::ChannelMsg::Data { data } => {
+    while let Some(msg) = channel.wait().await {
+        match msg {
+            russh::ChannelMsg::Data { data } => {
+                stdout.push_str(&String::from_utf8_lossy(&data));
+            }
+            russh::ChannelMsg::ExtendedData { data, ext } => {
+                if ext == 1 {
+                    stderr.push_str(&String::from_utf8_lossy(&data));
+                } else {
                     stdout.push_str(&String::from_utf8_lossy(&data));
                 }
-                russh::ChannelMsg::ExtendedData { data, ext } => {
-                    if ext == 1 {
-                        stderr.push_str(&String::from_utf8_lossy(&data));
-                    } else {
-                        stdout.push_str(&String::from_utf8_lossy(&data));
-                    }
-                }
-                russh::ChannelMsg::Eof => {}
-                russh::ChannelMsg::ExitStatus { exit_status } => {
-                    if exit_status != 0 {
-                        return Err(format!("git command failed (exit {}): {}", exit_status, stderr.trim()));
-                    }
-                    break;
-                }
-                _ => {}
             }
+            russh::ChannelMsg::Eof => {}
+            russh::ChannelMsg::ExitStatus { exit_status: status } => {
+                exit_status = Some(status);
+            }
+            russh::ChannelMsg::Close => {
+                break;
+            }
+            _ => {}
+        }
+        if exit_status.is_some() {
+            break;
         }
     }
 
-    Ok(stdout.trim().to_string())
+    match exit_status {
+        Some(0) => Ok(stdout.trim().to_string()),
+        Some(code) => Err(format!("git command failed (exit {}): {}", code, stderr.trim())),
+        None => Err("git command: no exit status received".to_string()),
+    }
 }
 
 async fn list_worktrees_ssh(
@@ -1001,6 +1008,7 @@ fn git_worktree_list(project_id: String, app_handle: tauri::AppHandle) -> Result
 fn get_repo_path(project: &Project) -> String {
     match &project.connection {
         Connection::Local { path } => path.clone(),
+        Connection::Ssh { path: Some(path), .. } => path.clone(),
         Connection::Ssh { username, .. } => {
             let worktree = project.worktrees.iter().find(|w| w.is_main).or(project.worktrees.first());
             worktree.map(|w| w.path.clone()).unwrap_or_else(|| {

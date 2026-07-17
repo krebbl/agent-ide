@@ -169,6 +169,7 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
         username: sshUsername,
         authMethod: sshAuthMethod,
         keyPath: sshAuthMethod === "key" ? sshKeyPath : undefined,
+        path: sshRemotePath,
       };
       const projectId = crypto.randomUUID();
       const project: Project = {
