@@ -259,11 +259,17 @@ function ProjectItem({
   const fetchedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    if (isExpanded && project.worktrees.length === 0 && !isLoading && !fetchedRef.current.has(project.id)) {
+    if (!isExpanded) {
+      fetchedRef.current.delete(project.id);
+    }
+  }, [isExpanded, project.id]);
+
+  useEffect(() => {
+    if (isExpanded && !fetchedRef.current.has(project.id) && !isLoading) {
       fetchedRef.current.add(project.id);
       fetchWorktrees(project.id);
     }
-  }, [isExpanded, project.id, project.worktrees.length, isLoading, fetchWorktrees]);
+  }, [isExpanded, project.id, isLoading, fetchWorktrees]);
 
   const handleRefresh = () => {
     fetchedRef.current.delete(project.id);

@@ -637,39 +637,35 @@ fn is_worktree_dirty(repo: &Repository) -> bool {
     false
 }
 
-fn resolve_worktree_branch(repo: &Repository, worktree_path: &str) -> Option<String> {
-    if let Ok(head) = repo.head() {
-        if head.is_branch() {
-            if let Some(name) = head.shorthand() {
-                return Some(name.to_string());
-            }
-        }
-    }
-
-    let head_file = Path::new(worktree_path).join(".git");
-    if head_file.exists() {
-        if let Ok(content) = std::fs::read_to_string(&head_file) {
-            if content.starts_with("gitdir: ") {
-                let gitdir = content.trim_start_matches("gitdir: ").trim();
-                let head_path = Path::new(gitdir).parent().unwrap_or(Path::new(gitdir)).join("HEAD");
-                if let Ok(head_content) = std::fs::read_to_string(&head_path) {
-                    if head_content.starts_with("ref: refs/heads/") {
-                        return Some(head_content.trim_start_matches("ref: refs/heads/").trim().to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
-
 fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
     let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
 
-    let worktrees = repo.worktrees().map_err(|e| format!("Failed to list worktrees: {}", e))?;
-
     let mut result = Vec::new();
+
+    let main_branch = if let Ok(head) = repo.head() {
+        if head.is_branch() {
+            head.shorthand().unwrap_or("main").to_string()
+        } else {
+            "main".to_string()
+        }
+    } else {
+        "main".to_string()
+    };
+
+    let (ahead, behind) = compute_ahead_behind(&repo, &main_branch);
+    let status = if is_worktree_dirty(&repo) { "dirty".to_string() } else { "clean".to_string() };
+
+    result.push(WorktreeInfo {
+        id: repo_path.split('/').filter(|s| !s.is_empty()).last().unwrap_or(repo_path).to_string(),
+        branch: main_branch,
+        path: repo_path.to_string(),
+        is_main: true,
+        status,
+        ahead,
+        behind,
+    });
+
+    let worktrees = repo.worktrees().map_err(|e| format!("Failed to list worktrees: {}", e))?;
 
     for wt_name_opt in worktrees.iter() {
         let wt_name = wt_name_opt.ok_or("Failed to read worktree name")?;
@@ -678,10 +674,19 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
 
         let wt_path = wt.path().to_str().unwrap_or("").to_string();
 
-        let main_git_path = Path::new(repo_path).join(".git");
-        let is_main = wt_path == repo_path || (main_git_path.exists() && main_git_path.is_dir());
-
-        let branch = resolve_worktree_branch(&repo, &wt_path).unwrap_or_else(|| wt_name.to_string());
+        let branch = if let Ok(wt_repo) = Repository::open(&wt_path) {
+            if let Ok(head) = wt_repo.head() {
+                if head.is_branch() {
+                    head.shorthand().unwrap_or(wt_name).to_string()
+                } else {
+                    wt_name.to_string()
+                }
+            } else {
+                wt_name.to_string()
+            }
+        } else {
+            wt_name.to_string()
+        };
 
         let (ahead, behind) = compute_ahead_behind(&repo, &branch);
 
@@ -695,7 +700,7 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
             id: wt_name.to_string(),
             branch,
             path: wt_path,
-            is_main,
+            is_main: false,
             status,
             ahead,
             behind,
@@ -715,15 +720,8 @@ fn add_worktree_local(
         return Err(format!("Path '{}' already exists", path));
     }
 
-    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
-
-    if new_branch {
-        let head = repo.head().map_err(|e| format!("Failed to get HEAD: {}", e))?;
-        let head_commit = head.peel_to_commit().map_err(|e| format!("Failed to resolve HEAD: {}", e))?;
-
-        repo.branch(branch, &head_commit, false)
-            .map_err(|e| format!("Failed to create branch '{}': {}", branch, e))?;
-    } else {
+    if !new_branch {
+        let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
         let branch_exists = repo.find_branch(branch, BranchType::Local).is_ok()
             || repo.find_branch(branch, BranchType::Remote).is_ok();
         if !branch_exists {
@@ -731,7 +729,12 @@ fn add_worktree_local(
         }
     }
 
-    run_git_command(repo_path, &["worktree", "add", "-b", branch, path])?;
+    let args = if new_branch {
+        vec!["worktree", "add", path, "-b", branch]
+    } else {
+        vec!["worktree", "add", path, branch]
+    };
+    run_git_command(repo_path, &args)?;
 
     Ok(())
 }
@@ -879,6 +882,10 @@ async fn list_worktrees_ssh(
         worktrees.push(wt);
     }
 
+    if !worktrees.is_empty() {
+        worktrees[0].is_main = true;
+    }
+
     for wt in &mut worktrees {
         let status_output = run_git_command_ssh(project_id, &wt.path, &["status", "--porcelain"], state).await?;
         wt.status = if status_output.is_empty() {
@@ -922,9 +929,9 @@ async fn add_worktree_ssh(
     }
 
     if new_branch {
-        run_git_command_ssh(project_id, repo_path, &["worktree", "add", "-b", branch, path], state).await?;
+        run_git_command_ssh(project_id, repo_path, &["worktree", "add", path, "-b", branch], state).await?;
     } else {
-        run_git_command_ssh(project_id, repo_path, &["worktree", "add", branch, path], state).await?;
+        run_git_command_ssh(project_id, repo_path, &["worktree", "add", path, branch], state).await?;
     }
 
     Ok(())
