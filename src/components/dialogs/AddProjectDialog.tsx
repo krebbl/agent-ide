@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { X, FolderOpen, Server, Key, Lock, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
@@ -19,16 +19,28 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
   const [localIsGit, setLocalIsGit] = useState<boolean | null>(null);
   const [localChecking, setLocalChecking] = useState(false);
 
-  const [sshHost, setSshHost] = useState("");
+  const [sshHost, setSshHost] = useState("marcuskrejpowicz.com");
   const [sshPort, setSshPort] = useState(22);
-  const [sshUsername, setSshUsername] = useState("");
-  const [sshAuthMethod, setSshAuthMethod] = useState<"key" | "password">("key");
+  const [sshUsername, setSshUsername] = useState("dev");
+  const [sshAuthMethod, setSshAuthMethod] = useState<"key" | "password" | "agent">("key");
   const [sshKeyPath, setSshKeyPath] = useState("");
   const [sshPassword, setSshPassword] = useState("");
   const [sshTestStatus, setSshTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [sshTestMessage, setSshTestMessage] = useState("");
   const [sshRemotePath, setSshRemotePath] = useState("/");
   const [sshShowBrowser, setSshShowBrowser] = useState(false);
+  const [sshAgentInfo, setSshAgentInfo] = useState<{
+    authSock: string | null;
+    socketExists: boolean;
+    onePasswordSocket: string | null;
+    onePasswordSocketExists: boolean;
+    agentKeyCount: number | null;
+    agentKeyComments: string[];
+    pubKeyCount: number;
+    pubKeyComments: string[];
+    error: string | null;
+  } | null>(null);
+  const [sshAgentChecking, setSshAgentChecking] = useState(false);
 
   const handleLocalBrowse = async () => {
     const selected = await open({ directory: true, multiple: false });
@@ -58,6 +70,52 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
       alert(String(e));
     }
   };
+
+  useEffect(() => {
+    if (sshAuthMethod !== "agent") {
+      setSshAgentInfo(null);
+      return;
+    }
+    setSshAgentChecking(true);
+    invoke<{
+      auth_sock: string | null;
+      socket_exists: boolean;
+      one_password_socket: string | null;
+      one_password_socket_exists: boolean;
+      agent_key_count: number | null;
+      agent_key_comments: string[];
+      pub_key_count: number;
+      pub_key_comments: string[];
+      error: string | null;
+    }>("ssh_agent_info")
+      .then((info) => {
+        setSshAgentInfo({
+          authSock: info.auth_sock,
+          socketExists: info.socket_exists,
+          onePasswordSocket: info.one_password_socket,
+          onePasswordSocketExists: info.one_password_socket_exists,
+          agentKeyCount: info.agent_key_count,
+          agentKeyComments: info.agent_key_comments,
+          pubKeyCount: info.pub_key_count,
+          pubKeyComments: info.pub_key_comments,
+          error: info.error,
+        });
+      })
+      .catch((e) => {
+        setSshAgentInfo({
+          authSock: null,
+          socketExists: false,
+          onePasswordSocket: null,
+          onePasswordSocketExists: false,
+          agentKeyCount: null,
+          agentKeyComments: [],
+          pubKeyCount: 0,
+          pubKeyComments: [],
+          error: String(e),
+        });
+      })
+      .finally(() => setSshAgentChecking(false));
+  }, [sshAuthMethod]);
 
   const handleSshTest = async () => {
     if (!sshHost || !sshUsername) return;
@@ -274,10 +332,11 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
                 <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">Authentication</label>
                 <select
                   value={sshAuthMethod}
-                  onChange={(e) => setSshAuthMethod(e.target.value as "key" | "password")}
+                  onChange={(e) => setSshAuthMethod(e.target.value as "key" | "password" | "agent")}
                   className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] focus:border-[var(--color-blue)] focus:outline-none"
                 >
                   <option value="key">Private Key</option>
+                  <option value="agent">SSH Agent</option>
                   <option value="password">Password</option>
                 </select>
               </div>
@@ -307,6 +366,66 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
                       Browse
                     </button>
                   </div>
+                </div>
+              )}
+
+              {sshAuthMethod === "agent" && (
+                <div className="rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] p-3 space-y-2">
+                  {sshAgentChecking && (
+                    <div className="flex items-center gap-2 text-sm text-[var(--color-overlay1)]">
+                      <Loader2 size={14} className="animate-spin" />
+                      Checking SSH agent...
+                    </div>
+                  )}
+                  {sshAgentInfo && !sshAgentChecking && (
+                    <>
+                      <div className="flex items-center gap-2 text-sm text-[var(--color-subtext1)]">
+                        <Key size={14} />
+                        SSH Agent Status
+                      </div>
+                      {sshAgentInfo.error ? (
+                        <div className="flex items-center gap-2 text-sm text-[var(--color-peach)]">
+                          <AlertCircle size={14} />
+                          {sshAgentInfo.error}
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <div className="text-xs text-[var(--color-overlay1)]">
+                            Socket: {sshAgentInfo.authSock || sshAgentInfo.onePasswordSocket || "not set"}
+                          </div>
+                          {sshAgentInfo.onePasswordSocket && !sshAgentInfo.authSock && (
+                            <div className="text-xs text-[var(--color-subtext1)]">
+                              Using 1Password agent
+                            </div>
+                          )}
+                          <div className="text-sm text-[var(--color-green)]">
+                            {sshAgentInfo.agentKeyCount !== null
+                              ? `${sshAgentInfo.agentKeyCount} key${sshAgentInfo.agentKeyCount !== 1 ? "s" : ""} in agent`
+                              : "0 keys in agent"}
+                          </div>
+                          {sshAgentInfo.agentKeyComments.length > 0 && (
+                            <div className="text-xs text-[var(--color-overlay1)]">
+                              {sshAgentInfo.agentKeyComments.map((c, i) => (
+                                <div key={i}>{c}</div>
+                              ))}
+                            </div>
+                          )}
+                          {sshAgentInfo.pubKeyCount > 0 && (
+                            <>
+                              <div className="text-sm text-[var(--color-subtext1)]">
+                                {sshAgentInfo.pubKeyCount} .pub file{sshAgentInfo.pubKeyCount !== 1 ? "s" : ""} in ~/.ssh/
+                              </div>
+                              <div className="text-xs text-[var(--color-overlay1)]">
+                                {sshAgentInfo.pubKeyComments.map((c, i) => (
+                                  <div key={i}>{c}</div>
+                                ))}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
 

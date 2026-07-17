@@ -8,7 +8,7 @@ export interface SSHConnection {
   host: string;
   port: number;
   username: string;
-  authMethod: "key" | "password";
+  authMethod: "key" | "password" | "agent";
   keyPath?: string;
   password?: string;
 }
