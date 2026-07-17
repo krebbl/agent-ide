@@ -1,56 +1,225 @@
-import { useState, useEffect, useRef } from "react";
-import { FolderPlus, Folder, Server, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { FolderPlus, Folder, Server, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, MoreVertical, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import AddProjectDialog from "../dialogs/AddProjectDialog";
+import AddWorktreeDialog from "../dialogs/AddWorktreeDialog";
 import { Project } from "../../types";
+
+function WorktreeContextMenu({
+  worktree,
+  projectActiveWorktreeId,
+  onClose,
+  onRemove,
+}: {
+  worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
+  projectActiveWorktreeId: string | null;
+  onClose: () => void;
+  onRemove: (force: boolean) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  const handleCopyPath = async () => {
+    try {
+      await navigator.clipboard.writeText(worktree.path);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleOpenInTerminal = () => {
+    // TODO: spawn terminal at worktree.path
+    onClose();
+  };
+
+  const handleOpenInFileManager = () => {
+    // TODO: open file manager at worktree.path
+    onClose();
+  };
+
+  if (showConfirm) {
+    return (
+      <div className="fixed inset-0 z-[60]" onClick={onClose}>
+        <div
+          className="absolute z-[61] rounded-md border border-[var(--color-surface0)] bg-[var(--color-mantle)] p-3 shadow-xl"
+          onClick={(e) => e.stopPropagation()}
+          style={{ top: "50%", left: "50%", transform: "translate(-50%, -50%)" }}
+        >
+          <p className="mb-2 text-xs text-[var(--color-text)]">
+            Remove worktree <span className="font-mono">{worktree.path}</span>?
+          </p>
+          {worktree.status === "dirty" && (
+            <p className="mb-2 text-xs text-[var(--color-yellow)]">
+              This worktree has uncommitted changes.
+            </p>
+          )}
+          <div className="flex gap-2">
+            <button
+              onClick={() => { onRemove(false); onClose(); }}
+              disabled={worktree.status === "dirty"}
+              className="rounded-md bg-[var(--color-red)]/20 px-3 py-1 text-xs text-[var(--color-red)] hover:bg-[var(--color-red)]/30 disabled:opacity-50"
+            >
+              Remove
+            </button>
+            {worktree.status === "dirty" && (
+              <button
+                onClick={() => { onRemove(true); onClose(); }}
+                className="rounded-md bg-[var(--color-peach)]/20 px-3 py-1 text-xs text-[var(--color-peach)] hover:bg-[var(--color-peach)]/30"
+              >
+                Force Remove
+              </button>
+            )}
+            <button
+              onClick={() => { setShowConfirm(false); }}
+              className="rounded-md bg-[var(--color-surface0)] px-3 py-1 text-xs text-[var(--color-overlay1)] hover:bg-[var(--color-surface1)]"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const isDisabled = worktree.isMain || worktree.id === projectActiveWorktreeId;
+  const disableReason = worktree.isMain
+    ? "Cannot remove the main worktree"
+    : "Cannot remove the active worktree";
+
+  return (
+    <div className="absolute z-50 min-w-[180px] rounded-md border border-[var(--color-surface0)] bg-[var(--color-mantle)] py-1 shadow-xl">
+      <button
+        onClick={handleOpenInTerminal}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]"
+      >
+        <Terminal size={12} />
+        Open in Terminal
+      </button>
+      <button
+        onClick={handleOpenInFileManager}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]"
+      >
+        <FolderOpen size={12} />
+        Open in File Manager
+      </button>
+      <button
+        onClick={handleCopyPath}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]"
+      >
+        {copied ? <CopyCheck size={12} className="text-[var(--color-green)]" /> : <Copy size={12} />}
+        {copied ? "Copied!" : "Copy Path"}
+      </button>
+      <div className="my-1 border-t border-[var(--color-surface0)]" />
+      <div className="relative group/remove">
+        <button
+          onClick={() => setShowConfirm(true)}
+          disabled={isDisabled}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-[var(--color-red)] hover:bg-[var(--color-surface0)] disabled:opacity-50 disabled:cursor-not-allowed"
+          title={isDisabled ? disableReason : undefined}
+        >
+          <Trash2 size={12} />
+          Remove Worktree
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function WorktreeItem({
   worktree,
   isActive,
   onActivate,
+  projectActiveWorktreeId,
+  onRemove,
 }: {
   worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
   isActive: boolean;
   onActivate: () => void;
+  projectActiveWorktreeId: string | null;
+  onRemove: (force: boolean) => void;
 }) {
+  const [showMenu, setShowMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setShowMenu(true);
+  }, []);
+
+  useEffect(() => {
+    if (!showMenu) return;
+    const handleClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showMenu]);
+
   return (
-    <div
-      className={`group flex items-center gap-1.5 px-3 py-1 text-xs cursor-pointer transition-colors ${
-        isActive
-          ? "bg-[var(--color-surface0)] text-[var(--color-text)]"
-          : "text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/50"
-      }`}
-      onClick={onActivate}
-      title={worktree.path}
-    >
-      <div className="relative shrink-0">
-        <GitBranch size={10} className={worktree.isMain ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"} />
-        {worktree.isMain && (
-          <CircleDot size={6} className="absolute -bottom-0.5 -right-0.5 text-[var(--color-blue)]" />
-        )}
-      </div>
-      <span className="flex-1 truncate">{worktree.branch}</span>
-      <span
-        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-          worktree.status === "clean"
-            ? "bg-[var(--color-green)]"
-            : worktree.status === "dirty"
-              ? "bg-[var(--color-yellow)]"
-              : "bg-[var(--color-overlay0)]"
+    <div className="relative">
+      <div
+        className={`group flex items-center gap-1.5 px-3 py-1 text-xs cursor-pointer transition-colors ${
+          isActive
+            ? "bg-[var(--color-surface0)] text-[var(--color-text)]"
+            : "text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/50"
         }`}
-      />
-      {worktree.ahead > 0 && (
-        <span className="flex items-center gap-0.5 text-[var(--color-green)]">
-          <ArrowUp size={8} />
-          {worktree.ahead}
-        </span>
-      )}
-      {worktree.behind > 0 && (
-        <span className="flex items-center gap-0.5 text-[var(--color-peach)]">
-          <ArrowDown size={8} />
-          {worktree.behind}
-        </span>
+        onClick={onActivate}
+        onContextMenu={handleContextMenu}
+        title={worktree.path}
+      >
+        <div className="relative shrink-0">
+          <GitBranch size={10} className={worktree.isMain ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"} />
+          {worktree.isMain && (
+            <CircleDot size={6} className="absolute -bottom-0.5 -right-0.5 text-[var(--color-blue)]" />
+          )}
+        </div>
+        <span className="flex-1 truncate">{worktree.branch}</span>
+        <span
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+            worktree.status === "clean"
+              ? "bg-[var(--color-green)]"
+              : worktree.status === "dirty"
+                ? "bg-[var(--color-yellow)]"
+                : "bg-[var(--color-overlay0)]"
+          }`}
+        />
+        {worktree.ahead > 0 && (
+          <span className="flex items-center gap-0.5 text-[var(--color-green)]">
+            <ArrowUp size={8} />
+            {worktree.ahead}
+          </span>
+        )}
+        {worktree.behind > 0 && (
+          <span className="flex items-center gap-0.5 text-[var(--color-peach)]">
+            <ArrowDown size={8} />
+            {worktree.behind}
+          </span>
+        )}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowMenu(true);
+          }}
+          className="shrink-0 text-[var(--color-overlay0)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-[var(--color-text)]"
+        >
+          <MoreVertical size={10} />
+        </button>
+      </div>
+      {showMenu && (
+        <div ref={menuRef}>
+          <WorktreeContextMenu
+            worktree={worktree}
+            projectActiveWorktreeId={projectActiveWorktreeId}
+            onClose={() => setShowMenu(false)}
+            onRemove={onRemove}
+          />
+        </div>
       )}
     </div>
   );
@@ -72,8 +241,9 @@ function ProjectItem({
   onRemove: () => void;
 }) {
   const connectionStatus = useConnectionStatusStore((s) => s.statuses[project.id]?.status);
-  const { fetchWorktrees, setActiveWorktree, worktreeLoading } = useProjectStore();
+  const { fetchWorktrees, setActiveWorktree, worktreeLoading, removeWorktree, refreshWorktrees } = useProjectStore();
   const isLoading = worktreeLoading[project.id] ?? false;
+  const [showAddDialog, setShowAddDialog] = useState(false);
 
   const statusColor =
     project.type !== "ssh"
@@ -94,6 +264,15 @@ function ProjectItem({
       fetchWorktrees(project.id);
     }
   }, [isExpanded, project.id, project.worktrees.length, isLoading, fetchWorktrees]);
+
+  const handleRefresh = () => {
+    fetchedRef.current.delete(project.id);
+    refreshWorktrees(project.id);
+  };
+
+  const handleRemoveWorktree = async (worktreePath: string, force: boolean) => {
+    await removeWorktree(project.id, worktreePath, force);
+  };
 
   return (
     <div>
@@ -154,13 +333,30 @@ function ProjectItem({
               worktree={wt}
               isActive={wt.id === project.activeWorktreeId}
               onActivate={() => setActiveWorktree(project.id, wt.id)}
+              projectActiveWorktreeId={project.activeWorktreeId}
+              onRemove={(force) => handleRemoveWorktree(wt.path, force)}
             />
           ))}
-          <button className="w-full px-3 py-1 text-left text-xs text-[var(--color-blue)] hover:bg-[var(--color-surface0)]/50">
-            + Add Worktree
-          </button>
+          <div className="flex items-center">
+            <button
+              onClick={() => setShowAddDialog(true)}
+              className="flex-1 px-3 py-1 text-left text-xs text-[var(--color-blue)] hover:bg-[var(--color-surface0)]/50"
+            >
+              + Add Worktree
+            </button>
+            {!isLoading && project.worktrees.length > 0 && (
+              <button
+                onClick={handleRefresh}
+                className="shrink-0 px-2 py-1 text-[var(--color-overlay0)] hover:text-[var(--color-text)]"
+                title="Refresh worktrees"
+              >
+                <RefreshCw size={10} />
+              </button>
+            )}
+          </div>
         </div>
       )}
+      {showAddDialog && <AddWorktreeDialog projectId={project.id} onClose={() => setShowAddDialog(false)} />}
     </div>
   );
 }

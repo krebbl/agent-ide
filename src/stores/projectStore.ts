@@ -17,6 +17,9 @@ interface ProjectStore {
   getActiveProject: () => Project | undefined;
   fetchWorktrees: (projectId: string) => Promise<void>;
   setActiveWorktree: (projectId: string, worktreeId: string) => Promise<void>;
+  removeWorktree: (projectId: string, worktreePath: string, force?: boolean) => Promise<void>;
+  refreshWorktrees: (projectId: string) => Promise<void>;
+  addWorktree: (projectId: string, branch: string, path: string, newBranch: boolean) => Promise<void>;
 }
 
 export const useProjectStore = create<ProjectStore>((set, get) => ({
@@ -163,5 +166,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     } catch (e) {
       set({ error: String(e) });
     }
+  },
+
+  addWorktree: async (projectId: string, branch: string, path: string, newBranch: boolean) => {
+    await invoke("git_worktree_add_async", { projectId, branch, path, newBranch });
+    await get().refreshWorktrees(projectId);
+  },
+
+  removeWorktree: async (projectId: string, worktreePath: string, force = false) => {
+    await invoke("git_worktree_remove_async", { projectId, worktreePath, force });
+    await get().refreshWorktrees(projectId);
+  },
+
+  refreshWorktrees: async (projectId: string) => {
+    await get().fetchWorktrees(projectId);
   },
 }));
