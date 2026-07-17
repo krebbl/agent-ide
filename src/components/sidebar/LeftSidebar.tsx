@@ -1,9 +1,60 @@
-import { useState, useEffect } from "react";
-import { FolderPlus, Folder, Server, ChevronRight, ChevronDown, Trash2 } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { FolderPlus, Folder, Server, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import AddProjectDialog from "../dialogs/AddProjectDialog";
 import { Project } from "../../types";
+
+function WorktreeItem({
+  worktree,
+  isActive,
+  onActivate,
+}: {
+  worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
+  isActive: boolean;
+  onActivate: () => void;
+}) {
+  return (
+    <div
+      className={`group flex items-center gap-1.5 px-3 py-1 text-xs cursor-pointer transition-colors ${
+        isActive
+          ? "bg-[var(--color-surface0)] text-[var(--color-text)]"
+          : "text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/50"
+      }`}
+      onClick={onActivate}
+      title={worktree.path}
+    >
+      <div className="relative shrink-0">
+        <GitBranch size={10} className={worktree.isMain ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"} />
+        {worktree.isMain && (
+          <CircleDot size={6} className="absolute -bottom-0.5 -right-0.5 text-[var(--color-blue)]" />
+        )}
+      </div>
+      <span className="flex-1 truncate">{worktree.branch}</span>
+      <span
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+          worktree.status === "clean"
+            ? "bg-[var(--color-green)]"
+            : worktree.status === "dirty"
+              ? "bg-[var(--color-yellow)]"
+              : "bg-[var(--color-overlay0)]"
+        }`}
+      />
+      {worktree.ahead > 0 && (
+        <span className="flex items-center gap-0.5 text-[var(--color-green)]">
+          <ArrowUp size={8} />
+          {worktree.ahead}
+        </span>
+      )}
+      {worktree.behind > 0 && (
+        <span className="flex items-center gap-0.5 text-[var(--color-peach)]">
+          <ArrowDown size={8} />
+          {worktree.behind}
+        </span>
+      )}
+    </div>
+  );
+}
 
 function ProjectItem({
   project,
@@ -21,6 +72,8 @@ function ProjectItem({
   onRemove: () => void;
 }) {
   const connectionStatus = useConnectionStatusStore((s) => s.statuses[project.id]?.status);
+  const { fetchWorktrees, setActiveWorktree, worktreeLoading } = useProjectStore();
+  const isLoading = worktreeLoading[project.id] ?? false;
 
   const statusColor =
     project.type !== "ssh"
@@ -32,6 +85,15 @@ function ProjectItem({
           : connectionStatus === "error"
             ? "bg-[var(--color-red)]"
             : "bg-[var(--color-overlay0)]";
+
+  const fetchedRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (isExpanded && project.worktrees.length === 0 && !isLoading && !fetchedRef.current.has(project.id)) {
+      fetchedRef.current.add(project.id);
+      fetchWorktrees(project.id);
+    }
+  }, [isExpanded, project.id, project.worktrees.length, isLoading, fetchWorktrees]);
 
   return (
     <div>
@@ -77,26 +139,22 @@ function ProjectItem({
       </div>
       {isExpanded && (
         <div className="ml-6 border-l border-[var(--color-surface0)] pl-2">
-          {project.worktrees.length === 0 && (
+          {isLoading && (
+            <div className="flex items-center gap-1.5 px-3 py-1 text-xs text-[var(--color-overlay0)]">
+              <Loader2 size={10} className="animate-spin" />
+              Loading worktrees...
+            </div>
+          )}
+          {!isLoading && project.worktrees.length === 0 && (
             <div className="px-3 py-1 text-xs text-[var(--color-overlay0)]">No worktrees</div>
           )}
-          {project.worktrees.map((wt) => (
-            <div
+          {!isLoading && project.worktrees.map((wt) => (
+            <WorktreeItem
               key={wt.id}
-              className="flex items-center gap-2 px-3 py-1 text-xs text-[var(--color-subtext0)]"
-            >
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  wt.status === "clean"
-                    ? "bg-[var(--color-green)]"
-                    : wt.status === "dirty"
-                      ? "bg-[var(--color-yellow)]"
-                      : "bg-[var(--color-overlay0)]"
-                }`}
-              />
-              {wt.branch}
-              {wt.isMain && <span className="text-[var(--color-overlay0)]">(main)</span>}
-            </div>
+              worktree={wt}
+              isActive={wt.id === project.activeWorktreeId}
+              onActivate={() => setActiveWorktree(project.id, wt.id)}
+            />
           ))}
           <button className="w-full px-3 py-1 text-left text-xs text-[var(--color-blue)] hover:bg-[var(--color-surface0)]/50">
             + Add Worktree

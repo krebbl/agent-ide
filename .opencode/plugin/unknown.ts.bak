@@ -1,0 +1,18 @@
+import type { Plugin } from "@opencode-ai/plugin"
+import { appendFileSync } from "fs"
+import { join } from "path"
+
+const LOG_FILE = join(process.env.HOME || ".", ".opencode", "tool-calls.log")
+
+function safeLen(val: unknown): number {
+  try { return JSON.stringify(val).length } catch { return 0 }
+}
+
+export default (async () => {
+  return {
+    "tool.execute.before": async (input: Record<string, unknown>, output: Record<string, unknown>) => {
+      const entry = `[${new Date().toISOString()}] CALL tool="${String(input.tool ?? "")}" args=${JSON.stringify(input.args ?? {})}\n`
+      try { appendFileSync(LOG_FILE, entry) } catch {}
+    }
+  }
+}) satisfies Plugin

@@ -1,12 +1,13 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import { Project } from "../types";
+import { Project, Worktree } from "../types";
 
 interface ProjectStore {
   projects: Project[];
   activeProjectId: string | null;
   isLoading: boolean;
   error: string | null;
+  worktreeLoading: Record<string, boolean>;
   loadProjects: () => Promise<void>;
   loadProjectsFromDisk: () => Promise<Project[]>;
   addProject: (project: Project) => Promise<void>;
@@ -14,6 +15,8 @@ interface ProjectStore {
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
   setActiveProject: (id: string | null) => void;
   getActiveProject: () => Project | undefined;
+  fetchWorktrees: (projectId: string) => Promise<void>;
+  setActiveWorktree: (projectId: string, worktreeId: string) => Promise<void>;
 }
 
 export const useProjectStore = create<ProjectStore>((set, get) => ({
@@ -21,6 +24,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   activeProjectId: null,
   isLoading: false,
   error: null,
+  worktreeLoading: {},
 
   loadProjects: async () => {
     set({ isLoading: true, error: null });
@@ -114,5 +118,50 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   getActiveProject: () => {
     const { projects, activeProjectId } = get();
     return projects.find((p) => p.id === activeProjectId);
+  },
+
+  fetchWorktrees: async (projectId: string) => {
+    set((s) => ({ worktreeLoading: { ...s.worktreeLoading, [projectId]: true } }));
+    try {
+      const raw = await invoke<Worktree[]>("git_worktree_list_async", { projectId });
+      const worktrees: Worktree[] = raw.map((wt) => ({
+        id: wt.id,
+        branch: wt.branch,
+        path: wt.path,
+        isMain: wt.isMain,
+        status: wt.status as "clean" | "dirty" | "unknown",
+        ahead: wt.ahead,
+        behind: wt.behind,
+      }));
+      const { projects, isLoading } = get();
+      const current = isLoading || projects.length === 0
+        ? await get().loadProjectsFromDisk()
+        : projects;
+      const updated = current.map((p) =>
+        p.id === projectId ? { ...p, worktrees } : p,
+      );
+      set({ projects: updated });
+      await invoke("save_projects", { projects: updated });
+    } catch (e) {
+      set({ error: String(e) });
+    } finally {
+      set((s) => ({ worktreeLoading: { ...s.worktreeLoading, [projectId]: false } }));
+    }
+  },
+
+  setActiveWorktree: async (projectId: string, worktreeId: string) => {
+    const { projects, isLoading } = get();
+    const current = isLoading || projects.length === 0
+      ? await get().loadProjectsFromDisk()
+      : projects;
+    const updated = current.map((p) =>
+      p.id === projectId ? { ...p, activeWorktreeId: worktreeId } : p,
+    );
+    set({ projects: updated, activeProjectId: projectId });
+    try {
+      await invoke("save_projects", { projects: updated });
+    } catch (e) {
+      set({ error: String(e) });
+    }
   },
 }));
