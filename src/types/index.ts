@@ -1,10 +1,12 @@
 export type ProjectType = "local" | "ssh";
 
 export interface LocalConnection {
+  type: "local";
   path: string;
 }
 
 export interface SSHConnection {
+  type: "ssh";
   host: string;
   port: number;
   username: string;

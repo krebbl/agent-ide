@@ -154,7 +154,7 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
         id: crypto.randomUUID(),
         name: localName,
         type: "local",
-        connection: { path: localPath } as LocalConnection,
+        connection: { type: "local", path: localPath } as LocalConnection,
         worktrees: [],
         activeWorktreeId: null,
       };
@@ -163,6 +163,7 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
     } else {
       if (!sshHost || !sshUsername || !sshRemotePath) return;
       const connection: SSHConnection = {
+        type: "ssh",
         host: sshHost,
         port: sshPort,
         username: sshUsername,
@@ -379,49 +380,17 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
                   )}
                   {sshAgentInfo && !sshAgentChecking && (
                     <>
-                      <div className="flex items-center gap-2 text-sm text-[var(--color-subtext1)]">
-                        <Key size={14} />
-                        SSH Agent Status
-                      </div>
                       {sshAgentInfo.error ? (
                         <div className="flex items-center gap-2 text-sm text-[var(--color-peach)]">
                           <AlertCircle size={14} />
                           {sshAgentInfo.error}
                         </div>
                       ) : (
-                        <div className="space-y-1">
-                          <div className="text-xs text-[var(--color-overlay1)]">
-                            Socket: {sshAgentInfo.authSock || sshAgentInfo.onePasswordSocket || "not set"}
-                          </div>
-                          {sshAgentInfo.onePasswordSocket && !sshAgentInfo.authSock && (
-                            <div className="text-xs text-[var(--color-subtext1)]">
-                              Using 1Password agent
-                            </div>
-                          )}
-                          <div className="text-sm text-[var(--color-green)]">
-                            {sshAgentInfo.agentKeyCount !== null
-                              ? `${sshAgentInfo.agentKeyCount} key${sshAgentInfo.agentKeyCount !== 1 ? "s" : ""} in agent`
-                              : "0 keys in agent"}
-                          </div>
-                          {sshAgentInfo.agentKeyComments.length > 0 && (
-                            <div className="text-xs text-[var(--color-overlay1)]">
-                              {sshAgentInfo.agentKeyComments.map((c, i) => (
-                                <div key={i}>{c}</div>
-                              ))}
-                            </div>
-                          )}
-                          {sshAgentInfo.pubKeyCount > 0 && (
-                            <>
-                              <div className="text-sm text-[var(--color-subtext1)]">
-                                {sshAgentInfo.pubKeyCount} .pub file{sshAgentInfo.pubKeyCount !== 1 ? "s" : ""} in ~/.ssh/
-                              </div>
-                              <div className="text-xs text-[var(--color-overlay1)]">
-                                {sshAgentInfo.pubKeyComments.map((c, i) => (
-                                  <div key={i}>{c}</div>
-                                ))}
-                              </div>
-                            </>
-                          )}
+                        <div className="flex items-center gap-2 text-sm text-[var(--color-green)]">
+                          <CheckCircle size={14} />
+                          {sshAgentInfo.agentKeyCount !== null
+                            ? `${sshAgentInfo.agentKeyCount} key${sshAgentInfo.agentKeyCount !== 1 ? "s" : ""} loaded`
+                            : "SSH agent ready"}
                         </div>
                       )}
                     </>

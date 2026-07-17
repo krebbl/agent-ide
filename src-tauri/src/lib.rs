@@ -14,20 +14,23 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum Connection {
     Local { path: String },
     Ssh {
         host: String,
         port: u16,
         username: String,
+        #[serde(rename = "authMethod")]
         auth_method: String,
+        #[serde(rename = "keyPath")]
         key_path: Option<String>,
         password: Option<String>,
     },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Project {
     pub id: String,
     pub name: String,
@@ -37,6 +40,7 @@ pub struct Project {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Worktree {
     pub id: String,
     pub branch: String,
