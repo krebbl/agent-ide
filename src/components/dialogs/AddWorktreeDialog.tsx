@@ -8,6 +8,17 @@ interface AddWorktreeDialogProps {
   onClose: () => void;
 }
 
+function generateWorktreeName(branch: string, existingNames: string[]): string {
+  const base = branch.replace(/\//g, "-").replace(/[^a-zA-Z0-9-_]/g, "");
+  let name = base;
+  let i = 1;
+  while (existingNames.includes(name)) {
+    name = `${base}-${i}`;
+    i++;
+  }
+  return name;
+}
+
 export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDialogProps) {
   const { projects, addWorktree } = useProjectStore();
   const [branches, setBranches] = useState<{ name: string; isRemote: boolean }[]>([]);
@@ -15,11 +26,18 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
   const [mode, setMode] = useState<"existing" | "new">("existing");
   const [selectedBranch, setSelectedBranch] = useState("");
   const [newBranchName, setNewBranchName] = useState("");
-  const [customPath, setCustomPath] = useState("");
+  const [worktreeName, setWorktreeName] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const project = projects.find((p) => p.id === projectId);
-  const repoName = project?.name || "";
+  const repoPath = project?.type === "local" ? (project.connection as { path: string }).path : "";
+  const repoDirName = repoPath ? repoPath.split("/").filter(Boolean).pop() || "" : "";
+  const existingNames = project?.worktrees.map((w) => w.id) || [];
+
+  const branch = mode === "existing" ? selectedBranch : newBranchName;
+  const isNew = mode === "new";
+  const effectiveName = worktreeName || generateWorktreeName(branch, existingNames);
+  const worktreePath = repoPath && repoDirName ? `${repoPath}/../worktrees/${repoDirName}/${effectiveName}` : "";
 
   useEffect(() => {
     invoke<{ name: string; isRemote: boolean }[]>("git_branches_list_async", { projectId })
@@ -28,24 +46,20 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
   }, [projectId]);
 
   useEffect(() => {
-    if (mode === "existing" && selectedBranch) {
-      const cleanBranch = selectedBranch.replace(/^origin\//, "");
-      setCustomPath(`../${repoName}-${cleanBranch}`);
-    } else if (mode === "new" && newBranchName) {
-      setCustomPath(`../${repoName}-${newBranchName}`);
+    if (branch && !worktreeName) {
+      const generated = generateWorktreeName(branch, existingNames);
+      setWorktreeName(generated);
     }
-  }, [mode, selectedBranch, newBranchName, repoName]);
+  }, [branch]);
 
-  const branch = mode === "existing" ? selectedBranch : newBranchName;
-  const isNew = mode === "new";
-  const canSubmit = branch && customPath && (isNew || selectedBranch);
+  const canSubmit = branch && effectiveName;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
     setLoading(true);
     setError(null);
     try {
-      await addWorktree(projectId, branch, customPath, isNew);
+      await addWorktree(projectId, branch, worktreePath, isNew);
       onClose();
     } catch (e) {
       setError(String(e));
@@ -114,12 +128,14 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
           </div>
 
           <div>
-            <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">Path</label>
+            <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">
+              Worktree Name <span className="text-[var(--color-overlay0)]">(optional, auto-generated)</span>
+            </label>
             <input
               type="text"
-              value={customPath}
-              onChange={(e) => setCustomPath(e.target.value)}
-              placeholder="../repo-branch"
+              value={worktreeName}
+              onChange={(e) => setWorktreeName(e.target.value)}
+              placeholder="auto-generated from branch"
               className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
             />
           </div>
