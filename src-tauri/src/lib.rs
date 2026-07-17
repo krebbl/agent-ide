@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
+use tauri::Emitter;
 use tauri::Manager;
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
@@ -71,13 +73,59 @@ impl client::Handler for ClientHandler {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ConnectionStatus {
+    Connected,
+    Disconnected,
+    Reconnecting,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionStatusEvent {
+    pub project_id: String,
+    pub status: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SshCredentials {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_method: String,
+    pub key_path: Option<String>,
+    pub password: Option<String>,
+}
+
 pub struct SshConnection {
     pub session: client::Handle<ClientHandler>,
     pub sftp: Option<SftpSession>,
+    pub credentials: SshCredentials,
+    pub status: ConnectionStatus,
+    pub reconnect_attempts: u32,
 }
 
 pub struct AppState {
     pub ssh_connections: Mutex<HashMap<String, SshConnection>>,
+    pub app_handle: StdMutex<Option<tauri::AppHandle>>,
+}
+
+impl AppState {
+    pub fn emit_status(&self, project_id: &str, status: ConnectionStatus, error: Option<String>) {
+        if let Some(handle) = self.app_handle.lock().unwrap().as_ref() {
+            let _ = handle.emit("ssh_connection_status", ConnectionStatusEvent {
+                project_id: project_id.to_string(),
+                status: match status {
+                    ConnectionStatus::Connected => "connected".to_string(),
+                    ConnectionStatus::Disconnected => "disconnected".to_string(),
+                    ConnectionStatus::Reconnecting => "reconnecting".to_string(),
+                    ConnectionStatus::Error => "error".to_string(),
+                },
+                error,
+            });
+        }
+    }
 }
 
 #[tauri::command]
@@ -517,16 +565,41 @@ async fn ssh_connect(
     auth_method: String,
     key_path: Option<String>,
     password: Option<String>,
-    state: tauri::State<'_, AppState>,
+    state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     info!("ssh_connect: project_id={} host={} port={} username={} auth_method={}", project_id, host, port, username, auth_method);
     {
         let connections = state.ssh_connections.lock().await;
-        if connections.contains_key(&project_id) {
-            info!("ssh_connect: connection already exists");
-            return Ok(());
+        if let Some(conn) = connections.get(&project_id) {
+            match conn.status {
+                ConnectionStatus::Connected => {
+                    info!("ssh_connect: connection already exists and is connected");
+                    return Ok(());
+                }
+                ConnectionStatus::Reconnecting => {
+                    info!("ssh_connect: connection is reconnecting, waiting...");
+                    drop(connections);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    let connections = state.ssh_connections.lock().await;
+                    if let Some(c) = connections.get(&project_id) {
+                        if c.status == ConnectionStatus::Connected {
+                            return Ok(());
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
     }
+
+    let credentials = SshCredentials {
+        host: host.clone(),
+        port,
+        username: username.clone(),
+        auth_method: auth_method.clone(),
+        key_path: key_path.clone(),
+        password: password.clone(),
+    };
 
     let (session, sftp) = connect_ssh(
         &host,
@@ -540,7 +613,14 @@ async fn ssh_connect(
 
     info!("ssh_connect: connect succeeded, storing connection (sftp={})", sftp.is_some());
     let mut connections = state.ssh_connections.lock().await;
-    connections.insert(project_id, SshConnection { session, sftp });
+    connections.insert(project_id.clone(), SshConnection {
+        session,
+        sftp,
+        credentials,
+        status: ConnectionStatus::Connected,
+        reconnect_attempts: 0,
+    });
+    state.emit_status(&project_id, ConnectionStatus::Connected, None);
 
     Ok(())
 }
@@ -548,7 +628,7 @@ async fn ssh_connect(
 #[tauri::command]
 async fn ssh_disconnect(
     project_id: String,
-    state: tauri::State<'_, AppState>,
+    state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     info!("ssh_disconnect: project_id={}", project_id);
     let mut connections = state.ssh_connections.lock().await;
@@ -564,7 +644,7 @@ async fn ssh_disconnect(
 async fn ssh_list_directory(
     project_id: String,
     path: String,
-    state: tauri::State<'_, AppState>,
+    state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Vec<SshDirEntry>, String> {
     info!("ssh_list_directory: project_id={} path={}", project_id, path);
     let connections = state.ssh_connections.lock().await;
@@ -599,7 +679,7 @@ async fn ssh_list_directory(
 async fn ssh_check_git(
     project_id: String,
     path: String,
-    state: tauri::State<'_, AppState>,
+    state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<bool, String> {
     info!("ssh_check_git: project_id={} path={}", project_id, path);
     let connections = state.ssh_connections.lock().await;
@@ -657,6 +737,147 @@ fn ssh_delete_password(project_id: String) -> Result<(), String> {
     }
 }
 
+async fn start_health_check(state: Arc<AppState>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+    loop {
+        interval.tick().await;
+
+        let project_ids: Vec<String> = {
+            let connections = state.ssh_connections.lock().await;
+            connections.keys().cloned().collect()
+        };
+
+        for project_id in project_ids {
+            check_and_reconnect(&project_id, &state).await;
+        }
+    }
+}
+
+async fn check_and_reconnect(project_id: &str, state: &Arc<AppState>) {
+    let needs_reconnect = {
+        let connections = state.ssh_connections.lock().await;
+        if let Some(conn) = connections.get(project_id) {
+            if conn.status != ConnectionStatus::Connected {
+                return;
+            }
+            // Test SFTP connection
+            if let Some(sftp) = &conn.sftp {
+                match tokio::time::timeout(Duration::from_secs(5), sftp.read_dir("/")).await {
+                    Ok(Ok(_)) => false,
+                    _ => true,
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    };
+
+    if needs_reconnect {
+        info!("health_check: connection {} dropped, attempting reconnect", project_id);
+        state.emit_status(project_id, ConnectionStatus::Reconnecting, None);
+
+        let credentials = {
+            let connections = state.ssh_connections.lock().await;
+            if let Some(conn) = connections.get(project_id) {
+                conn.credentials.clone()
+            } else {
+                return;
+            }
+        };
+
+        let reconnect_result = connect_ssh(
+            &credentials.host,
+            credentials.port,
+            &credentials.username,
+            &credentials.auth_method,
+            credentials.key_path.as_deref(),
+            credentials.password.as_deref(),
+        )
+        .await;
+
+        match reconnect_result {
+            Ok((session, sftp)) => {
+                let mut connections = state.ssh_connections.lock().await;
+                if let Some(conn) = connections.get_mut(project_id) {
+                    conn.session = session;
+                    conn.sftp = sftp;
+                    conn.status = ConnectionStatus::Connected;
+                    conn.reconnect_attempts = 0;
+                    state.emit_status(project_id, ConnectionStatus::Connected, None);
+                    info!("health_check: reconnected {}", project_id);
+                }
+            }
+            Err(e) => {
+                warn!("health_check: reconnect failed for {}: {}", project_id, e);
+                let mut connections = state.ssh_connections.lock().await;
+                if let Some(conn) = connections.get_mut(project_id) {
+                    conn.reconnect_attempts += 1;
+                    if conn.reconnect_attempts >= 10 {
+                        conn.status = ConnectionStatus::Error;
+                        state.emit_status(project_id, ConnectionStatus::Error, Some(e));
+                        info!("health_check: giving up on {} after 10 retries", project_id);
+                    } else {
+                        let delay = std::cmp::min(1 << conn.reconnect_attempts, 30);
+                        info!("health_check: retrying {} in {}s (attempt {}/{})", project_id, delay, conn.reconnect_attempts, 10);
+                        conn.status = ConnectionStatus::Reconnecting;
+                        state.emit_status(project_id, ConnectionStatus::Reconnecting, Some(format!("Reconnecting in {}s...", delay)));
+                        let state_clone = state.clone();
+                        let project_id_clone = project_id.to_string();
+                        let credentials_clone = credentials.clone();
+                        let attempt = conn.reconnect_attempts;
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(Duration::from_secs(delay as u64)).await;
+                            let mut connections = state_clone.ssh_connections.lock().await;
+                            if let Some(conn) = connections.get_mut(&project_id_clone) {
+                                if conn.status == ConnectionStatus::Reconnecting && conn.reconnect_attempts == attempt {
+                                    drop(connections);
+                                    let result = connect_ssh(
+                                        &credentials_clone.host,
+                                        credentials_clone.port,
+                                        &credentials_clone.username,
+                                        &credentials_clone.auth_method,
+                                        credentials_clone.key_path.as_deref(),
+                                        credentials_clone.password.as_deref(),
+                                    )
+                                    .await;
+                                    match result {
+                                        Ok((session, sftp)) => {
+                                            let mut connections = state_clone.ssh_connections.lock().await;
+                                            if let Some(conn) = connections.get_mut(&project_id_clone) {
+                                                conn.session = session;
+                                                conn.sftp = sftp;
+                                                conn.status = ConnectionStatus::Connected;
+                                                conn.reconnect_attempts = 0;
+                                                state_clone.emit_status(&project_id_clone, ConnectionStatus::Connected, None);
+                                                info!("health_check: reconnected {} on retry", project_id_clone);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let mut connections = state_clone.ssh_connections.lock().await;
+                                            if let Some(conn) = connections.get_mut(&project_id_clone) {
+                                                conn.reconnect_attempts += 1;
+                                                if conn.reconnect_attempts >= 10 {
+                                                    conn.status = ConnectionStatus::Error;
+                                                    state_clone.emit_status(&project_id_clone, ConnectionStatus::Error, Some(e));
+                                                } else {
+                                                    conn.status = ConnectionStatus::Reconnecting;
+                                                    state_clone.emit_status(&project_id_clone, ConnectionStatus::Reconnecting, Some(format!("Reconnect failed, will retry...")));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -670,9 +891,21 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .manage(AppState {
-            ssh_connections: Mutex::new(HashMap::new()),
+        .setup(|app| {
+            let state: tauri::State<Arc<AppState>> = app.state();
+            *state.app_handle.lock().unwrap() = Some(app.handle().clone());
+
+            let state_clone = state.inner().clone();
+            tauri::async_runtime::spawn(async move {
+                start_health_check(state_clone).await;
+            });
+
+            Ok(())
         })
+        .manage(Arc::new(AppState {
+            ssh_connections: Mutex::new(HashMap::new()),
+            app_handle: StdMutex::new(None),
+        }))
         .invoke_handler(tauri::generate_handler![
             save_projects,
             load_projects,
@@ -688,6 +921,31 @@ pub fn run() {
             ssh_get_password,
             ssh_delete_password,
         ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let state: Arc<AppState> = window.state::<Arc<AppState>>().inner().clone();
+                let handle = window.app_handle().clone();
+                let connections = state.ssh_connections.blocking_lock();
+                let project_ids: Vec<String> = connections.keys().cloned().collect();
+                drop(connections);
+
+                tauri::async_runtime::spawn(async move {
+                    for project_id in &project_ids {
+                        info!("shutdown: disconnecting {}", project_id);
+                        let connections = state.ssh_connections.lock().await;
+                        if let Some(conn) = connections.get(project_id) {
+                            let _ = tokio::time::timeout(
+                                Duration::from_secs(3),
+                                conn.session.disconnect(Disconnect::ByApplication, "", "en"),
+                            ).await;
+                        }
+                    }
+                    let _ = handle.exit(0);
+                });
+
+                api.prevent_close();
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

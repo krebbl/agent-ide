@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { FolderPlus, Folder, Server, ChevronRight, ChevronDown, Trash2 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
+import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import AddProjectDialog from "../dialogs/AddProjectDialog";
 import { Project } from "../../types";
 
@@ -19,10 +20,23 @@ function ProjectItem({
   onSelect: () => void;
   onRemove: () => void;
 }) {
+  const connectionStatus = useConnectionStatusStore((s) => s.statuses[project.id]?.status);
+
+  const statusColor =
+    project.type !== "ssh"
+      ? ""
+      : connectionStatus === "connected"
+        ? "bg-[var(--color-green)]"
+        : connectionStatus === "reconnecting"
+          ? "bg-[var(--color-yellow)]"
+          : connectionStatus === "error"
+            ? "bg-[var(--color-red)]"
+            : "bg-[var(--color-overlay0)]";
+
   return (
     <div>
       <div
-        className={`group flex items-center gap-1.5 px-3 py-1.5 text-sm cursor-pointer transition-colors ${
+        className={`group relative flex items-center gap-1.5 px-3 py-1.5 text-sm cursor-pointer transition-colors ${
           isActive
             ? "bg-[var(--color-surface0)] text-[var(--color-text)]"
             : "text-[var(--color-subtext1)] hover:bg-[var(--color-surface0)]/50"
@@ -38,11 +52,18 @@ function ProjectItem({
         >
           {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         </button>
-        {project.type === "local" ? (
-          <Folder size={14} className="text-[var(--color-blue)] shrink-0" />
-        ) : (
-          <Server size={14} className="text-[var(--color-mauve)] shrink-0" />
-        )}
+        <div className="relative shrink-0">
+          {project.type === "local" ? (
+            <Folder size={14} className="text-[var(--color-blue)]" />
+          ) : (
+            <Server size={14} className="text-[var(--color-mauve)]" />
+          )}
+          {project.type === "ssh" && (
+            <span
+              className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border border-[var(--color-crust)] ${statusColor}`}
+            />
+          )}
+        </div>
         <span className="flex-1 truncate">{project.name}</span>
         <button
           onClick={(e) => {

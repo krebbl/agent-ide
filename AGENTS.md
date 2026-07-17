@@ -94,3 +94,7 @@ Always run `npx tsc --noEmit` and `cargo check` (in `src-tauri/`) after making c
 - **Issues:** Labeled by phase (`phase-1-scaffolding` through `phase-9-advanced`) and type (`frontend`, `backend`, `architecture`)
 - **Milestones:** One per phase with weekly due dates
 - Do not commit or push unless explicitly asked
+
+## Tool Usage Rules
+
+When generating tool calls, you must only call the explicitly provided tools. Do not output empty tool syntax, placeholder fields, or any tool formatting blocks outside of the official tools listed. Do not output an 'unknown' tool call.
