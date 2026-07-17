@@ -12,22 +12,26 @@ export default function AppLayout() {
       <div className="flex flex-1 overflow-hidden">
         <Group orientation="horizontal" className="flex h-full w-full">
           <Panel
-            defaultSize={18}
-            minSize={12}
-            maxSize={30}
+            defaultSize={20}
+            minSize={10}
+            maxSize={40}
             className="bg-[var(--color-mantle)]"
           >
             <LeftSidebar />
           </Panel>
           <Separator className="w-px bg-[var(--color-surface0)] transition-colors hover:bg-[var(--color-blue)]" />
-          <Panel className="bg-[var(--color-base)]">
+          <Panel
+            defaultSize={60}
+            minSize={30}
+            className="bg-[var(--color-base)]"
+          >
             <MainArea />
           </Panel>
           <Separator className="w-px bg-[var(--color-surface0)] transition-colors hover:bg-[var(--color-blue)]" />
           <Panel
             defaultSize={20}
-            minSize={14}
-            maxSize={35}
+            minSize={10}
+            maxSize={40}
             className="bg-[var(--color-mantle)]"
           >
             <RightSidebar />
