@@ -12,7 +12,6 @@ export interface SSHConnection {
   username: string;
   authMethod: "key" | "password" | "agent";
   keyPath?: string;
-  password?: string;
 }
 
 export interface Project {

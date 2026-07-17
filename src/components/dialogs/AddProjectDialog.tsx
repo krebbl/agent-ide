@@ -169,16 +169,19 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
         username: sshUsername,
         authMethod: sshAuthMethod,
         keyPath: sshAuthMethod === "key" ? sshKeyPath : undefined,
-        password: sshAuthMethod === "password" ? sshPassword : undefined,
       };
+      const projectId = crypto.randomUUID();
       const project: Project = {
-        id: crypto.randomUUID(),
+        id: projectId,
         name: sshRemotePath.split("/").filter(Boolean).pop() || sshHost,
         type: "ssh",
         connection,
         worktrees: [],
         activeWorktreeId: null,
       };
+      if (sshAuthMethod === "password" && sshPassword) {
+        await invoke("ssh_store_password", { projectId, password: sshPassword });
+      }
       await addProject(project);
       onClose();
     }

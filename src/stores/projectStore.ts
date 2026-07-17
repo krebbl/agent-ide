@@ -59,12 +59,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const current = isLoading || projects.length === 0
       ? await get().loadProjectsFromDisk()
       : projects;
+    const project = current.find((p) => p.id === id);
     const updated = current.filter((p) => p.id !== id);
     set({
       projects: updated,
       activeProjectId: activeProjectId === id ? null : activeProjectId,
     });
     try {
+      if (project && project.type === "ssh") {
+        await invoke("ssh_delete_password", { projectId: id });
+      }
       await invoke("save_projects", { projects: updated });
     } catch (e) {
       set({ error: String(e) });

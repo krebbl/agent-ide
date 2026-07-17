@@ -25,6 +25,7 @@ pub enum Connection {
         auth_method: String,
         #[serde(rename = "keyPath")]
         key_path: Option<String>,
+        #[serde(skip)]
         password: Option<String>,
     },
 }
@@ -621,6 +622,41 @@ async fn ssh_check_git(
     Ok(is_git)
 }
 
+#[tauri::command]
+fn ssh_store_password(project_id: String, password: String) -> Result<(), String> {
+    info!("ssh_store_password: project_id={}", project_id);
+    let entry = keyring::Entry::new("agent-ide-ssh", &project_id)
+        .map_err(|e| format!("Failed to create keychain entry: {}", e))?;
+    entry
+        .set_password(&password)
+        .map_err(|e| format!("Failed to store password: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn ssh_get_password(project_id: String) -> Result<Option<String>, String> {
+    info!("ssh_get_password: project_id={}", project_id);
+    let entry = keyring::Entry::new("agent-ide-ssh", &project_id)
+        .map_err(|e| format!("Failed to create keychain entry: {}", e))?;
+    match entry.get_password() {
+        Ok(password) => Ok(Some(password)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("Failed to retrieve password: {}", e)),
+    }
+}
+
+#[tauri::command]
+fn ssh_delete_password(project_id: String) -> Result<(), String> {
+    info!("ssh_delete_password: project_id={}", project_id);
+    let entry = keyring::Entry::new("agent-ide-ssh", &project_id)
+        .map_err(|e| format!("Failed to create keychain entry: {}", e))?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("Failed to delete password: {}", e)),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -648,6 +684,9 @@ pub fn run() {
             ssh_disconnect,
             ssh_list_directory,
             ssh_check_git,
+            ssh_store_password,
+            ssh_get_password,
+            ssh_delete_password,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
