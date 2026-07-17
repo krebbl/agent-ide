@@ -1,4 +1,4 @@
-use git2::Repository;
+use git2::{BranchType, Repository};
 use russh::keys::agent::client::AgentClient;
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use russh::*;
@@ -6,6 +6,7 @@ use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -58,6 +59,25 @@ pub struct Worktree {
 pub struct SshDirEntry {
     pub name: String,
     pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeInfo {
+    pub id: String,
+    pub branch: String,
+    pub path: String,
+    pub is_main: bool,
+    pub status: String,
+    pub ahead: i32,
+    pub behind: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchInfo {
+    pub name: String,
+    pub is_remote: bool,
 }
 
 pub struct ClientHandler;
@@ -180,6 +200,516 @@ fn check_is_git_repo(path: String) -> Result<bool, String> {
 fn git_init(path: String) -> Result<(), String> {
     Repository::init(&path).map_err(|e| format!("Failed to initialize git repository: {}", e))?;
     Ok(())
+}
+
+fn run_git_command(worktree_path: &str, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(worktree_path)
+        .args(args)
+        .output()
+        .map_err(|e| format!("Failed to execute git command: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git command failed: {}", stderr.trim()));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn compute_ahead_behind(repo: &Repository, branch_name: &str) -> (i32, i32) {
+    let head_branch = match repo.find_branch(branch_name, BranchType::Local) {
+        Ok(b) => b,
+        Err(_) => return (0, 0),
+    };
+
+    let head_commit = match head_branch.get().peel_to_commit() {
+        Ok(c) => c,
+        Err(_) => return (0, 0),
+    };
+
+    let upstream_name = format!("origin/{}", branch_name);
+    let upstream_branch = match repo.find_branch(&upstream_name, BranchType::Remote) {
+        Ok(b) => b,
+        Err(_) => return (0, 0),
+    };
+
+    let upstream_commit = match upstream_branch.get().peel_to_commit() {
+        Ok(c) => c,
+        Err(_) => return (0, 0),
+    };
+
+    match repo.graph_ahead_behind(head_commit.id(), upstream_commit.id()) {
+        Ok((ahead, behind)) => (ahead as i32, behind as i32),
+        Err(_) => (0, 0),
+    }
+}
+
+fn is_worktree_dirty(repo: &Repository) -> bool {
+    if let Ok(statuses) = repo.statuses(None) {
+        for entry in statuses.iter() {
+            if entry.status() != git2::Status::CURRENT {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn resolve_worktree_branch(repo: &Repository, worktree_path: &str) -> Option<String> {
+    if let Ok(head) = repo.head() {
+        if head.is_branch() {
+            if let Some(name) = head.shorthand() {
+                return Some(name.to_string());
+            }
+        }
+    }
+
+    let head_file = Path::new(worktree_path).join(".git");
+    if head_file.exists() {
+        if let Ok(content) = std::fs::read_to_string(&head_file) {
+            if content.starts_with("gitdir: ") {
+                let gitdir = content.trim_start_matches("gitdir: ").trim();
+                let head_path = Path::new(gitdir).parent().unwrap_or(Path::new(gitdir)).join("HEAD");
+                if let Ok(head_content) = std::fs::read_to_string(&head_path) {
+                    if head_content.starts_with("ref: refs/heads/") {
+                        return Some(head_content.trim_start_matches("ref: refs/heads/").trim().to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
+    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
+
+    let worktrees = repo.worktrees().map_err(|e| format!("Failed to list worktrees: {}", e))?;
+
+    let mut result = Vec::new();
+
+    for wt_name_opt in worktrees.iter() {
+        let wt_name = wt_name_opt.ok_or("Failed to read worktree name")?;
+
+        let wt = repo.find_worktree(wt_name).map_err(|e| format!("Failed to find worktree: {}", e))?;
+
+        let wt_path = wt.path().to_str().unwrap_or("").to_string();
+
+        let main_git_path = Path::new(repo_path).join(".git");
+        let is_main = wt_path == repo_path || (main_git_path.exists() && main_git_path.is_dir());
+
+        let branch = resolve_worktree_branch(&repo, &wt_path).unwrap_or_else(|| wt_name.to_string());
+
+        let (ahead, behind) = compute_ahead_behind(&repo, &branch);
+
+        let status = if is_worktree_dirty(&repo) {
+            "dirty".to_string()
+        } else {
+            "clean".to_string()
+        };
+
+        result.push(WorktreeInfo {
+            id: wt_name.to_string(),
+            branch,
+            path: wt_path,
+            is_main,
+            status,
+            ahead,
+            behind,
+        });
+    }
+
+    Ok(result)
+}
+
+fn add_worktree_local(
+    repo_path: &str,
+    branch: &str,
+    path: &str,
+    new_branch: bool,
+) -> Result<(), String> {
+    if Path::new(path).exists() {
+        return Err(format!("Path '{}' already exists", path));
+    }
+
+    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
+
+    if new_branch {
+        let head = repo.head().map_err(|e| format!("Failed to get HEAD: {}", e))?;
+        let head_commit = head.peel_to_commit().map_err(|e| format!("Failed to resolve HEAD: {}", e))?;
+
+        repo.branch(branch, &head_commit, false)
+            .map_err(|e| format!("Failed to create branch '{}': {}", branch, e))?;
+    } else {
+        let branch_exists = repo.find_branch(branch, BranchType::Local).is_ok()
+            || repo.find_branch(branch, BranchType::Remote).is_ok();
+        if !branch_exists {
+            return Err(format!("Branch '{}' does not exist", branch));
+        }
+    }
+
+    run_git_command(repo_path, &["worktree", "add", "-b", branch, path])?;
+
+    Ok(())
+}
+
+fn remove_worktree_local(repo_path: &str, worktree_path: &str, force: bool) -> Result<(), String> {
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    args.push(worktree_path);
+
+    run_git_command(repo_path, &args)?;
+
+    Ok(())
+}
+
+fn list_branches_local(repo_path: &str) -> Result<Vec<BranchInfo>, String> {
+    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
+
+    let mut branches = Vec::new();
+
+    let branches_iter = repo.branches(None).map_err(|e| format!("Failed to list branches: {}", e))?;
+    for branch_result in branches_iter {
+        let (branch, bt) = branch_result.map_err(|e| format!("Failed to read branch: {}", e))?;
+        if let Some(name) = branch.name().map_err(|e| format!("Failed to get branch name: {}", e))? {
+            branches.push(BranchInfo {
+                name: name.to_string(),
+                is_remote: bt == BranchType::Remote,
+            });
+        }
+    }
+
+    Ok(branches)
+}
+
+async fn run_git_command_ssh(
+    project_id: &str,
+    worktree_path: &str,
+    args: &[&str],
+    state: &Arc<AppState>,
+) -> Result<String, String> {
+    let connections = state.ssh_connections.lock().await;
+    let conn = connections
+        .get(project_id)
+        .ok_or("No SSH connection found for this project")?;
+
+    let cmd = format!("cd {} && git {}", worktree_path, args.join(" "));
+
+    info!("run_git_command_ssh: executing '{}'", cmd);
+
+    let mut channel = conn.session
+        .channel_open_session()
+        .await
+        .map_err(|e| format!("Failed to open channel: {}", e))?;
+
+    channel
+        .exec(false, cmd.as_str())
+        .await
+        .map_err(|e| format!("Failed to execute command: {}", e))?;
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+
+    loop {
+        if let Some(msg) = channel.wait().await {
+            match msg {
+                russh::ChannelMsg::Data { data } => {
+                    stdout.push_str(&String::from_utf8_lossy(&data));
+                }
+                russh::ChannelMsg::ExtendedData { data, ext } => {
+                    if ext == 1 {
+                        stderr.push_str(&String::from_utf8_lossy(&data));
+                    } else {
+                        stdout.push_str(&String::from_utf8_lossy(&data));
+                    }
+                }
+                russh::ChannelMsg::Eof => {}
+                russh::ChannelMsg::ExitStatus { exit_status } => {
+                    if exit_status != 0 {
+                        return Err(format!("git command failed (exit {}): {}", exit_status, stderr.trim()));
+                    }
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(stdout.trim().to_string())
+}
+
+async fn list_worktrees_ssh(
+    project_id: &str,
+    repo_path: &str,
+    state: &Arc<AppState>,
+) -> Result<Vec<WorktreeInfo>, String> {
+    let output = run_git_command_ssh(project_id, repo_path, &["worktree", "list", "--porcelain"], state).await?;
+
+    let mut worktrees = Vec::new();
+    let mut current_worktree: Option<WorktreeInfo> = None;
+
+    for line in output.lines() {
+        let line = line.trim();
+
+        if line.starts_with("worktree ") {
+            if let Some(wt) = current_worktree.take() {
+                worktrees.push(wt);
+            }
+            let path = line.trim_start_matches("worktree ").to_string();
+            current_worktree = Some(WorktreeInfo {
+                id: path.split('/').last().unwrap_or(&path).to_string(),
+                branch: String::new(),
+                path: path.clone(),
+                is_main: false,
+                status: "unknown".to_string(),
+                ahead: 0,
+                behind: 0,
+            });
+        } else if line.starts_with("branch ") {
+            if let Some(ref mut wt) = current_worktree {
+                let branch_ref = line.trim_start_matches("branch ");
+                wt.branch = branch_ref
+                    .trim_start_matches("refs/heads/")
+                    .trim_start_matches("refs/remotes/")
+                    .to_string();
+            }
+        } else if line == "bare" {
+            if let Some(ref mut wt) = current_worktree {
+                wt.is_main = true;
+            }
+        } else if line.starts_with("HEAD ") {
+            if let Some(ref mut wt) = current_worktree {
+                let head_ref = line.trim_start_matches("HEAD ");
+                if wt.branch.is_empty() {
+                    wt.branch = head_ref
+                        .trim_start_matches("refs/heads/")
+                        .trim_start_matches("refs/remotes/")
+                        .to_string();
+                }
+            }
+        }
+    }
+
+    if let Some(wt) = current_worktree {
+        worktrees.push(wt);
+    }
+
+    for wt in &mut worktrees {
+        let status_output = run_git_command_ssh(project_id, &wt.path, &["status", "--porcelain"], state).await?;
+        wt.status = if status_output.is_empty() {
+            "clean".to_string()
+        } else {
+            "dirty".to_string()
+        };
+
+        let branch = &wt.branch;
+        let ahead_output = run_git_command_ssh(
+            project_id,
+            &wt.path,
+            &["rev-list", "--left-right", "--count", &format!("{}...origin/{}", branch, branch)],
+            state,
+        )
+        .await;
+
+        if let Ok(output) = ahead_output {
+            let parts: Vec<&str> = output.split_whitespace().collect();
+            if parts.len() == 2 {
+                wt.ahead = parts[0].parse().unwrap_or(0);
+                wt.behind = parts[1].parse().unwrap_or(0);
+            }
+        }
+    }
+
+    Ok(worktrees)
+}
+
+async fn add_worktree_ssh(
+    project_id: &str,
+    repo_path: &str,
+    branch: &str,
+    path: &str,
+    new_branch: bool,
+    state: &Arc<AppState>,
+) -> Result<(), String> {
+    let check_output = run_git_command_ssh(project_id, repo_path, &["ls-tree", "HEAD", path], state).await;
+    if check_output.is_ok() {
+        return Err(format!("Path '{}' already exists", path));
+    }
+
+    if new_branch {
+        run_git_command_ssh(project_id, repo_path, &["worktree", "add", "-b", branch, path], state).await?;
+    } else {
+        run_git_command_ssh(project_id, repo_path, &["worktree", "add", branch, path], state).await?;
+    }
+
+    Ok(())
+}
+
+async fn remove_worktree_ssh(
+    project_id: &str,
+    repo_path: &str,
+    worktree_path: &str,
+    force: bool,
+    state: &Arc<AppState>,
+) -> Result<(), String> {
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    args.push(worktree_path);
+
+    run_git_command_ssh(project_id, repo_path, &args, state).await?;
+
+    Ok(())
+}
+
+async fn list_branches_ssh(
+    project_id: &str,
+    repo_path: &str,
+    state: &Arc<AppState>,
+) -> Result<Vec<BranchInfo>, String> {
+    let mut branches = Vec::new();
+
+    let local_output = run_git_command_ssh(project_id, repo_path, &["branch", "--list", "--format=%(refname:short)"], state).await?;
+    for line in local_output.lines() {
+        let name = line.trim();
+        if !name.is_empty() {
+            branches.push(BranchInfo {
+                name: name.to_string(),
+                is_remote: false,
+            });
+        }
+    }
+
+    let remote_output = run_git_command_ssh(project_id, repo_path, &["branch", "-r", "--list", "--format=%(refname:short)"], state).await?;
+    for line in remote_output.lines() {
+        let name = line.trim();
+        if !name.is_empty() {
+            branches.push(BranchInfo {
+                name: name.to_string(),
+                is_remote: true,
+            });
+        }
+    }
+
+    Ok(branches)
+}
+
+#[tauri::command]
+fn git_worktree_list(project_id: String, app_handle: tauri::AppHandle) -> Result<Vec<WorktreeInfo>, String> {
+    let projects = load_projects(app_handle)?;
+    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+
+    match &project.connection {
+        Connection::Local { path } => list_worktrees_local(path),
+        Connection::Ssh { .. } => Err("SSH worktree listing requires async execution. Use git_worktree_list_async instead.".to_string()),
+    }
+}
+
+fn get_repo_path(project: &Project) -> String {
+    match &project.connection {
+        Connection::Local { path } => path.clone(),
+        Connection::Ssh { username, .. } => {
+            let worktree = project.worktrees.iter().find(|w| w.is_main).or(project.worktrees.first());
+            worktree.map(|w| w.path.clone()).unwrap_or_else(|| {
+                format!("{}/{}", username, project.name)
+            })
+        }
+    }
+}
+
+#[tauri::command]
+async fn git_worktree_list_async(
+    project_id: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<WorktreeInfo>, String> {
+    let projects = {
+        let app_handle = state.app_handle.lock().unwrap().clone().ok_or("App handle not available")?;
+        load_projects(app_handle)?
+    };
+    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+
+    match &project.connection {
+        Connection::Local { path } => list_worktrees_local(path),
+        Connection::Ssh { .. } => {
+            let repo_path = get_repo_path(project);
+            list_worktrees_ssh(&project_id, &repo_path, &state).await
+        }
+    }
+}
+
+#[tauri::command]
+async fn git_worktree_add_async(
+    project_id: String,
+    branch: String,
+    path: String,
+    new_branch: Option<bool>,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let projects = {
+        let app_handle = state.app_handle.lock().unwrap().clone().ok_or("App handle not available")?;
+        load_projects(app_handle)?
+    };
+    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+
+    let new_branch = new_branch.unwrap_or(false);
+
+    match &project.connection {
+        Connection::Local { path: repo_path } => add_worktree_local(repo_path, &branch, &path, new_branch),
+        Connection::Ssh { .. } => {
+            let repo_path = get_repo_path(project);
+            add_worktree_ssh(&project_id, &repo_path, &branch, &path, new_branch, &state).await
+        }
+    }
+}
+
+#[tauri::command]
+async fn git_worktree_remove_async(
+    project_id: String,
+    worktree_path: String,
+    force: Option<bool>,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let projects = {
+        let app_handle = state.app_handle.lock().unwrap().clone().ok_or("App handle not available")?;
+        load_projects(app_handle)?
+    };
+    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+
+    let force = force.unwrap_or(false);
+
+    match &project.connection {
+        Connection::Local { path: repo_path } => remove_worktree_local(repo_path, &worktree_path, force),
+        Connection::Ssh { .. } => {
+            let repo_path = get_repo_path(project);
+            remove_worktree_ssh(&project_id, &repo_path, &worktree_path, force, &state).await
+        }
+    }
+}
+
+#[tauri::command]
+async fn git_branches_list_async(
+    project_id: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<BranchInfo>, String> {
+    let projects = {
+        let app_handle = state.app_handle.lock().unwrap().clone().ok_or("App handle not available")?;
+        load_projects(app_handle)?
+    };
+    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+
+    match &project.connection {
+        Connection::Local { path } => list_branches_local(path),
+        Connection::Ssh { .. } => {
+            let repo_path = get_repo_path(project);
+            list_branches_ssh(&project_id, &repo_path, &state).await
+        }
+    }
 }
 
 fn one_password_agent_socket() -> Option<PathBuf> {
@@ -911,6 +1441,11 @@ pub fn run() {
             load_projects,
             check_is_git_repo,
             git_init,
+            git_worktree_list,
+            git_worktree_list_async,
+            git_worktree_add_async,
+            git_worktree_remove_async,
+            git_branches_list_async,
             ssh_agent_info,
             ssh_test_connection,
             ssh_connect,
