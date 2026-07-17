@@ -80,6 +80,386 @@ pub struct BranchInfo {
     pub is_remote: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileStat {
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+#[async_trait::async_trait]
+pub trait FileSystemProvider: Send + Sync {
+    async fn read_dir(&self, path: &str) -> Result<Vec<DirEntry>, String>;
+    async fn read_file(&self, path: &str) -> Result<String, String>;
+    async fn write_file(&self, path: &str, content: &str) -> Result<(), String>;
+    async fn stat(&self, path: &str) -> Result<FileStat, String>;
+    async fn mkdir(&self, path: &str) -> Result<(), String>;
+    async fn rm(&self, path: &str, recursive: bool) -> Result<(), String>;
+    async fn mv(&self, from: &str, to: &str) -> Result<(), String>;
+    async fn exists(&self, path: &str) -> bool;
+}
+
+pub struct LocalFileSystem;
+
+#[async_trait::async_trait]
+impl FileSystemProvider for LocalFileSystem {
+    async fn read_dir(&self, path: &str) -> Result<Vec<DirEntry>, String> {
+        let entries = std::fs::read_dir(path).map_err(|e| format!("Failed to read directory: {}", e))?;
+        let mut result = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let metadata = entry.metadata().map_err(|e| format!("Failed to read metadata: {}", e))?;
+            result.push(DirEntry {
+                name: entry.file_name().to_string_lossy().to_string(),
+                is_dir: metadata.is_dir(),
+                size: metadata.len(),
+            });
+        }
+        result.sort_by(|a, b| {
+            b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name))
+        });
+        Ok(result)
+    }
+
+    async fn read_file(&self, path: &str) -> Result<String, String> {
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))
+    }
+
+    async fn write_file(&self, path: &str, content: &str) -> Result<(), String> {
+        std::fs::write(path, content).map_err(|e| format!("Failed to write file: {}", e))
+    }
+
+    async fn stat(&self, path: &str) -> Result<FileStat, String> {
+        let metadata = std::fs::metadata(path).map_err(|e| format!("Failed to stat: {}", e))?;
+        Ok(FileStat {
+            is_dir: metadata.is_dir(),
+            size: metadata.len(),
+        })
+    }
+
+    async fn mkdir(&self, path: &str) -> Result<(), String> {
+        std::fs::create_dir_all(path).map_err(|e| format!("Failed to create directory: {}", e))
+    }
+
+    async fn rm(&self, path: &str, recursive: bool) -> Result<(), String> {
+        let p = Path::new(path);
+        if recursive {
+            std::fs::remove_dir_all(p).map_err(|e| format!("Failed to remove: {}", e))
+        } else if p.is_dir() {
+            std::fs::remove_dir(p).map_err(|e| format!("Failed to remove directory: {}", e))
+        } else {
+            std::fs::remove_file(p).map_err(|e| format!("Failed to remove file: {}", e))
+        }
+    }
+
+    async fn mv(&self, from: &str, to: &str) -> Result<(), String> {
+        std::fs::rename(from, to).map_err(|e| format!("Failed to move: {}", e))
+    }
+
+    async fn exists(&self, path: &str) -> bool {
+        Path::new(path).exists()
+    }
+}
+
+pub struct SftpFileSystem {
+    pub project_id: String,
+    pub state: Arc<AppState>,
+}
+
+impl SftpFileSystem {
+    async fn get_sftp(&self) -> Result<Arc<SftpSession>, String> {
+        let connections = self.state.ssh_connections.lock().await;
+        let conn = connections
+            .get(&self.project_id)
+            .ok_or("No SSH connection found for this project")?;
+        conn.sftp
+            .as_ref()
+            .ok_or("SFTP is not available for this connection".to_string())
+            .map(Arc::clone)
+    }
+
+    async fn resolve_path(&self, path: &str) -> Result<String, String> {
+        if path.starts_with('/') {
+            return Ok(path.to_string());
+        }
+        if path.starts_with("~/") || path == "~" {
+            let connections = self.state.ssh_connections.lock().await;
+            let conn = connections
+                .get(&self.project_id)
+                .ok_or("No SSH connection found for this project")?;
+            let mut channel = conn.session
+                .channel_open_session()
+                .await
+                .map_err(|e| format!("Failed to open channel: {}", e))?;
+            channel
+                .exec(false, "echo $HOME")
+                .await
+                .map_err(|e| format!("Failed to execute command: {}", e))?;
+            let mut home = String::new();
+            loop {
+                if let Some(msg) = channel.wait().await {
+                    match msg {
+                        russh::ChannelMsg::Data { data } => {
+                            home.push_str(&String::from_utf8_lossy(&data));
+                        }
+                        russh::ChannelMsg::ExitStatus { .. } => break,
+                        _ => {}
+                    }
+                }
+            }
+            let home = home.trim();
+            let rel = path.trim_start_matches('~').trim_start_matches('/');
+            return Ok(format!("{}/{}", home, rel));
+        }
+        let connections = self.state.ssh_connections.lock().await;
+        let conn = connections
+            .get(&self.project_id)
+            .ok_or("No SSH connection found for this project")?;
+        let mut channel = conn.session
+            .channel_open_session()
+            .await
+            .map_err(|e| format!("Failed to open channel: {}", e))?;
+        channel
+            .exec(false, "pwd")
+            .await
+            .map_err(|e| format!("Failed to execute command: {}", e))?;
+        let mut cwd = String::new();
+        loop {
+            if let Some(msg) = channel.wait().await {
+                match msg {
+                    russh::ChannelMsg::Data { data } => {
+                        cwd.push_str(&String::from_utf8_lossy(&data));
+                    }
+                    russh::ChannelMsg::ExitStatus { .. } => break,
+                    _ => {}
+                }
+            }
+        }
+        Ok(format!("{}/{}", cwd.trim(), path))
+    }
+}
+
+#[async_trait::async_trait]
+impl FileSystemProvider for SftpFileSystem {
+    async fn read_dir(&self, path: &str) -> Result<Vec<DirEntry>, String> {
+        let resolved = self.resolve_path(path).await?;
+        let sftp = self.get_sftp().await?;
+        let entries = sftp
+            .read_dir(&resolved)
+            .await
+            .map_err(|e| format!("Failed to read directory: {}", e))?;
+        let mut result = Vec::new();
+        for entry in entries {
+            let name = entry.file_name().clone();
+            if name == "." || name == ".." {
+                continue;
+            }
+            let meta = entry.metadata();
+            result.push(DirEntry {
+                name,
+                is_dir: meta.is_dir(),
+                size: meta.len(),
+            });
+        }
+        result.sort_by(|a, b| {
+            b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name))
+        });
+        Ok(result)
+    }
+
+    async fn read_file(&self, path: &str) -> Result<String, String> {
+        let resolved = self.resolve_path(path).await?;
+        let sftp = self.get_sftp().await?;
+        let content = sftp
+            .read(&resolved)
+            .await
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+        String::from_utf8(content).map_err(|e| format!("Invalid UTF-8 in file: {}", e))
+    }
+
+    async fn write_file(&self, path: &str, content: &str) -> Result<(), String> {
+        let resolved = self.resolve_path(path).await?;
+        let sftp = self.get_sftp().await?;
+        sftp
+            .write(&resolved, content.as_bytes())
+            .await
+            .map_err(|e| format!("Failed to write file: {}", e))
+    }
+
+    async fn stat(&self, path: &str) -> Result<FileStat, String> {
+        let resolved = self.resolve_path(path).await?;
+        let sftp = self.get_sftp().await?;
+        let meta = sftp
+            .metadata(&resolved)
+            .await
+            .map_err(|e| format!("Failed to stat: {}", e))?;
+        Ok(FileStat {
+            is_dir: meta.is_dir(),
+            size: meta.len(),
+        })
+    }
+
+    async fn mkdir(&self, path: &str) -> Result<(), String> {
+        let resolved = self.resolve_path(path).await?;
+        let sftp = self.get_sftp().await?;
+        sftp
+            .create_dir(&resolved)
+            .await
+            .map_err(|e| format!("Failed to create directory: {}", e))
+    }
+
+    async fn rm(&self, path: &str, recursive: bool) -> Result<(), String> {
+        let resolved = self.resolve_path(path).await?;
+        let sftp = self.get_sftp().await?;
+        let stat = sftp
+            .metadata(&resolved)
+            .await
+            .map_err(|e| format!("Failed to stat: {}", e))?;
+        if stat.is_dir() {
+            if recursive {
+                sftp.remove_dir(&resolved)
+                    .await
+                    .map_err(|e| format!("Failed to remove directory: {}", e))
+            } else {
+                Err("Cannot remove non-empty directory without recursive flag".to_string())
+            }
+        } else {
+            sftp.remove_file(&resolved)
+                .await
+                .map_err(|e| format!("Failed to remove file: {}", e))
+        }
+    }
+
+    async fn mv(&self, from: &str, to: &str) -> Result<(), String> {
+        let from_resolved = self.resolve_path(from).await?;
+        let to_resolved = self.resolve_path(to).await?;
+        let sftp = self.get_sftp().await?;
+        sftp
+            .rename(&from_resolved, &to_resolved)
+            .await
+            .map_err(|e| format!("Failed to move: {}", e))
+    }
+
+    async fn exists(&self, path: &str) -> bool {
+        let resolved = match self.resolve_path(path).await {
+            Ok(r) => r,
+            Err(_) => return false,
+        };
+        let sftp = match self.get_sftp().await {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        sftp.metadata(&resolved).await.is_ok()
+    }
+}
+
+async fn get_fs_provider(project_id: &str, state: &Arc<AppState>) -> Result<Box<dyn FileSystemProvider>, String> {
+    let projects = {
+        let app_handle = state.app_handle.lock().unwrap().clone().ok_or("App handle not available")?;
+        load_projects(app_handle)?
+    };
+    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+
+    match &project.connection {
+        Connection::Local { .. } => Ok(Box::new(LocalFileSystem)),
+        Connection::Ssh { .. } => Ok(Box::new(SftpFileSystem {
+            project_id: project_id.to_string(),
+            state: state.clone(),
+        })),
+    }
+}
+
+#[tauri::command]
+async fn fs_read_dir(
+    project_id: String,
+    path: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<DirEntry>, String> {
+    let provider = get_fs_provider(&project_id, &state.inner()).await?;
+    provider.read_dir(&path).await
+}
+
+#[tauri::command]
+async fn fs_read_file(
+    project_id: String,
+    path: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let provider = get_fs_provider(&project_id, &state.inner()).await?;
+    provider.read_file(&path).await
+}
+
+#[tauri::command]
+async fn fs_write_file(
+    project_id: String,
+    path: String,
+    content: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let provider = get_fs_provider(&project_id, &state.inner()).await?;
+    provider.write_file(&path, &content).await
+}
+
+#[tauri::command]
+async fn fs_stat(
+    project_id: String,
+    path: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<FileStat, String> {
+    let provider = get_fs_provider(&project_id, &state.inner()).await?;
+    provider.stat(&path).await
+}
+
+#[tauri::command]
+async fn fs_mkdir(
+    project_id: String,
+    path: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let provider = get_fs_provider(&project_id, &state.inner()).await?;
+    provider.mkdir(&path).await
+}
+
+#[tauri::command]
+async fn fs_rm(
+    project_id: String,
+    path: String,
+    recursive: Option<bool>,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let provider = get_fs_provider(&project_id, &state.inner()).await?;
+    provider.rm(&path, recursive.unwrap_or(false)).await
+}
+
+#[tauri::command]
+async fn fs_mv(
+    project_id: String,
+    from: String,
+    to: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let provider = get_fs_provider(&project_id, &state.inner()).await?;
+    provider.mv(&from, &to).await
+}
+
+#[tauri::command]
+async fn fs_exists(
+    project_id: String,
+    path: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<bool, String> {
+    let provider = get_fs_provider(&project_id, &state.inner()).await?;
+    Ok(provider.exists(&path).await)
+}
+
 pub struct ClientHandler;
 
 impl client::Handler for ClientHandler {
@@ -120,7 +500,7 @@ pub struct SshCredentials {
 
 pub struct SshConnection {
     pub session: client::Handle<ClientHandler>,
-    pub sftp: Option<SftpSession>,
+    pub sftp: Option<Arc<SftpSession>>,
     pub credentials: SshCredentials,
     pub status: ConnectionStatus,
     pub reconnect_attempts: u32,
@@ -1145,7 +1525,7 @@ async fn ssh_connect(
     let mut connections = state.ssh_connections.lock().await;
     connections.insert(project_id.clone(), SshConnection {
         session,
-        sftp,
+        sftp: sftp.map(Arc::new),
         credentials,
         status: ConnectionStatus::Connected,
         reconnect_attempts: 0,
@@ -1332,7 +1712,7 @@ async fn check_and_reconnect(project_id: &str, state: &Arc<AppState>) {
                 let mut connections = state.ssh_connections.lock().await;
                 if let Some(conn) = connections.get_mut(project_id) {
                     conn.session = session;
-                    conn.sftp = sftp;
+                    conn.sftp = sftp.map(Arc::new);
                     conn.status = ConnectionStatus::Connected;
                     conn.reconnect_attempts = 0;
                     state.emit_status(project_id, ConnectionStatus::Connected, None);
@@ -1377,7 +1757,7 @@ async fn check_and_reconnect(project_id: &str, state: &Arc<AppState>) {
                                             let mut connections = state_clone.ssh_connections.lock().await;
                                             if let Some(conn) = connections.get_mut(&project_id_clone) {
                                                 conn.session = session;
-                                                conn.sftp = sftp;
+                                                conn.sftp = sftp.map(Arc::new);
                                                 conn.status = ConnectionStatus::Connected;
                                                 conn.reconnect_attempts = 0;
                                                 state_clone.emit_status(&project_id_clone, ConnectionStatus::Connected, None);
@@ -1455,6 +1835,14 @@ pub fn run() {
             ssh_store_password,
             ssh_get_password,
             ssh_delete_password,
+            fs_read_dir,
+            fs_read_file,
+            fs_write_file,
+            fs_stat,
+            fs_mkdir,
+            fs_rm,
+            fs_mv,
+            fs_exists,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
