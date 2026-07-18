@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "./projectStore";
-import { Project } from "../types";
 
 export interface TerminalSession {
   id: string;
@@ -9,6 +8,7 @@ export interface TerminalSession {
   cwd: string;
   title: string;
   type: "local" | "ssh";
+  projectId?: string;
   worktreeId?: string;
 }
 
@@ -16,7 +16,12 @@ interface TerminalStore {
   sessions: TerminalSession[];
   activeSessionId: string | null;
   isCollapsed: boolean;
-  addSession: (cwd?: string, type?: "local" | "ssh", worktreeId?: string) => Promise<void>;
+  addSession: (
+    cwd?: string,
+    type?: "local" | "ssh",
+    projectId?: string,
+    worktreeId?: string,
+  ) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
   setActiveSession: (id: string | null) => void;
   updateSessionCwd: (id: string, cwd: string) => void;
@@ -29,25 +34,51 @@ function basename(path: string): string {
   return segments.pop() || path || "~";
 }
 
-function resolveCwd(
-  project: Project | undefined,
-  cwd?: string,
+function findWorktreePath(
+  store: ReturnType<typeof useProjectStore.getState>,
+  projectId?: string,
   worktreeId?: string,
-): { cwd: string | null; worktreeId?: string } {
+): { path: string | null; projectId?: string; worktreeId?: string } {
+  if (!projectId && !worktreeId) {
+    projectId = store.activeProjectId ?? undefined;
+    worktreeId = store.selectedWorktreeId ?? undefined;
+  }
+
+  const project = store.projects.find((p) => p.id === projectId);
+  if (!project) {
+    return { path: null, projectId, worktreeId };
+  }
+
+  const wt = worktreeId
+    ? project.worktrees.find((w) => w.id === worktreeId)
+    : undefined;
+  if (wt) {
+    return { path: wt.path, projectId, worktreeId: wt.id };
+  }
+
+  const connectionPath = (project.connection as { path?: string }).path;
+  if (connectionPath) {
+    return { path: connectionPath, projectId, worktreeId };
+  }
+
+  return { path: null, projectId, worktreeId };
+}
+
+function resolveCwd(
+  cwd?: string,
+  projectId?: string,
+  worktreeId?: string,
+): { cwd: string | null; projectId?: string; worktreeId?: string } {
   if (cwd) {
-    return { cwd, worktreeId };
+    return { cwd, projectId, worktreeId };
   }
   const store = useProjectStore.getState();
-  const targetWorktreeId = worktreeId ?? store.selectedWorktreeId ?? undefined;
-  const wt = project?.worktrees.find((w) => w.id === targetWorktreeId);
-  if (wt) {
-    return { cwd: wt.path, worktreeId: wt.id };
-  }
-  const connectionPath = (project?.connection as { path?: string } | undefined)?.path;
-  if (connectionPath) {
-    return { cwd: connectionPath, worktreeId: targetWorktreeId };
-  }
-  return { cwd: null, worktreeId: targetWorktreeId };
+  const result = findWorktreePath(store, projectId, worktreeId);
+  return {
+    cwd: result.path,
+    projectId: result.projectId,
+    worktreeId: result.worktreeId,
+  };
 }
 
 export const useTerminalStore = create<TerminalStore>((set, get) => ({
@@ -55,14 +86,15 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   activeSessionId: null,
   isCollapsed: false,
 
-  addSession: async (cwd, type, worktreeId) => {
-    const project = useProjectStore.getState().getActiveProject();
-    const resolvedType = type ?? (project?.type === "ssh" ? "ssh" : "local");
-    const { cwd: resolvedCwd, worktreeId: resolvedWorktreeId } = resolveCwd(
-      project,
-      cwd,
-      worktreeId,
-    );
+  addSession: async (cwd, type, projectId, worktreeId) => {
+    const store = useProjectStore.getState();
+    const activeProject =
+      store.projects.find((p) => p.id === (projectId ?? store.activeProjectId));
+    const resolvedType =
+      type ?? (activeProject?.type === "ssh" ? "ssh" : "local");
+
+    const { cwd: resolvedCwd, projectId: resolvedProjectId, worktreeId: resolvedWorktreeId } =
+      resolveCwd(cwd, projectId, worktreeId);
 
     const ptyId = await invoke<string>("pty_spawn", {
       cwd: resolvedCwd,
@@ -81,6 +113,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           cwd: displayCwd,
           title: basename(displayCwd),
           type: resolvedType,
+          projectId: resolvedProjectId,
           worktreeId: resolvedWorktreeId,
         },
       ],

@@ -9,12 +9,14 @@ import { Project } from "../../types";
 
 function WorktreeContextMenu({
   worktree,
+  projectId,
   projectType,
   isActive,
   onClose,
   onRemove,
 }: {
   worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
+  projectId: string;
   projectType: "local" | "ssh";
   isActive: boolean;
   onClose: () => void;
@@ -36,7 +38,7 @@ function WorktreeContextMenu({
   const handleOpenInTerminal = () => {
     useTerminalStore
       .getState()
-      .addSession(worktree.path, projectType, worktree.id)
+      .addSession(worktree.path, projectType, projectId, worktree.id)
       .catch(() => {});
     onClose();
   };
@@ -136,12 +138,14 @@ function WorktreeContextMenu({
 
 function WorktreeItem({
   worktree,
+  projectId,
   projectType,
   isActive,
   onActivate,
   onRemove,
 }: {
   worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
+  projectId: string;
   projectType: "local" | "ssh";
   isActive: boolean;
   onActivate: () => void;
@@ -221,6 +225,7 @@ function WorktreeItem({
         <div ref={menuRef}>
           <WorktreeContextMenu
             worktree={worktree}
+            projectId={projectId}
             projectType={projectType}
             isActive={isActive}
             onClose={() => setShowMenu(false)}
@@ -344,6 +349,7 @@ function ProjectItem({
             <WorktreeItem
               key={wt.id}
               worktree={wt}
+              projectId={project.id}
               projectType={project.type}
               isActive={wt.id === selectedWorktreeId && project.id === activeProjectId}
               onActivate={() => setActiveWorktree(project.id, wt.id)}

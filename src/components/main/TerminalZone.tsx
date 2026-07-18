@@ -1,5 +1,6 @@
 import { Terminal, Plus, X, ChevronDown, ChevronUp } from "lucide-react";
 import { useTerminalStore } from "../../stores/terminalStore";
+import { useProjectStore } from "../../stores/projectStore";
 import TerminalView from "./TerminalView";
 
 interface TerminalZoneProps {
@@ -17,8 +18,26 @@ export default function TerminalZone({
   const removeSession = useTerminalStore((s) => s.removeSession);
   const setActiveSession = useTerminalStore((s) => s.setActiveSession);
 
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
+  const selectedWorktreeId = useProjectStore((s) => s.selectedWorktreeId);
+
+  const visibleSessions = sessions.filter(
+    (s) =>
+      s.projectId === activeProjectId && s.worktreeId === selectedWorktreeId,
+  );
+
+  const effectiveActiveId =
+    visibleSessions.find((s) => s.id === activeSessionId)?.id ??
+    visibleSessions[visibleSessions.length - 1]?.id ??
+    null;
+
+  const canAddTerminal = activeProjectId && selectedWorktreeId;
+
   const handleNewTerminal = () => {
-    addSession().catch(() => {});
+    if (!canAddTerminal) return;
+    addSession(undefined, undefined, activeProjectId, selectedWorktreeId).catch(
+      () => {},
+    );
   };
 
   return (
@@ -30,8 +49,8 @@ export default function TerminalZone({
         </span>
 
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-1 no-scrollbar">
-          {sessions.map((session) => {
-            const isActive = session.id === activeSessionId;
+          {visibleSessions.map((session) => {
+            const isActive = session.id === effectiveActiveId;
             return (
               <div
                 key={session.id}
@@ -60,7 +79,8 @@ export default function TerminalZone({
 
         <button
           onClick={handleNewTerminal}
-          className="shrink-0 text-[var(--color-overlay1)] transition-colors hover:text-[var(--color-blue)]"
+          disabled={!canAddTerminal}
+          className="shrink-0 text-[var(--color-overlay1)] transition-colors hover:text-[var(--color-blue)] disabled:opacity-40 disabled:cursor-not-allowed"
           title="New terminal"
         >
           <Plus size={16} />
@@ -76,18 +96,22 @@ export default function TerminalZone({
       </div>
 
       <div className="relative flex-1 overflow-hidden bg-[var(--color-base)]">
-        {sessions.length === 0 && (
+        {visibleSessions.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-2 p-4">
             <span className="text-sm text-[var(--color-overlay0)]">
-              No terminal sessions
+              {canAddTerminal
+                ? "No terminal sessions for this worktree"
+                : "Select a worktree to open a terminal"}
             </span>
-            <button
-              onClick={handleNewTerminal}
-              className="flex items-center gap-1.5 rounded-md bg-[var(--color-surface0)] px-3 py-1.5 text-xs text-[var(--color-subtext0)] transition-colors hover:bg-[var(--color-surface1)] hover:text-[var(--color-text)]"
-            >
-              <Plus size={14} />
-              New Terminal
-            </button>
+            {canAddTerminal && (
+              <button
+                onClick={handleNewTerminal}
+                className="flex items-center gap-1.5 rounded-md bg-[var(--color-surface0)] px-3 py-1.5 text-xs text-[var(--color-subtext0)] transition-colors hover:bg-[var(--color-surface1)] hover:text-[var(--color-text)]"
+              >
+                <Plus size={14} />
+                New Terminal
+              </button>
+            )}
           </div>
         )}
         {sessions.map((session) => (
@@ -95,7 +119,7 @@ export default function TerminalZone({
             key={session.id}
             sessionId={session.id}
             ptyId={session.ptyId}
-            isActive={session.id === activeSessionId}
+            isActive={session.id === effectiveActiveId}
           />
         ))}
       </div>
