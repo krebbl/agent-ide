@@ -851,8 +851,9 @@ async fn list_worktrees_ssh(
                 worktrees.push(wt);
             }
             let path = line.trim_start_matches("worktree ").to_string();
+            let id = path.clone();
             current_worktree = Some(WorktreeInfo {
-                id: path.split('/').last().unwrap_or(&path).to_string(),
+                id,
                 branch: String::new(),
                 path: path.clone(),
                 is_main: false,
