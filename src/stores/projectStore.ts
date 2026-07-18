@@ -5,6 +5,7 @@ import { Project, Worktree } from "../types";
 interface ProjectStore {
   projects: Project[];
   activeProjectId: string | null;
+  selectedWorktreeId: string | null;
   isLoading: boolean;
   error: string | null;
   worktreeLoading: Record<string, boolean>;
@@ -25,6 +26,7 @@ interface ProjectStore {
 export const useProjectStore = create<ProjectStore>((set, get) => ({
   projects: [],
   activeProjectId: null,
+  selectedWorktreeId: null,
   isLoading: false,
   error: null,
   worktreeLoading: {},
@@ -32,8 +34,26 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   loadProjects: async () => {
     set({ isLoading: true, error: null });
     try {
-      const projects = await get().loadProjectsFromDisk();
-      set({ projects, isLoading: false });
+      const loadedProjects = await get().loadProjectsFromDisk();
+      let activeProjectId: string | null = null;
+      let selectedWorktreeId: string | null = null;
+      let foundSelected = false;
+      const projects = loadedProjects.map((p) => {
+        if (!foundSelected && p.activeWorktreeId) {
+          foundSelected = true;
+          activeProjectId = p.id;
+          selectedWorktreeId = p.activeWorktreeId;
+          return p;
+        }
+        if (p.activeWorktreeId) {
+          return { ...p, activeWorktreeId: null };
+        }
+        return p;
+      });
+      set({ projects, isLoading: false, activeProjectId, selectedWorktreeId });
+      if (foundSelected) {
+        await invoke("save_projects", { projects }).catch(() => {});
+      }
 
       for (const project of projects) {
         if (project.type === "ssh") {
@@ -97,9 +117,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       : projects;
     const project = current.find((p) => p.id === id);
     const updated = current.filter((p) => p.id !== id);
+    const activeCleared = activeProjectId === id;
     set({
       projects: updated,
-      activeProjectId: activeProjectId === id ? null : activeProjectId,
+      activeProjectId: activeCleared ? null : activeProjectId,
+      selectedWorktreeId: activeCleared ? null : get().selectedWorktreeId,
     });
     try {
       if (project && project.type === "ssh") {
@@ -128,7 +150,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   setActiveProject: (id: string | null) => {
-    set({ activeProjectId: id });
+    const { projects } = get();
+    if (!id) {
+      const updated = projects.map((p) => ({ ...p, activeWorktreeId: null }));
+      set({ projects: updated, activeProjectId: null, selectedWorktreeId: null });
+      invoke("save_projects", { projects: updated }).catch(() => {});
+      return;
+    }
+    const target = projects.find((p) => p.id === id);
+    const worktreeId = target?.activeWorktreeId ?? null;
+    const updated = projects.map((p) =>
+      p.id === id ? p : { ...p, activeWorktreeId: null },
+    );
+    set({ projects: updated, activeProjectId: id, selectedWorktreeId: worktreeId });
+    invoke("save_projects", { projects: updated }).catch(() => {});
   },
 
   getActiveProject: () => {
@@ -150,10 +185,24 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         behind: wt.behind,
       }));
       set((s) => {
-        const updated = s.projects.map((p) =>
-          p.id === projectId ? { ...p, worktrees } : p,
-        );
-        return { projects: updated };
+        const selectedWorktreeId = s.selectedWorktreeId;
+        const activeProjectId = s.activeProjectId;
+        const updated = s.projects.map((p) => {
+          if (p.id !== projectId) return p;
+          const activeWorktreeId =
+            p.activeWorktreeId && worktrees.some((w) => w.id === p.activeWorktreeId)
+              ? p.activeWorktreeId
+              : null;
+          return { ...p, worktrees, activeWorktreeId };
+        });
+        const activeRemoved =
+          activeProjectId === projectId &&
+          selectedWorktreeId !== null &&
+          !worktrees.some((w) => w.id === selectedWorktreeId);
+        return {
+          projects: updated,
+          selectedWorktreeId: activeRemoved ? null : selectedWorktreeId,
+        };
       });
       const projects = get().projects;
       await invoke("save_projects", { projects });
@@ -170,9 +219,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       ? await get().loadProjectsFromDisk()
       : projects;
     const updated = current.map((p) =>
-      p.id === projectId ? { ...p, activeWorktreeId: worktreeId } : p,
+      p.id === projectId
+        ? { ...p, activeWorktreeId: worktreeId }
+        : { ...p, activeWorktreeId: null },
     );
-    set({ projects: updated, activeProjectId: projectId });
+    set({ projects: updated, activeProjectId: projectId, selectedWorktreeId: worktreeId });
     try {
       await invoke("save_projects", { projects: updated });
     } catch (e) {

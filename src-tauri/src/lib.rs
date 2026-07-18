@@ -3,6 +3,7 @@ use russh::keys::agent::client::AgentClient;
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use russh::*;
 use russh_sftp::client::SftpSession;
+use tokio::io::AsyncWriteExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -289,10 +290,29 @@ impl FileSystemProvider for SftpFileSystem {
     async fn write_file(&self, path: &str, content: &str) -> Result<(), String> {
         let resolved = self.resolve_path(path).await?;
         let sftp = self.get_sftp().await?;
-        sftp
-            .write(&resolved, content.as_bytes())
+
+        // ensure parent dirs exist (SFTP can't create nested dirs in one call)
+        let parts: Vec<&str> = resolved.split('/').filter(|s| !s.is_empty()).collect();
+        let mut accum = String::new();
+        for (i, part) in parts.iter().enumerate() {
+            if i == parts.len() - 1 { break; } // skip the file itself
+            accum.push('/');
+            accum.push_str(part);
+            // ignore errors — directory might already exist
+            let _ = sftp.create_dir(&accum).await;
+        }
+
+        // create() uses CREATE | TRUNCATE | WRITE (creates file if missing)
+        let mut file = sftp
+            .create(&resolved)
             .await
-            .map_err(|e| format!("Failed to write file: {}", e))
+            .map_err(|e| format!("Failed to create file on remote: {}", e))?;
+        // File implements AsyncWrite
+        file.write_all(content.as_bytes())
+            .await
+            .map_err(|e| format!("Failed to write file: {}", e))?;
+        file.flush().await.map_err(|e| format!("Failed to flush file: {}", e))?;
+        Ok(())
     }
 
     async fn stat(&self, path: &str) -> Result<FileStat, String> {

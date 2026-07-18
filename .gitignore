@@ -27,3 +27,4 @@ src-tauri/gen/schemas/*.json
 *.njsproj
 *.sln
 *.sw?
+.gitnexus

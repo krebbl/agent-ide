@@ -8,12 +8,12 @@ import { Project } from "../../types";
 
 function WorktreeContextMenu({
   worktree,
-  projectActiveWorktreeId,
+  isActive,
   onClose,
   onRemove,
 }: {
   worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
-  projectActiveWorktreeId: string | null;
+  isActive: boolean;
   onClose: () => void;
   onRemove: (force: boolean) => void;
 }) {
@@ -84,7 +84,7 @@ function WorktreeContextMenu({
     );
   }
 
-  const isDisabled = worktree.isMain || worktree.id === projectActiveWorktreeId;
+  const isDisabled = worktree.isMain || isActive;
   const disableReason = worktree.isMain
     ? "Cannot remove the main worktree"
     : "Cannot remove the active worktree";
@@ -132,13 +132,11 @@ function WorktreeItem({
   worktree,
   isActive,
   onActivate,
-  projectActiveWorktreeId,
   onRemove,
 }: {
   worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
   isActive: boolean;
   onActivate: () => void;
-  projectActiveWorktreeId: string | null;
   onRemove: (force: boolean) => void;
 }) {
   const [showMenu, setShowMenu] = useState(false);
@@ -215,7 +213,7 @@ function WorktreeItem({
         <div ref={menuRef}>
           <WorktreeContextMenu
             worktree={worktree}
-            projectActiveWorktreeId={projectActiveWorktreeId}
+            isActive={isActive}
             onClose={() => setShowMenu(false)}
             onRemove={onRemove}
           />
@@ -241,7 +239,7 @@ function ProjectItem({
   onRemove: () => void;
 }) {
   const connectionStatus = useConnectionStatusStore((s) => s.statuses[project.id]?.status);
-  const { fetchWorktrees, setActiveWorktree, worktreeLoading, removeWorktree, refreshWorktrees } = useProjectStore();
+  const { fetchWorktrees, setActiveWorktree, worktreeLoading, removeWorktree, refreshWorktrees, selectedWorktreeId, activeProjectId } = useProjectStore();
   const isWorktreeLoading = worktreeLoading[project.id] ?? false;
   const [showAddDialog, setShowAddDialog] = useState(false);
 
@@ -337,9 +335,8 @@ function ProjectItem({
             <WorktreeItem
               key={wt.id}
               worktree={wt}
-              isActive={wt.id === project.activeWorktreeId}
+              isActive={wt.id === selectedWorktreeId && project.id === activeProjectId}
               onActivate={() => setActiveWorktree(project.id, wt.id)}
-              projectActiveWorktreeId={project.activeWorktreeId}
               onRemove={(force) => handleRemoveWorktree(wt.path, force)}
             />
           ))}
