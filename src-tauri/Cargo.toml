@@ -27,6 +27,7 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 tokio = { version = "1", features = ["full"] }
 portable-pty = "0.8"
+base64 = "0.22"
 russh = "0.50"
 russh-sftp = "2"
 russh-keys = "0.50.0-beta.7"

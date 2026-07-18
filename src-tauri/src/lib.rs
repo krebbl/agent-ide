@@ -1,3 +1,5 @@
+mod pty;
+
 use git2::{BranchType, Repository};
 use russh::keys::agent::client::AgentClient;
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
@@ -1845,6 +1847,9 @@ pub fn run() {
                 start_health_check(state_clone).await;
             });
 
+            let pty_manager = Arc::new(pty::PtyManager::new(app.handle().clone()));
+            app.manage(pty_manager);
+
             Ok(())
         })
         .manage(Arc::new(AppState {
@@ -1870,6 +1875,10 @@ pub fn run() {
             ssh_store_password,
             ssh_get_password,
             ssh_delete_password,
+            pty::pty_spawn,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_kill,
             fs_read_dir,
             fs_read_file,
             fs_write_file,
@@ -1882,6 +1891,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state: Arc<AppState> = window.state::<Arc<AppState>>().inner().clone();
+                let pty_manager: Arc<pty::PtyManager> = window.state::<Arc<pty::PtyManager>>().inner().clone();
                 let handle = window.app_handle().clone();
                 let connections = state.ssh_connections.blocking_lock();
                 let project_ids: Vec<String> = connections.keys().cloned().collect();
@@ -1898,6 +1908,7 @@ pub fn run() {
                             ).await;
                         }
                     }
+                    pty_manager.kill_all();
                     let _ = handle.exit(0);
                 });
 
