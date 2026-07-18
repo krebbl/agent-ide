@@ -28,6 +28,7 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
   const [newBranchName, setNewBranchName] = useState("");
   const [worktreeName, setWorktreeName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [branchesError, setBranchesError] = useState<string | null>(null);
 
   const project = projects.find((p) => p.id === projectId);
   const existingNames = project?.worktrees.map((w) => w.id) || [];
@@ -37,9 +38,13 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
   const effectiveName = worktreeName || generateWorktreeName(branch, existingNames);
 
   useEffect(() => {
+    setBranchesError(null);
     invoke<{ name: string; isRemote: boolean }[]>("git_branches_list_async", { projectId })
-      .then((b) => setBranches(b))
-      .catch(() => {});
+      .then((b) => {
+        setBranches(b);
+        setBranchesError(null);
+      })
+      .catch((e) => setBranchesError(String(e)));
   }, [projectId]);
 
   useEffect(() => {
@@ -101,18 +106,26 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
               </button>
             </div>
             {mode === "existing" ? (
-              <select
-                value={selectedBranch}
-                onChange={(e) => setSelectedBranch(e.target.value)}
-                className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] focus:border-[var(--color-blue)] focus:outline-none"
-              >
-                <option value="">Select a branch...</option>
-                {branches.map((b) => (
-                  <option key={b.name} value={b.name}>
-                    {b.isRemote ? `↗ ${b.name}` : b.name}
-                  </option>
-                ))}
-              </select>
+              <>
+                <select
+                  value={selectedBranch}
+                  onChange={(e) => setSelectedBranch(e.target.value)}
+                  className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] focus:border-[var(--color-blue)] focus:outline-none"
+                >
+                  <option value="">Select a branch...</option>
+                  {branches.map((b) => (
+                    <option key={b.name} value={b.name}>
+                      {b.isRemote ? `↗ ${b.name}` : b.name}
+                    </option>
+                  ))}
+                </select>
+                {branchesError && (
+                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-[var(--color-peach)]">
+                    <AlertCircle size={12} />
+                    {branchesError}
+                  </div>
+                )}
+              </>
             ) : (
               <input
                 type="text"

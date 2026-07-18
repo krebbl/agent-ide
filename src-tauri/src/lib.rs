@@ -843,7 +843,19 @@ async fn run_git_command_ssh(
         .get(project_id)
         .ok_or("No SSH connection found for this project")?;
 
-    let cmd = format!("cd {} && git {}", worktree_path, args.join(" "));
+    let worktree_quoted = shlex::try_quote(worktree_path)
+        .map_err(|_| "Repository path contains invalid characters".to_string())?
+        .into_owned();
+    let args_quoted = args
+        .iter()
+        .map(|a| {
+            shlex::try_quote(a)
+                .map_err(|_| format!("Git argument contains invalid characters: {}", a))
+                .map(|q| q.into_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .join(" ");
+    let cmd = format!("cd {} && git {}", worktree_quoted, args_quoted);
 
     info!("run_git_command_ssh: executing '{}'", cmd);
 
@@ -1034,9 +1046,21 @@ async fn list_branches_ssh(
     repo_path: &str,
     state: &Arc<AppState>,
 ) -> Result<Vec<BranchInfo>, String> {
+    info!("list_branches_ssh: project_id={} repo_path={}", project_id, repo_path);
     let mut branches = Vec::new();
 
-    let local_output = run_git_command_ssh(project_id, repo_path, &["branch", "--list", "--format=%(refname:short)"], state).await?;
+    let local_output = run_git_command_ssh(
+        project_id,
+        repo_path,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+        state,
+    )
+    .await
+    .map_err(|e| {
+        warn!("list_branches_ssh: local refs failed: {}", e);
+        format!("Failed to list local branches: {}", e)
+    })?;
+    info!("list_branches_ssh: local output='{}'", local_output);
     for line in local_output.lines() {
         let name = line.trim();
         if !name.is_empty() {
@@ -1047,10 +1071,21 @@ async fn list_branches_ssh(
         }
     }
 
-    let remote_output = run_git_command_ssh(project_id, repo_path, &["branch", "-r", "--list", "--format=%(refname:short)"], state).await?;
+    let remote_output = run_git_command_ssh(
+        project_id,
+        repo_path,
+        &["for-each-ref", "--format=%(refname:short)", "refs/remotes/"],
+        state,
+    )
+    .await
+    .map_err(|e| {
+        warn!("list_branches_ssh: remote refs failed: {}", e);
+        format!("Failed to list remote branches: {}", e)
+    })?;
+    info!("list_branches_ssh: remote output='{}'", remote_output);
     for line in remote_output.lines() {
         let name = line.trim();
-        if !name.is_empty() {
+        if !name.is_empty() && name != "origin/HEAD" {
             branches.push(BranchInfo {
                 name: name.to_string(),
                 is_remote: true,
@@ -1058,6 +1093,7 @@ async fn list_branches_ssh(
         }
     }
 
+    info!("list_branches_ssh: returning {} branches", branches.len());
     Ok(branches)
 }
 
