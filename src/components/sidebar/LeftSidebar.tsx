@@ -171,10 +171,14 @@ function WorktreeItem({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [showMenu]);
 
+  const worktreeName = worktree.isMain
+    ? "local"
+    : worktree.path.split(/[\\/]/).pop() || worktree.id;
+
   return (
     <div className="relative">
       <div
-        className={`group flex items-center gap-1.5 px-3 py-1 text-xs cursor-pointer transition-colors ${
+        className={`group flex items-start gap-1.5 px-3 py-1 cursor-pointer transition-colors ${
           isActive
             ? "bg-[var(--color-surface0)] text-[var(--color-text)]"
             : "text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/50"
@@ -183,43 +187,50 @@ function WorktreeItem({
         onContextMenu={handleContextMenu}
         title={worktree.path}
       >
-        <div className="relative shrink-0">
+        <div className="relative shrink-0 pt-0.5">
           <GitBranch size={10} className={worktree.isMain ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"} />
           {worktree.isMain && (
             <CircleDot size={6} className="absolute -bottom-0.5 -right-0.5 text-[var(--color-blue)]" />
           )}
         </div>
-        <span className="flex-1 truncate">{worktree.branch}</span>
-        <span
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-            worktree.status === "clean"
-              ? "bg-[var(--color-green)]"
-              : worktree.status === "dirty"
-                ? "bg-[var(--color-yellow)]"
-                : "bg-[var(--color-overlay0)]"
-          }`}
-        />
-        {worktree.ahead > 0 && (
-          <span className="flex items-center gap-0.5 text-[var(--color-green)]">
-            <ArrowUp size={8} />
-            {worktree.ahead}
-          </span>
-        )}
-        {worktree.behind > 0 && (
-          <span className="flex items-center gap-0.5 text-[var(--color-peach)]">
-            <ArrowDown size={8} />
-            {worktree.behind}
-          </span>
-        )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setShowMenu(true);
-          }}
-          className="shrink-0 text-[var(--color-overlay0)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-[var(--color-text)]"
-        >
-          <MoreVertical size={10} />
-        </button>
+        <div className="flex flex-1 flex-col min-w-0">
+          <span className="truncate text-xs font-medium">{worktreeName}</span>
+          <span className="truncate text-[10px] text-[var(--color-overlay1)]">{worktree.branch}</span>
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-0.5">
+          <div className="flex items-center gap-1">
+            {worktree.ahead > 0 && (
+              <span className="flex items-center gap-0.5 text-[var(--color-green)]">
+                <ArrowUp size={8} />
+                {worktree.ahead}
+              </span>
+            )}
+            {worktree.behind > 0 && (
+              <span className="flex items-center gap-0.5 text-[var(--color-peach)]">
+                <ArrowDown size={8} />
+                {worktree.behind}
+              </span>
+            )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowMenu(true);
+              }}
+              className="shrink-0 text-[var(--color-overlay0)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-[var(--color-text)]"
+            >
+              <MoreVertical size={10} />
+            </button>
+          </div>
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${
+              worktree.status === "clean"
+                ? "bg-[var(--color-green)]"
+                : worktree.status === "dirty"
+                  ? "bg-[var(--color-yellow)]"
+                  : "bg-[var(--color-overlay0)]"
+            }`}
+          />
+        </div>
       </div>
       {showMenu && (
         <div ref={menuRef}>
