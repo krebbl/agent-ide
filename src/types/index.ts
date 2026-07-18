@@ -40,6 +40,7 @@ export interface TerminalSession {
   type: "local" | "ssh";
   ptyId: string;
   cwd: string;
+  isBusy?: boolean;
 }
 
 export interface EditorTab {

@@ -10,6 +10,7 @@ export interface TerminalSession {
   type: "local" | "ssh";
   projectId?: string;
   worktreeId?: string;
+  isBusy?: boolean;
 }
 
 interface TerminalStore {
@@ -27,6 +28,7 @@ interface TerminalStore {
   updateSessionCwd: (id: string, cwd: string) => void;
   updateSessionTitle: (id: string, title: string) => void;
   setCollapsed: (collapsed: boolean) => void;
+  setSessionBusy: (id: string, busy: boolean) => void;
 }
 
 function basename(path: string): string {
@@ -157,4 +159,11 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     })),
 
   setCollapsed: (collapsed) => set({ isCollapsed: collapsed }),
+
+  setSessionBusy: (id, busy) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === id ? { ...s, isBusy: busy } : s,
+      ),
+    })),
 }));

@@ -25,6 +25,17 @@ export default function TerminalView({
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const rafRef = useRef<number | null>(null);
+  const busyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const markBusy = () => {
+    useTerminalStore.getState().setSessionBusy(sessionId, true);
+    if (busyTimeoutRef.current) {
+      clearTimeout(busyTimeoutRef.current);
+    }
+    busyTimeoutRef.current = setTimeout(() => {
+      useTerminalStore.getState().setSessionBusy(sessionId, false);
+    }, 1500);
+  };
 
   const fitAndResize = (resize = false) => {
     const terminal = xtermRef.current;
@@ -90,7 +101,10 @@ export default function TerminalView({
     fitAddonRef.current = fitAddon;
 
     registerTerminal(ptyId, {
-      onOutput: (data) => terminal.write(data),
+      onOutput: (data) => {
+        terminal.write(data);
+        markBusy();
+      },
       onExit: () => useTerminalStore.getState().removeSession(sessionId).catch(() => {}),
     });
 
@@ -108,6 +122,9 @@ export default function TerminalView({
     return () => {
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);
+      }
+      if (busyTimeoutRef.current) {
+        clearTimeout(busyTimeoutRef.current);
       }
       unregisterTerminal(ptyId);
       resizeObserver.disconnect();

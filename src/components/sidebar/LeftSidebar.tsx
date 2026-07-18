@@ -153,6 +153,14 @@ function WorktreeItem({
 }) {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const isBusy = useTerminalStore((s) =>
+    s.sessions.some(
+      (session) =>
+        session.projectId === projectId &&
+        session.worktreeId === worktree.id &&
+        session.isBusy,
+    ),
+  );
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -188,8 +196,12 @@ function WorktreeItem({
         title={worktree.path}
       >
         <div className="relative shrink-0 pt-0.5">
-          <GitBranch size={10} className={worktree.isMain ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"} />
-          {worktree.isMain && (
+          {isBusy ? (
+            <Loader2 size={10} className="animate-spin text-[var(--color-blue)]" />
+          ) : (
+            <GitBranch size={10} className={worktree.isMain ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"} />
+          )}
+          {worktree.isMain && !isBusy && (
             <CircleDot size={6} className="absolute -bottom-0.5 -right-0.5 text-[var(--color-blue)]" />
           )}
         </div>
