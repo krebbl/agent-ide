@@ -106,6 +106,7 @@ pub trait FileSystemProvider: Send + Sync {
     async fn write_file(&self, path: &str, content: &str) -> Result<(), String>;
     async fn stat(&self, path: &str) -> Result<FileStat, String>;
     async fn mkdir(&self, path: &str) -> Result<(), String>;
+    async fn mkdir_p(&self, path: &str) -> Result<(), String>;
     async fn rm(&self, path: &str, recursive: bool) -> Result<(), String>;
     async fn mv(&self, from: &str, to: &str) -> Result<(), String>;
     async fn exists(&self, path: &str) -> bool;
@@ -150,6 +151,10 @@ impl FileSystemProvider for LocalFileSystem {
     }
 
     async fn mkdir(&self, path: &str) -> Result<(), String> {
+        std::fs::create_dir_all(path).map_err(|e| format!("Failed to create directory: {}", e))
+    }
+
+    async fn mkdir_p(&self, path: &str) -> Result<(), String> {
         std::fs::create_dir_all(path).map_err(|e| format!("Failed to create directory: {}", e))
     }
 
@@ -337,6 +342,19 @@ impl FileSystemProvider for SftpFileSystem {
             .create_dir(&resolved)
             .await
             .map_err(|e| format!("Failed to create directory: {}", e))
+    }
+
+    async fn mkdir_p(&self, path: &str) -> Result<(), String> {
+        let resolved = self.resolve_path(path).await?;
+        let sftp = self.get_sftp().await?;
+        let parts: Vec<&str> = resolved.split('/').filter(|s| !s.is_empty()).collect();
+        let mut accum = String::new();
+        for part in &parts {
+            accum.push('/');
+            accum.push_str(part);
+            let _ = sftp.create_dir(&accum).await;
+        }
+        Ok(())
     }
 
     async fn rm(&self, path: &str, recursive: bool) -> Result<(), String> {
@@ -733,14 +751,35 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
     Ok(result)
 }
 
+fn compute_worktree_path(repo_path: &str, name: &str) -> Result<String, String> {
+    let repo_path = repo_path.trim_end_matches('/');
+    let repo_dirname = repo_path
+        .split('/')
+        .last()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Invalid repository path".to_string())?;
+    let parent = repo_path
+        .rsplitn(2, '/')
+        .nth(1)
+        .ok_or_else(|| "Invalid repository path: no parent directory".to_string())?;
+    Ok(format!("{}/worktrees/{}/{}", parent, repo_dirname, name))
+}
+
 fn add_worktree_local(
     repo_path: &str,
     branch: &str,
-    path: &str,
+    name: &str,
     new_branch: bool,
 ) -> Result<(), String> {
-    if Path::new(path).exists() {
-        return Err(format!("Path '{}' already exists", path));
+    let worktree_path = compute_worktree_path(repo_path, name)?;
+
+    if Path::new(&worktree_path).exists() {
+        return Err(format!("Path '{}' already exists", worktree_path));
+    }
+
+    if let Some(parent) = Path::new(&worktree_path).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create worktree parent directory: {}", e))?;
     }
 
     if !new_branch {
@@ -753,9 +792,9 @@ fn add_worktree_local(
     }
 
     let args = if new_branch {
-        vec!["worktree", "add", path, "-b", branch]
+        vec!["worktree", "add", &worktree_path, "-b", branch]
     } else {
-        vec!["worktree", "add", path, branch]
+        vec!["worktree", "add", &worktree_path, branch]
     };
     run_git_command(repo_path, &args)?;
 
@@ -948,19 +987,25 @@ async fn add_worktree_ssh(
     project_id: &str,
     repo_path: &str,
     branch: &str,
-    path: &str,
+    name: &str,
     new_branch: bool,
     state: &Arc<AppState>,
 ) -> Result<(), String> {
-    let check_output = run_git_command_ssh(project_id, repo_path, &["ls-tree", "HEAD", path], state).await;
-    if check_output.is_ok() {
-        return Err(format!("Path '{}' already exists", path));
+    let worktree_path = compute_worktree_path(repo_path, name)?;
+
+    let fs = get_fs_provider(project_id, state).await?;
+    if fs.exists(&worktree_path).await {
+        return Err(format!("Path '{}' already exists", worktree_path));
+    }
+
+    if let Some(parent) = worktree_path.rsplitn(2, '/').nth(1) {
+        fs.mkdir_p(parent).await?;
     }
 
     if new_branch {
-        run_git_command_ssh(project_id, repo_path, &["worktree", "add", path, "-b", branch], state).await?;
+        run_git_command_ssh(project_id, repo_path, &["worktree", "add", &worktree_path, "-b", branch], state).await?;
     } else {
-        run_git_command_ssh(project_id, repo_path, &["worktree", "add", path, branch], state).await?;
+        run_git_command_ssh(project_id, repo_path, &["worktree", "add", &worktree_path, branch], state).await?;
     }
 
     Ok(())
@@ -1064,7 +1109,7 @@ async fn git_worktree_list_async(
 async fn git_worktree_add_async(
     project_id: String,
     branch: String,
-    path: String,
+    name: String,
     new_branch: Option<bool>,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
@@ -1077,10 +1122,10 @@ async fn git_worktree_add_async(
     let new_branch = new_branch.unwrap_or(false);
 
     match &project.connection {
-        Connection::Local { path: repo_path } => add_worktree_local(repo_path, &branch, &path, new_branch),
+        Connection::Local { path: repo_path } => add_worktree_local(repo_path, &branch, &name, new_branch),
         Connection::Ssh { .. } => {
             let repo_path = get_repo_path(project);
-            add_worktree_ssh(&project_id, &repo_path, &branch, &path, new_branch, &state).await
+            add_worktree_ssh(&project_id, &repo_path, &branch, &name, new_branch, &state).await
         }
     }
 }

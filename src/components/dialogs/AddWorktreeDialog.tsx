@@ -30,14 +30,11 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
   const [error, setError] = useState<string | null>(null);
 
   const project = projects.find((p) => p.id === projectId);
-  const repoPath = project?.type === "local" ? (project.connection as { path: string }).path : "";
-  const repoDirName = repoPath ? repoPath.split("/").filter(Boolean).pop() || "" : "";
   const existingNames = project?.worktrees.map((w) => w.id) || [];
 
   const branch = mode === "existing" ? selectedBranch : newBranchName;
   const isNew = mode === "new";
   const effectiveName = worktreeName || generateWorktreeName(branch, existingNames);
-  const worktreePath = repoPath && repoDirName ? `${repoPath}/../worktrees/${repoDirName}/${effectiveName}` : "";
 
   useEffect(() => {
     invoke<{ name: string; isRemote: boolean }[]>("git_branches_list_async", { projectId })
@@ -59,7 +56,7 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
     setLoading(true);
     setError(null);
     try {
-      await addWorktree(projectId, branch, worktreePath, isNew);
+      await addWorktree(projectId, branch, effectiveName, isNew);
       onClose();
     } catch (e) {
       setError(String(e));
