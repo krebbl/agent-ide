@@ -1847,7 +1847,10 @@ pub fn run() {
                 start_health_check(state_clone).await;
             });
 
-            let pty_manager = Arc::new(pty::PtyManager::new(app.handle().clone()));
+            let pty_manager = Arc::new(pty::PtyManager::new(
+                app.handle().clone(),
+                state.inner().clone(),
+            ));
             app.manage(pty_manager);
 
             Ok(())

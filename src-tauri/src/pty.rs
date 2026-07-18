@@ -1,12 +1,16 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use russh::{client::Msg, Channel, ChannelMsg};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::Emitter;
+use tokio::sync::{mpsc, oneshot};
+
+use crate::AppState;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,7 +26,12 @@ pub struct PtyExitEvent {
     pub exit_code: Option<i32>,
 }
 
-struct PtySession {
+enum PtySession {
+    Local(LocalPtySession),
+    Remote(RemotePtySession),
+}
+
+struct LocalPtySession {
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
@@ -30,20 +39,47 @@ struct PtySession {
     _monitor_handle: thread::JoinHandle<()>,
 }
 
+struct RemotePtySession {
+    input_tx: mpsc::Sender<String>,
+    resize_tx: mpsc::Sender<PtySize>,
+    shutdown_tx: Option<oneshot::Sender<()>>,
+}
+
 pub struct PtyManager {
     sessions: Mutex<HashMap<String, PtySession>>,
     app_handle: tauri::AppHandle,
+    app_state: Arc<AppState>,
 }
 
 impl PtyManager {
-    pub fn new(app_handle: tauri::AppHandle) -> Self {
+    pub fn new(app_handle: tauri::AppHandle, app_state: Arc<AppState>) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             app_handle,
+            app_state,
         }
     }
 
-    pub fn spawn(&self, cwd: Option<String>, cols: u16, rows: u16) -> Result<String, String> {
+    pub async fn spawn(
+        &self,
+        cwd: Option<String>,
+        cols: u16,
+        rows: u16,
+        project_id: Option<String>,
+        session_type: Option<String>,
+    ) -> Result<String, String> {
+        let is_remote = session_type.as_deref() == Some("ssh")
+            || (project_id.is_some() && session_type.as_deref() != Some("local"));
+
+        if is_remote {
+            let project_id = project_id.ok_or("SSH session requires a project_id")?;
+            self.spawn_remote(cwd, cols, rows, project_id).await
+        } else {
+            self.spawn_local(cwd, cols, rows)
+        }
+    }
+
+    fn spawn_local(&self, cwd: Option<String>, cols: u16, rows: u16) -> Result<String, String> {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -127,109 +163,348 @@ impl PtyManager {
             }
         });
 
-        let session = PtySession {
+        let session = PtySession::Local(LocalPtySession {
             child: child_arc,
             writer: Arc::new(Mutex::new(master_writer)),
             master: Arc::new(Mutex::new(master)),
             _reader_handle: reader_handle,
             _monitor_handle: monitor_handle,
-        };
+        });
 
-        self.sessions
-            .lock()
-            .unwrap()
-            .insert(session_id.clone(), session);
+        self.sessions.lock().unwrap().insert(session_id.clone(), session);
         Ok(session_id)
     }
 
-    pub fn write(&self, session_id: &str, data: &str) -> Result<(), String> {
-        let sessions = self.sessions.lock().unwrap();
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| format!("PTY session {} not found", session_id))?;
-        let mut writer = session.writer.lock().unwrap();
-        writer
-            .write_all(data.as_bytes())
-            .map_err(|e| format!("Failed to write to PTY: {}", e))?;
-        writer
-            .flush()
-            .map_err(|e| format!("Failed to flush PTY: {}", e))?;
-        Ok(())
-    }
+    async fn spawn_remote(
+        &self,
+        cwd: Option<String>,
+        cols: u16,
+        rows: u16,
+        project_id: String,
+    ) -> Result<String, String> {
+        let channel = {
+            let connections = self.app_state.ssh_connections.lock().await;
+            let conn = connections
+                .get(&project_id)
+                .ok_or_else(|| format!("No SSH connection for project {}", project_id))?;
+            conn.session
+                .channel_open_session()
+                .await
+                .map_err(|e| format!("Failed to open SSH channel: {}", e))?
+        };
 
-    pub fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
-        let sessions = self.sessions.lock().unwrap();
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| format!("PTY session {} not found", session_id))?;
-        let master = session.master.lock().unwrap();
-        master
-            .resize(PtySize {
-                rows,
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let (input_tx, input_rx) = mpsc::channel::<String>(64);
+        let (resize_tx, resize_rx) = mpsc::channel::<PtySize>(16);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+        let session = PtySession::Remote(RemotePtySession {
+            input_tx,
+            resize_tx,
+            shutdown_tx: Some(shutdown_tx),
+        });
+        self.sessions.lock().unwrap().insert(session_id.clone(), session);
+
+        let app_handle = self.app_handle.clone();
+        let session_id_for_task = session_id.clone();
+        tauri::async_runtime::spawn(async move {
+            run_remote_terminal(
+                session_id_for_task,
+                cwd,
                 cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| format!("Failed to resize PTY: {}", e))?;
-        Ok(())
+                rows,
+                channel,
+                app_handle,
+                input_rx,
+                resize_rx,
+                shutdown_rx,
+            )
+            .await;
+        });
+
+        Ok(session_id)
     }
 
-    pub fn kill(&self, session_id: &str) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().unwrap();
-        let session = sessions
+    pub async fn write(&self, session_id: &str, data: &str) -> Result<(), String> {
+        let session = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .ok_or_else(|| format!("PTY session {} not found", session_id))?
+            .clone_handle_for_write();
+
+        match session {
+            WriteHandle::Local(writer) => {
+                let mut writer = writer.lock().unwrap();
+                writer
+                    .write_all(data.as_bytes())
+                    .map_err(|e| format!("Failed to write to PTY: {}", e))?;
+                writer
+                    .flush()
+                    .map_err(|e| format!("Failed to flush PTY: {}", e))?;
+                Ok(())
+            }
+            WriteHandle::Remote(input_tx) => {
+                input_tx
+                    .send(data.to_string())
+                    .await
+                    .map_err(|e| format!("Failed to send input to remote PTY: {}", e))?;
+                Ok(())
+            }
+        }
+    }
+
+    pub async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
+        let session = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .ok_or_else(|| format!("PTY session {} not found", session_id))?
+            .clone_handle_for_resize();
+
+        match session {
+            ResizeHandle::Local(master) => {
+                let master = master.lock().unwrap();
+                master
+                    .resize(PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    })
+                    .map_err(|e| format!("Failed to resize PTY: {}", e))?;
+                Ok(())
+            }
+            ResizeHandle::Remote(resize_tx) => {
+                resize_tx
+                    .send(PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    })
+                    .await
+                    .map_err(|e| format!("Failed to send resize to remote PTY: {}", e))?;
+                Ok(())
+            }
+        }
+    }
+
+    pub async fn kill(&self, session_id: &str) -> Result<(), String> {
+        let session = self
+            .sessions
+            .lock()
+            .unwrap()
             .remove(session_id)
             .ok_or_else(|| format!("PTY session {} not found", session_id))?;
-        let mut child = session.child.lock().unwrap();
-        child
-            .kill()
-            .map_err(|e| format!("Failed to kill PTY: {}", e))?;
-        Ok(())
+
+        match session {
+            PtySession::Local(local) => {
+                let mut child = local.child.lock().unwrap();
+                child
+                    .kill()
+                    .map_err(|e| format!("Failed to kill PTY: {}", e))?;
+                Ok(())
+            }
+            PtySession::Remote(mut remote) => {
+                if let Some(tx) = remote.shutdown_tx.take() {
+                    let _ = tx.send(());
+                }
+                Ok(())
+            }
+        }
     }
 
     pub fn kill_all(&self) {
         let mut sessions = self.sessions.lock().unwrap();
         for (_id, session) in sessions.drain() {
-            let mut child = session.child.lock().unwrap();
-            let _ = child.kill();
+            match session {
+                PtySession::Local(local) => {
+                    let mut child = local.child.lock().unwrap();
+                    let _ = child.kill();
+                }
+                PtySession::Remote(remote) => {
+                    if let Some(tx) = remote.shutdown_tx {
+                        let _ = tx.send(());
+                    }
+                }
+            }
         }
     }
 }
 
-#[tauri::command]
-pub fn pty_spawn(
+enum WriteHandle {
+    Local(Arc<Mutex<Box<dyn Write + Send>>>), // used by callers
+    Remote(mpsc::Sender<String>),
+}
+
+enum ResizeHandle {
+    Local(Arc<Mutex<Box<dyn MasterPty + Send>>>),
+    Remote(mpsc::Sender<PtySize>),
+}
+
+impl PtySession {
+    fn clone_handle_for_write(&self) -> WriteHandle {
+        match self {
+            PtySession::Local(local) => WriteHandle::Local(local.writer.clone()),
+            PtySession::Remote(remote) => WriteHandle::Remote(remote.input_tx.clone()),
+        }
+    }
+
+    fn clone_handle_for_resize(&self) -> ResizeHandle {
+        match self {
+            PtySession::Local(local) => ResizeHandle::Local(local.master.clone()),
+            PtySession::Remote(remote) => ResizeHandle::Remote(remote.resize_tx.clone()),
+        }
+    }
+}
+
+async fn run_remote_terminal(
+    session_id: String,
     cwd: Option<String>,
     cols: u16,
     rows: u16,
-    pty_manager: tauri::State<'_, Arc<PtyManager>>,
-) -> Result<String, String> {
-    pty_manager.spawn(cwd, cols, rows)
+    mut channel: Channel<Msg>,
+    app_handle: tauri::AppHandle,
+    mut input_rx: mpsc::Receiver<String>,
+    mut resize_rx: mpsc::Receiver<PtySize>,
+    mut shutdown_rx: oneshot::Receiver<()>,
+) {
+    let mut setup_ok = true;
+
+    if let Err(e) = channel
+        .request_pty(false, "xterm-256color", cols as u32, rows as u32, 0, 0, &[])
+        .await
+    {
+        let _ = app_handle.emit(
+            "pty_exit",
+            PtyExitEvent {
+                session_id: session_id.clone(),
+                exit_code: Some(1),
+            },
+        );
+        tracing::warn!("remote pty request_pty failed: {}", e);
+        setup_ok = false;
+    }
+
+    if setup_ok {
+        if let Err(e) = channel.request_shell(true).await {
+            let _ = app_handle.emit(
+                "pty_exit",
+                PtyExitEvent {
+                    session_id: session_id.clone(),
+                    exit_code: Some(1),
+                },
+            );
+            tracing::warn!("remote pty request_shell failed: {}", e);
+            setup_ok = false;
+        }
+    }
+
+    if setup_ok {
+        if let Some(cwd) = cwd {
+            let cmd = format!("cd {}\n", shell_escape(&cwd));
+            let _ = channel.data(Cursor::new(cmd.into_bytes())).await;
+        }
+
+        let mut exit_code: Option<i32> = None;
+
+        loop {
+            tokio::select! {
+                msg = channel.wait() => {
+                    match msg {
+                        Some(ChannelMsg::Data { data }) => {
+                            let encoded = STANDARD.encode(data.as_ref());
+                            let _ = app_handle.emit(
+                                "pty_output",
+                                PtyOutputEvent {
+                                    session_id: session_id.clone(),
+                                    data: encoded,
+                                },
+                            );
+                        }
+                        Some(ChannelMsg::ExitStatus { exit_status }) => {
+                            exit_code = Some(exit_status as i32);
+                            break;
+                        }
+                        Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
+                        _ => {}
+                    }
+                }
+                Some(data) = input_rx.recv() => {
+                    let _ = channel.data(Cursor::new(data.into_bytes())).await;
+                }
+                Some(size) = resize_rx.recv() => {
+                    let _ = channel.window_change(
+                        size.cols as u32,
+                        size.rows as u32,
+                        size.pixel_width as u32,
+                        size.pixel_height as u32,
+                    ).await;
+                }
+                _ = &mut shutdown_rx => {
+                    let _ = channel.eof().await;
+                    let _ = channel.close().await;
+                    break;
+                }
+            }
+        }
+
+        let _ = app_handle.emit(
+            "pty_exit",
+            PtyExitEvent {
+                session_id: session_id.clone(),
+                exit_code,
+            },
+        );
+    }
+}
+
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\"'\"'"))
 }
 
 #[tauri::command]
-pub fn pty_write(
+pub async fn pty_spawn(
+    cwd: Option<String>,
+    cols: u16,
+    rows: u16,
+    project_id: Option<String>,
+    session_type: Option<String>,
+    pty_manager: tauri::State<'_, Arc<PtyManager>>,
+) -> Result<String, String> {
+    pty_manager
+        .spawn(cwd, cols, rows, project_id, session_type)
+        .await
+}
+
+#[tauri::command]
+pub async fn pty_write(
     session_id: String,
     data: String,
     pty_manager: tauri::State<'_, Arc<PtyManager>>,
 ) -> Result<(), String> {
-    pty_manager.write(&session_id, &data)
+    pty_manager.write(&session_id, &data).await
 }
 
 #[tauri::command]
-pub fn pty_resize(
+pub async fn pty_resize(
     session_id: String,
     cols: u16,
     rows: u16,
     pty_manager: tauri::State<'_, Arc<PtyManager>>,
 ) -> Result<(), String> {
-    pty_manager.resize(&session_id, cols, rows)
+    pty_manager.resize(&session_id, cols, rows).await
 }
 
 #[tauri::command]
-pub fn pty_kill(
+pub async fn pty_kill(
     session_id: String,
     pty_manager: tauri::State<'_, Arc<PtyManager>>,
 ) -> Result<(), String> {
-    pty_manager.kill(&session_id)
+    pty_manager.kill(&session_id).await
 }
 
 fn default_shell() -> String {

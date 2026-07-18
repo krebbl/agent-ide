@@ -100,6 +100,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       cwd: resolvedCwd,
       cols: 80,
       rows: 24,
+      projectId: resolvedProjectId,
+      sessionType: resolvedType,
     });
 
     const id = crypto.randomUUID();
