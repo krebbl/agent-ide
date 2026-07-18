@@ -822,10 +822,12 @@ fn list_branches_local(repo_path: &str) -> Result<Vec<BranchInfo>, String> {
     for branch_result in branches_iter {
         let (branch, bt) = branch_result.map_err(|e| format!("Failed to read branch: {}", e))?;
         if let Some(name) = branch.name().map_err(|e| format!("Failed to get branch name: {}", e))? {
-            branches.push(BranchInfo {
-                name: name.to_string(),
-                is_remote: bt == BranchType::Remote,
-            });
+            if name != "origin/HEAD" {
+                branches.push(BranchInfo {
+                    name: name.to_string(),
+                    is_remote: bt == BranchType::Remote,
+                });
+            }
         }
     }
 
