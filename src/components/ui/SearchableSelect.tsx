@@ -33,6 +33,7 @@ export default function SearchableSelect({
   const [activeIndex, setActiveIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
@@ -57,9 +58,14 @@ export default function SearchableSelect({
     if (!isOpen) return;
 
     const handleClick = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setIsOpen(false);
+      const target = e.target as Node;
+      if (
+        containerRef.current?.contains(target) ||
+        dropdownRef.current?.contains(target)
+      ) {
+        return;
       }
+      setIsOpen(false);
     };
 
     const handleEscape = (e: KeyboardEvent) => {
@@ -128,6 +134,7 @@ export default function SearchableSelect({
 
   const dropdown = (
     <div
+      ref={dropdownRef}
       style={dropdownStyle}
       className="z-[100] flex flex-col rounded-md border border-[var(--color-surface0)] bg-[var(--color-mantle)] shadow-xl"
     >
