@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { FolderPlus, Folder, Server, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, MoreVertical, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw } from "lucide-react";
+import { FolderPlus, Folder, Server, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, MoreVertical, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import { useTerminalStore } from "../../stores/terminalStore";
@@ -335,15 +335,39 @@ function ProjectItem({
           )}
         </div>
         <span className="flex-1 truncate">{project.name}</span>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-          className="shrink-0 text-[var(--color-overlay0)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-[var(--color-red)]"
-        >
-          <Trash2 size={12} />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowAddDialog(true);
+            }}
+            className="text-[var(--color-overlay0)] hover:text-[var(--color-blue)]"
+            title="Add worktree"
+          >
+            <Plus size={12} />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleRefresh();
+            }}
+            disabled={isWorktreeLoading}
+            className="text-[var(--color-overlay0)] hover:text-[var(--color-text)] disabled:opacity-50"
+            title="Refresh worktrees"
+          >
+            {isWorktreeLoading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            className="text-[var(--color-overlay0)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-[var(--color-red)]"
+            title="Remove project"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
       </div>
       {isExpanded && (
         <div className="ml-6 border-l border-[var(--color-surface0)] pl-2">
@@ -367,23 +391,6 @@ function ProjectItem({
               onRemove={(force) => handleRemoveWorktree(wt.path, force)}
             />
           ))}
-          <div className="flex items-center">
-            <button
-              onClick={() => setShowAddDialog(true)}
-              className="flex-1 px-3 py-1 text-left text-xs text-[var(--color-blue)] hover:bg-[var(--color-surface0)]/50"
-            >
-              + Add Worktree
-            </button>
-            {!isWorktreeLoading && project.worktrees.length > 0 && (
-              <button
-                onClick={handleRefresh}
-                className="shrink-0 px-2 py-1 text-[var(--color-overlay0)] hover:text-[var(--color-text)]"
-                title="Refresh worktrees"
-              >
-                <RefreshCw size={10} />
-              </button>
-            )}
-          </div>
         </div>
       )}
       {showAddDialog && <AddWorktreeDialog projectId={project.id} onClose={() => setShowAddDialog(false)} />}
