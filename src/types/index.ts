@@ -41,6 +41,7 @@ export interface TerminalSession {
   ptyId: string;
   cwd: string;
   isBusy?: boolean;
+  needsInput?: boolean;
 }
 
 export interface EditorTab {

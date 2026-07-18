@@ -28,12 +28,16 @@ export default function TerminalView({
   const busyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const markBusy = () => {
-    useTerminalStore.getState().setSessionBusy(sessionId, true);
+    useTerminalStore
+      .getState()
+      .setSessionActivity(sessionId, { isBusy: true, needsInput: false });
     if (busyTimeoutRef.current) {
       clearTimeout(busyTimeoutRef.current);
     }
     busyTimeoutRef.current = setTimeout(() => {
-      useTerminalStore.getState().setSessionBusy(sessionId, false);
+      useTerminalStore
+        .getState()
+        .setSessionActivity(sessionId, { isBusy: false, needsInput: true });
     }, 1500);
   };
 

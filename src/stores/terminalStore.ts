@@ -11,6 +11,7 @@ export interface TerminalSession {
   projectId?: string;
   worktreeId?: string;
   isBusy?: boolean;
+  needsInput?: boolean;
 }
 
 interface TerminalStore {
@@ -28,7 +29,10 @@ interface TerminalStore {
   updateSessionCwd: (id: string, cwd: string) => void;
   updateSessionTitle: (id: string, title: string) => void;
   setCollapsed: (collapsed: boolean) => void;
-  setSessionBusy: (id: string, busy: boolean) => void;
+  setSessionActivity: (
+    id: string,
+    activity: { isBusy: boolean; needsInput: boolean },
+  ) => void;
 }
 
 function basename(path: string): string {
@@ -119,6 +123,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           type: resolvedType,
           projectId: resolvedProjectId,
           worktreeId: resolvedWorktreeId,
+          isBusy: false,
+          needsInput: true,
         },
       ],
       activeSessionId: id,
@@ -160,10 +166,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
   setCollapsed: (collapsed) => set({ isCollapsed: collapsed }),
 
-  setSessionBusy: (id, busy) =>
+  setSessionActivity: (id, activity) =>
     set((state) => ({
       sessions: state.sessions.map((s) =>
-        s.id === id ? { ...s, isBusy: busy } : s,
+        s.id === id ? { ...s, ...activity } : s,
       ),
     })),
 }));

@@ -153,13 +153,17 @@ function WorktreeItem({
 }) {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const isBusy = useTerminalStore((s) =>
-    s.sessions.some(
-      (session) =>
+  const activity = useTerminalStore((s) =>
+    s.sessions.reduce<"idle" | "busy" | "input">((state, session) => {
+      if (
         session.projectId === projectId &&
-        session.worktreeId === worktree.id &&
-        session.isBusy,
-    ),
+        session.worktreeId === worktree.id
+      ) {
+        if (session.isBusy) return "busy";
+        if (session.needsInput && state !== "busy") return "input";
+      }
+      return state;
+    }, "idle"),
   );
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -196,12 +200,14 @@ function WorktreeItem({
         title={worktree.path}
       >
         <div className="relative shrink-0 pt-0.5">
-          {isBusy ? (
+          {activity === "busy" ? (
             <Loader2 size={10} className="animate-spin text-[var(--color-blue)]" />
+          ) : activity === "input" ? (
+            <ChevronRight size={10} className="text-[var(--color-green)]" />
           ) : (
             <GitBranch size={10} className={worktree.isMain ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"} />
           )}
-          {worktree.isMain && !isBusy && (
+          {worktree.isMain && activity === "idle" && (
             <CircleDot size={6} className="absolute -bottom-0.5 -right-0.5 text-[var(--color-blue)]" />
           )}
         </div>
