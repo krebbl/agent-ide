@@ -149,15 +149,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         ahead: wt.ahead,
         behind: wt.behind,
       }));
-      const { projects, isLoading } = get();
-      const current = isLoading || projects.length === 0
-        ? await get().loadProjectsFromDisk()
-        : projects;
-      const updated = current.map((p) =>
-        p.id === projectId ? { ...p, worktrees } : p,
-      );
-      set({ projects: updated });
-      await invoke("save_projects", { projects: updated });
+      set((s) => {
+        const updated = s.projects.map((p) =>
+          p.id === projectId ? { ...p, worktrees } : p,
+        );
+        return { projects: updated };
+      });
+      const projects = get().projects;
+      await invoke("save_projects", { projects });
     } catch (e) {
       set({ error: String(e) });
     } finally {

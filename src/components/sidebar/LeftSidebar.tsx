@@ -242,7 +242,7 @@ function ProjectItem({
 }) {
   const connectionStatus = useConnectionStatusStore((s) => s.statuses[project.id]?.status);
   const { fetchWorktrees, setActiveWorktree, worktreeLoading, removeWorktree, refreshWorktrees } = useProjectStore();
-  const isLoading = worktreeLoading[project.id] ?? false;
+  const isWorktreeLoading = worktreeLoading[project.id] ?? false;
   const [showAddDialog, setShowAddDialog] = useState(false);
 
   const statusColor =
@@ -265,11 +265,11 @@ function ProjectItem({
   }, [isExpanded, project.id]);
 
   useEffect(() => {
-    if (isExpanded && !fetchedRef.current.has(project.id) && !isLoading) {
+    if (isExpanded && !fetchedRef.current.has(project.id) && !isWorktreeLoading) {
       fetchedRef.current.add(project.id);
       fetchWorktrees(project.id);
     }
-  }, [isExpanded, project.id, isLoading, fetchWorktrees]);
+  }, [isExpanded, project.id, isWorktreeLoading, fetchWorktrees]);
 
   const handleRefresh = () => {
     fetchedRef.current.delete(project.id);
@@ -324,16 +324,16 @@ function ProjectItem({
       </div>
       {isExpanded && (
         <div className="ml-6 border-l border-[var(--color-surface0)] pl-2">
-          {isLoading && (
+          {isWorktreeLoading && (
             <div className="flex items-center gap-1.5 px-3 py-1 text-xs text-[var(--color-overlay0)]">
               <Loader2 size={10} className="animate-spin" />
               Loading worktrees...
             </div>
           )}
-          {!isLoading && project.worktrees.length === 0 && (
+          {!isWorktreeLoading && project.worktrees.length === 0 && (
             <div className="px-3 py-1 text-xs text-[var(--color-overlay0)]">No worktrees</div>
           )}
-          {!isLoading && project.worktrees.map((wt) => (
+          {!isWorktreeLoading && project.worktrees.map((wt) => (
             <WorktreeItem
               key={wt.id}
               worktree={wt}
@@ -350,7 +350,7 @@ function ProjectItem({
             >
               + Add Worktree
             </button>
-            {!isLoading && project.worktrees.length > 0 && (
+            {!isWorktreeLoading && project.worktrees.length > 0 && (
               <button
                 onClick={handleRefresh}
                 className="shrink-0 px-2 py-1 text-[var(--color-overlay0)] hover:text-[var(--color-text)]"

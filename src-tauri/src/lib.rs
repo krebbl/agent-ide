@@ -894,11 +894,10 @@ async fn list_worktrees_ssh(
     }
 
     for wt in &mut worktrees {
-        let status_output = run_git_command_ssh(project_id, &wt.path, &["status", "--porcelain"], state).await?;
-        wt.status = if status_output.is_empty() {
-            "clean".to_string()
-        } else {
-            "dirty".to_string()
+        let status_output = run_git_command_ssh(project_id, &wt.path, &["status", "--porcelain"], state).await;
+        wt.status = match status_output {
+            Ok(output) => if output.is_empty() { "clean".to_string() } else { "dirty".to_string() },
+            Err(_) => "unknown".to_string(),
         };
 
         let branch = &wt.branch;
