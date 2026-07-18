@@ -2,17 +2,20 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { FolderPlus, Folder, Server, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, MoreVertical, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
+import { useTerminalStore } from "../../stores/terminalStore";
 import AddProjectDialog from "../dialogs/AddProjectDialog";
 import AddWorktreeDialog from "../dialogs/AddWorktreeDialog";
 import { Project } from "../../types";
 
 function WorktreeContextMenu({
   worktree,
+  projectType,
   isActive,
   onClose,
   onRemove,
 }: {
   worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
+  projectType: "local" | "ssh";
   isActive: boolean;
   onClose: () => void;
   onRemove: (force: boolean) => void;
@@ -31,7 +34,10 @@ function WorktreeContextMenu({
   };
 
   const handleOpenInTerminal = () => {
-    // TODO: spawn terminal at worktree.path
+    useTerminalStore
+      .getState()
+      .addSession(worktree.path, projectType, worktree.id)
+      .catch(() => {});
     onClose();
   };
 
@@ -130,11 +136,13 @@ function WorktreeContextMenu({
 
 function WorktreeItem({
   worktree,
+  projectType,
   isActive,
   onActivate,
   onRemove,
 }: {
   worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
+  projectType: "local" | "ssh";
   isActive: boolean;
   onActivate: () => void;
   onRemove: (force: boolean) => void;
@@ -213,6 +221,7 @@ function WorktreeItem({
         <div ref={menuRef}>
           <WorktreeContextMenu
             worktree={worktree}
+            projectType={projectType}
             isActive={isActive}
             onClose={() => setShowMenu(false)}
             onRemove={onRemove}
@@ -335,6 +344,7 @@ function ProjectItem({
             <WorktreeItem
               key={wt.id}
               worktree={wt}
+              projectType={project.type}
               isActive={wt.id === selectedWorktreeId && project.id === activeProjectId}
               onActivate={() => setActiveWorktree(project.id, wt.id)}
               onRemove={(force) => handleRemoveWorktree(wt.path, force)}

@@ -3,8 +3,10 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
 import { initConnectionStatusListener } from "./stores/connectionStatusStore";
+import { initTerminalEventListeners } from "./services/terminalEvents";
 
 initConnectionStatusListener();
+initTerminalEventListeners().catch(() => {});
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
