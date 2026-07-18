@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, X } from "lucide-react";
+import { ChevronDown, X, Loader2 } from "lucide-react";
 
 interface SearchableSelectOption {
   value: string;
@@ -14,6 +14,8 @@ interface SearchableSelectProps {
   onChange: (value: string) => void;
   placeholder?: string;
   emptyMessage?: string;
+  loading?: boolean;
+  loadingMessage?: string;
 }
 
 export default function SearchableSelect({
@@ -22,6 +24,8 @@ export default function SearchableSelect({
   onChange,
   placeholder = "Select...",
   emptyMessage = "No matches",
+  loading = false,
+  loadingMessage = "Loading...",
 }: SearchableSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -139,7 +143,12 @@ export default function SearchableSelect({
         />
       </div>
       <div className="max-h-60 overflow-y-auto py-1">
-        {filtered.length === 0 ? (
+        {loading ? (
+          <div className="flex items-center gap-2 px-3 py-2 text-xs text-[var(--color-overlay0)]">
+            <Loader2 size={12} className="animate-spin" />
+            {loadingMessage}
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="px-3 py-2 text-xs text-[var(--color-overlay0)]">{emptyMessage}</div>
         ) : (
           filtered.map((o, idx) => {
@@ -184,7 +193,7 @@ export default function SearchableSelect({
               {selected.label}
             </span>
           ) : (
-            <span className="text-[var(--color-overlay0)]">{placeholder}</span>
+            <span className="text-[var(--color-overlay0)]">{loading ? loadingMessage : placeholder}</span>
           )}
         </span>
         <div className="flex shrink-0 items-center gap-1">

@@ -30,6 +30,7 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
   const [worktreeName, setWorktreeName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [branchesError, setBranchesError] = useState<string | null>(null);
+  const [branchesLoading, setBranchesLoading] = useState(false);
 
   const project = projects.find((p) => p.id === projectId);
   const existingNames = project?.worktrees.map((w) => w.id) || [];
@@ -39,13 +40,15 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
   const effectiveName = worktreeName || generateWorktreeName(branch, existingNames);
 
   useEffect(() => {
+    setBranchesLoading(true);
     setBranchesError(null);
     invoke<{ name: string; isRemote: boolean }[]>("git_branches_list_async", { projectId })
       .then((b) => {
         setBranches(b);
         setBranchesError(null);
       })
-      .catch((e) => setBranchesError(String(e)));
+      .catch((e) => setBranchesError(String(e)))
+      .finally(() => setBranchesLoading(false));
   }, [projectId]);
 
   useEffect(() => {
@@ -120,6 +123,8 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
                   onChange={(v) => setSelectedBranch(v)}
                   placeholder="Select a branch..."
                   emptyMessage="No branches found"
+                  loading={branchesLoading}
+                  loadingMessage="Loading branches..."
                 />
                 {branchesError && (
                   <div className="mt-1.5 flex items-center gap-1.5 text-xs text-[var(--color-peach)]">
