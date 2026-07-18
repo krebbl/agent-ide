@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { X, Loader2, AlertCircle } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
+import SearchableSelect from "../ui/SearchableSelect";
 
 interface AddWorktreeDialogProps {
   projectId: string;
@@ -53,6 +54,12 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
       setWorktreeName(generated);
     }
   }, [branch]);
+
+  const branchOptions = branches.map((b) => ({
+    value: b.name,
+    label: b.name,
+    icon: b.isRemote ? <span className="text-[var(--color-overlay0)]">↗</span> : null,
+  }));
 
   const canSubmit = branch && effectiveName;
 
@@ -107,18 +114,13 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
             </div>
             {mode === "existing" ? (
               <>
-                <select
+                <SearchableSelect
                   value={selectedBranch}
-                  onChange={(e) => setSelectedBranch(e.target.value)}
-                  className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] focus:border-[var(--color-blue)] focus:outline-none"
-                >
-                  <option value="">Select a branch...</option>
-                  {branches.map((b) => (
-                    <option key={b.name} value={b.name}>
-                      {b.isRemote ? `↗ ${b.name}` : b.name}
-                    </option>
-                  ))}
-                </select>
+                  options={branchOptions}
+                  onChange={(v) => setSelectedBranch(v)}
+                  placeholder="Select a branch..."
+                  emptyMessage="No branches found"
+                />
                 {branchesError && (
                   <div className="mt-1.5 flex items-center gap-1.5 text-xs text-[var(--color-peach)]">
                     <AlertCircle size={12} />
