@@ -34,6 +34,7 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
 
   const project = projects.find((p) => p.id === projectId);
   const existingNames = project?.worktrees.map((w) => w.id) || [];
+  const assignedBranches = new Set(project?.worktrees.map((w) => w.branch) || []);
 
   const branch = mode === "existing" ? selectedBranch : newBranchName;
   const isNew = mode === "new";
@@ -58,7 +59,9 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
     }
   }, [branch]);
 
-  const branchOptions = branches.map((b) => ({
+  const availableBranches = branches.filter((b) => !assignedBranches.has(b.name));
+
+  const branchOptions = availableBranches.map((b) => ({
     value: b.name,
     label: b.name,
     icon: b.isRemote ? <span className="text-[var(--color-overlay0)]">↗</span> : null,
