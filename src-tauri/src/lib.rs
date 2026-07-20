@@ -1214,18 +1214,18 @@ async fn git_branches_list_async(
 
 fn filter_available_branches(
     branches: Vec<BranchInfo>,
-    worktrees: Vec<WorktreeInfo>,
+    assigned: &[String],
 ) -> Vec<BranchInfo> {
-    let assigned: HashSet<&str> = worktrees.iter().map(|w| w.branch.as_str()).collect();
+    let assigned_set: HashSet<&str> = assigned.iter().map(|s| s.as_str()).collect();
     branches
         .into_iter()
         .filter(|b| {
-            if assigned.contains(b.name.as_str()) {
+            if assigned_set.contains(b.name.as_str()) {
                 return false;
             }
             if b.is_remote {
                 if let Some(base) = b.name.splitn(2, '/').nth(1) {
-                    if assigned.contains(base) {
+                    if assigned_set.contains(base) {
                         return false;
                     }
                 }
@@ -1235,12 +1235,131 @@ fn filter_available_branches(
         .collect()
 }
 
+fn parse_worktree_branch_names(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|l| {
+            l.strip_prefix("branch ").map(|b| {
+                b.trim_start_matches("refs/heads/")
+                    .trim_start_matches("refs/remotes/")
+                    .to_string()
+            })
+        })
+        .collect()
+}
+
+fn list_worktree_branch_names_local(repo_path: &str) -> Result<Vec<String>, String> {
+    let output = run_git_command(repo_path, &["worktree", "list", "--porcelain"])?;
+    Ok(parse_worktree_branch_names(&output))
+}
+
 fn list_branches_available_for_worktrees_local(
     repo_path: &str,
 ) -> Result<Vec<BranchInfo>, String> {
     let branches = list_branches_local(repo_path)?;
-    let worktrees = list_worktrees_local(repo_path)?;
-    Ok(filter_available_branches(branches, worktrees))
+    let assigned = list_worktree_branch_names_local(repo_path)?;
+    Ok(filter_available_branches(branches, &assigned))
+}
+
+async fn list_branches_and_worktree_branch_names_ssh(
+    project_id: &str,
+    repo_path: &str,
+    state: &Arc<AppState>,
+) -> Result<(Vec<BranchInfo>, Vec<String>), String> {
+    let connections = state.ssh_connections.lock().await;
+    let conn = connections
+        .get(project_id)
+        .ok_or("No SSH connection found for this project")?;
+
+    let worktree_quoted = shlex::try_quote(repo_path)
+        .map_err(|_| "Repository path contains invalid characters".to_string())?
+        .into_owned();
+    let separator = "AGENT_IDE_WT_SEP";
+    let cmd = format!(
+        "cd {} && git for-each-ref --format='BRANCH %(refname:short) %(refname)' refs/heads refs/remotes && echo '{}' && git worktree list --porcelain",
+        worktree_quoted, separator
+    );
+
+    info!(
+        "list_branches_and_worktree_branch_names_ssh: executing '{}'",
+        cmd
+    );
+
+    let mut channel = conn
+        .session
+        .channel_open_session()
+        .await
+        .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
+
+    channel
+        .exec(false, cmd.as_str())
+        .await
+        .map_err(|e| format!("Failed to execute command: {}", e))?;
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    let mut exit_status: Option<u32> = None;
+
+    while let Some(msg) = channel.wait().await {
+        match msg {
+            russh::ChannelMsg::Data { data } => {
+                stdout.push_str(&String::from_utf8_lossy(&data));
+            }
+            russh::ChannelMsg::ExtendedData { data, ext } => {
+                if ext == 1 {
+                    stderr.push_str(&String::from_utf8_lossy(&data));
+                } else {
+                    stdout.push_str(&String::from_utf8_lossy(&data));
+                }
+            }
+            russh::ChannelMsg::ExitStatus { exit_status: status } => {
+                exit_status = Some(status);
+                break;
+            }
+            russh::ChannelMsg::Close => break,
+            _ => {}
+        }
+    }
+
+    if exit_status != Some(0) {
+        return Err(format!(
+            "Failed to list branches and worktrees: {}",
+            stderr.trim()
+        ));
+    }
+
+    let mut branches = Vec::new();
+    let mut assigned = Vec::new();
+    let mut past_separator = false;
+
+    for line in stdout.lines() {
+        if line == separator {
+            past_separator = true;
+            continue;
+        }
+        if !past_separator {
+            if let Some(rest) = line.strip_prefix("BRANCH ") {
+                let mut parts = rest.splitn(2, ' ');
+                let name = parts.next().unwrap_or("").to_string();
+                let full_ref = parts.next().unwrap_or("");
+                if name == "origin/HEAD" {
+                    continue;
+                }
+                branches.push(BranchInfo {
+                    name,
+                    is_remote: full_ref.starts_with("refs/remotes/"),
+                });
+            }
+        } else if let Some(b) = line.strip_prefix("branch ") {
+            assigned.push(
+                b.trim_start_matches("refs/heads/")
+                    .trim_start_matches("refs/remotes/")
+                    .to_string(),
+            );
+        }
+    }
+
+    Ok((branches, assigned))
 }
 
 async fn list_branches_available_for_worktrees_ssh(
@@ -1248,9 +1367,9 @@ async fn list_branches_available_for_worktrees_ssh(
     repo_path: &str,
     state: &Arc<AppState>,
 ) -> Result<Vec<BranchInfo>, String> {
-    let branches = list_branches_ssh(project_id, repo_path, state).await?;
-    let worktrees = list_worktrees_ssh(project_id, repo_path, state).await?;
-    Ok(filter_available_branches(branches, worktrees))
+    let (branches, assigned) =
+        list_branches_and_worktree_branch_names_ssh(project_id, repo_path, state).await?;
+    Ok(filter_available_branches(branches, &assigned))
 }
 
 #[tauri::command]
