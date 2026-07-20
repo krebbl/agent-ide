@@ -502,9 +502,6 @@ async fn run_remote_terminal(
     }
 
     if setup_ok {
-        let shell_setup = "export PROMPT_COMMAND='printf \"\\033]133;D\\007\"'\nexport PS0='\\033]133;C\\007'\n[ -n \"$ZSH_VERSION\" ] && { precmd() { printf \"\\033]133;D\\007\"; }; preexec() { printf \"\\033]133;C\\007\"; }; }\n";
-        let _ = channel.data(Cursor::new(shell_setup.as_bytes())).await;
-
         if let Some(ref cwd) = cwd {
             let cmd = format!("cd {}\n", shell_escape(cwd));
             let _ = channel.data(Cursor::new(cmd.into_bytes())).await;

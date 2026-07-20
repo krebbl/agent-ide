@@ -211,6 +211,9 @@ export default function TerminalView({
 
     const handleInput = (data: string) => {
       invoke("pty_write", { sessionId: ptyId, data }).catch(() => {});
+      if (data === "\r" || data.includes("\n")) {
+        markBusy();
+      }
     };
     const dataDisposable = terminal.onData(handleInput);
     const binaryDisposable = terminal.onBinary(handleInput);
