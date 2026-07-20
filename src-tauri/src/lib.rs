@@ -7,7 +7,7 @@ use russh::*;
 use russh_sftp::client::SftpSession;
 use tokio::io::AsyncWriteExt;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -1212,6 +1212,67 @@ async fn git_branches_list_async(
     }
 }
 
+fn filter_available_branches(
+    branches: Vec<BranchInfo>,
+    worktrees: Vec<WorktreeInfo>,
+) -> Vec<BranchInfo> {
+    let assigned: HashSet<&str> = worktrees.iter().map(|w| w.branch.as_str()).collect();
+    branches
+        .into_iter()
+        .filter(|b| {
+            if assigned.contains(b.name.as_str()) {
+                return false;
+            }
+            if b.is_remote {
+                if let Some(base) = b.name.splitn(2, '/').nth(1) {
+                    if assigned.contains(base) {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .collect()
+}
+
+fn list_branches_available_for_worktrees_local(
+    repo_path: &str,
+) -> Result<Vec<BranchInfo>, String> {
+    let branches = list_branches_local(repo_path)?;
+    let worktrees = list_worktrees_local(repo_path)?;
+    Ok(filter_available_branches(branches, worktrees))
+}
+
+async fn list_branches_available_for_worktrees_ssh(
+    project_id: &str,
+    repo_path: &str,
+    state: &Arc<AppState>,
+) -> Result<Vec<BranchInfo>, String> {
+    let branches = list_branches_ssh(project_id, repo_path, state).await?;
+    let worktrees = list_worktrees_ssh(project_id, repo_path, state).await?;
+    Ok(filter_available_branches(branches, worktrees))
+}
+
+#[tauri::command]
+async fn git_branches_available_for_worktrees_async(
+    project_id: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<BranchInfo>, String> {
+    let projects = {
+        let app_handle = state.app_handle.lock().unwrap().clone().ok_or("App handle not available")?;
+        load_projects(app_handle)?
+    };
+    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+
+    match &project.connection {
+        Connection::Local { path } => list_branches_available_for_worktrees_local(path),
+        Connection::Ssh { .. } => {
+            let repo_path = get_repo_path(project);
+            list_branches_available_for_worktrees_ssh(&project_id, &repo_path, &state).await
+        }
+    }
+}
+
 fn one_password_agent_socket() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -1952,6 +2013,7 @@ pub fn run() {
             git_worktree_add_async,
             git_worktree_remove_async,
             git_branches_list_async,
+            git_branches_available_for_worktrees_async,
             ssh_agent_info,
             ssh_test_connection,
             ssh_connect,
