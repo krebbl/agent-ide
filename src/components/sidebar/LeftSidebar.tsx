@@ -159,10 +159,7 @@ function WorktreeItem({
         session.projectId === projectId &&
         session.worktreeId === worktree.id
       ) {
-        console.log(
-          `[LeftSidebar] worktree ${worktree.id} session ${session.id} isBusy=${session.isBusy}`,
-        );
-        if (session.isBusy) return "busy";
+        if (session.processRunning || session.isBusy) return "busy";
         if (session.needsInput && state !== "busy") return "input";
       }
       return state;

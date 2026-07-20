@@ -30,11 +30,12 @@ export default function TerminalView({
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const rafRef = useRef<number | null>(null);
-  const busyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const processTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isVisible = isActive && !isCollapsed;
   const isVisibleRef = useRef(isVisible);
   const isWindowFocusedRef = useRef(document.hasFocus());
   const wasBusyRef = useRef<boolean>(false);
+  const processRunningRef = useRef<boolean>(false);
   const notifiedForIdleRef = useRef<boolean>(false);
   const skipFirstIdleRef = useRef<boolean>(true);
 
@@ -89,37 +90,58 @@ export default function TerminalView({
     notifiedForIdleRef.current = false;
   };
 
-  const handleIdle = (title: string) => {
-    if (busyTimeoutRef.current) {
-      clearTimeout(busyTimeoutRef.current);
-      busyTimeoutRef.current = null;
+  const endProcess = () => {
+    console.log(`[TerminalView.endProcess] session ${sessionId}`);
+    processRunningRef.current = false;
+    wasBusyRef.current = false;
+    if (processTimeoutRef.current) {
+      clearTimeout(processTimeoutRef.current);
+      processTimeoutRef.current = null;
     }
+    useTerminalStore.getState().setProcessRunning(sessionId, false);
+  };
+
+  const handleIdle = (title: string) => {
+    endProcess();
     notifyIdle(title);
   };
 
   const handleBusy = () => {
-    console.log(
-      `[TerminalView.handleBusy] session ${sessionId} isBusy=true`,
-    );
-    wasBusyRef.current = true;
-    resetIdleState();
-    if (busyTimeoutRef.current) {
-      clearTimeout(busyTimeoutRef.current);
-      busyTimeoutRef.current = null;
-    }
-    setActivity({ isBusy: true, needsInput: false });
+    console.log(`[TerminalView.handleBusy] session ${sessionId}`);
+    startProcess();
   };
 
-  const markBusy = () => {
-    console.log(
-      `[TerminalView.markBusy] session ${sessionId} busy`,
-    );
-    handleBusy();
-    busyTimeoutRef.current = setTimeout(() => {
+  const startProcess = () => {
+    console.log(`[TerminalView.startProcess] session ${sessionId}`);
+    processRunningRef.current = true;
+    wasBusyRef.current = true;
+    resetIdleState();
+    useTerminalStore.getState().setProcessRunning(sessionId, true);
+    setActivity({ isBusy: true, needsInput: false });
+    if (processTimeoutRef.current) {
+      clearTimeout(processTimeoutRef.current);
+    }
+    processTimeoutRef.current = setTimeout(() => {
       const session = useTerminalStore
         .getState()
         .sessions.find((s) => s.id === sessionId);
       notifyIdle(session?.title ?? "Terminal");
+      endProcess();
+    }, 1500);
+  };
+
+  const extendProcess = () => {
+    if (!processRunningRef.current) return;
+    console.log(`[TerminalView.extendProcess] session ${sessionId}`);
+    if (processTimeoutRef.current) {
+      clearTimeout(processTimeoutRef.current);
+    }
+    processTimeoutRef.current = setTimeout(() => {
+      const session = useTerminalStore
+        .getState()
+        .sessions.find((s) => s.id === sessionId);
+      notifyIdle(session?.title ?? "Terminal");
+      endProcess();
     }, 1500);
   };
 
@@ -190,9 +212,10 @@ export default function TerminalView({
     registerTerminal(ptyId, {
       onOutput: (data) => {
         terminal.write(data);
-        markBusy();
+        extendProcess();
       },
       onExit: () => {
+        endProcess();
         const { sessions } = useTerminalStore.getState();
         const session = sessions.find((s) => s.id === sessionId);
         console.log(
@@ -219,9 +242,9 @@ export default function TerminalView({
       invoke("pty_write", { sessionId: ptyId, data }).catch(() => {});
       if (data === "\r" || data.includes("\n")) {
         console.log(
-          `[TerminalView] Enter pressed for session ${sessionId} (ptyId=${ptyId}), marking busy`,
+          `[TerminalView] Enter pressed for session ${sessionId} (ptyId=${ptyId}), starting process`,
         );
-        markBusy();
+        startProcess();
       }
     };
     const dataDisposable = terminal.onData(handleInput);
@@ -236,8 +259,8 @@ export default function TerminalView({
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);
       }
-      if (busyTimeoutRef.current) {
-        clearTimeout(busyTimeoutRef.current);
+      if (processTimeoutRef.current) {
+        clearTimeout(processTimeoutRef.current);
       }
       unregisterTerminal(ptyId);
       resizeObserver.disconnect();

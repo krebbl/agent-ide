@@ -12,6 +12,7 @@ export interface TerminalSession {
   worktreeId?: string;
   isBusy?: boolean;
   needsInput?: boolean;
+  processRunning?: boolean;
 }
 
 interface TerminalStore {
@@ -34,6 +35,7 @@ interface TerminalStore {
     id: string,
     activity: { isBusy: boolean; needsInput: boolean },
   ) => void;
+  setProcessRunning: (id: string, running: boolean) => void;
 }
 
 function basename(path: string): string {
@@ -188,6 +190,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     set((state) => ({
       sessions: state.sessions.map((s) =>
         s.id === id ? { ...s, ...activity } : s,
+      ),
+    })),
+
+  setProcessRunning: (id, running) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === id ? { ...s, processRunning: running } : s,
       ),
     })),
 }));
