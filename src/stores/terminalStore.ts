@@ -29,6 +29,7 @@ interface TerminalStore {
   updateSessionCwd: (id: string, cwd: string) => void;
   updateSessionTitle: (id: string, title: string) => void;
   setCollapsed: (collapsed: boolean) => void;
+  focusSession: (sessionId: string) => void;
   setSessionActivity: (
     id: string,
     activity: { isBusy: boolean; needsInput: boolean },
@@ -91,6 +92,25 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   sessions: [],
   activeSessionId: null,
   isCollapsed: false,
+
+  setCollapsed: (collapsed) => set({ isCollapsed: collapsed }),
+
+  focusSession: (sessionId) => {
+    set({ isCollapsed: false });
+    const session = get().sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+
+    const projectStore = useProjectStore.getState();
+    if (session.projectId && session.worktreeId) {
+      projectStore
+        .setActiveWorktree(session.projectId, session.worktreeId)
+        .catch(() => {});
+    } else if (session.projectId) {
+      projectStore.setActiveProject(session.projectId);
+    }
+
+    set({ activeSessionId: session.id });
+  },
 
   addSession: async (cwd, type, projectId, worktreeId) => {
     const store = useProjectStore.getState();
@@ -163,8 +183,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         s.id === id ? { ...s, title } : s,
       ),
     })),
-
-  setCollapsed: (collapsed) => set({ isCollapsed: collapsed }),
 
   setSessionActivity: (id, activity) =>
     set((state) => ({

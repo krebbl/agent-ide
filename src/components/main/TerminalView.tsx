@@ -62,6 +62,7 @@ export default function TerminalView({
     notify({
       title: "Terminal ready",
       body: ` "${title}" has finished.`,
+      sessionId,
     });
   };
 
@@ -174,6 +175,7 @@ export default function TerminalView({
           notify({
             title: "Terminal finished",
             body: ` "${session.title}" has finished.`,
+            sessionId,
           });
         }
         useTerminalStore.getState().removeSession(sessionId).catch(() => {});

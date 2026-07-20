@@ -3,21 +3,22 @@ import { create } from "zustand";
 export interface DevNotification {
   id: string;
   message: string;
+  sessionId?: string;
 }
 
 interface DevNotificationStore {
   notifications: DevNotification[];
-  addNotification: (message: string) => void;
+  addNotification: (message: string, sessionId?: string) => void;
   removeNotification: (id: string) => void;
 }
 
 export const useDevNotificationStore = create<DevNotificationStore>((set) => ({
   notifications: [],
 
-  addNotification: (message) => {
+  addNotification: (message, sessionId) => {
     const id = crypto.randomUUID();
     set((state) => ({
-      notifications: [...state.notifications, { id, message }],
+      notifications: [...state.notifications, { id, message, sessionId }],
     }));
     setTimeout(() => {
       set((state) => ({

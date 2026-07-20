@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import {
   Group,
   Panel,
@@ -7,14 +7,22 @@ import {
 } from "react-resizable-panels";
 import TerminalZone from "./TerminalZone";
 import EditorZone from "./EditorZone";
+import { useTerminalStore } from "../../stores/terminalStore";
 
 export default function MainArea() {
   const terminalPanelRef = usePanelRef();
-  const [isTerminalCollapsed, setIsTerminalCollapsed] = useState(false);
+  const isTerminalCollapsed = useTerminalStore((s) => s.isCollapsed);
+  const setIsTerminalCollapsed = useTerminalStore((s) => s.setCollapsed);
 
   useEffect(() => {
-    setIsTerminalCollapsed(terminalPanelRef.current?.isCollapsed() ?? false);
-  }, []);
+    const panel = terminalPanelRef.current;
+    if (!panel) return;
+    if (isTerminalCollapsed && !panel.isCollapsed()) {
+      panel.collapse();
+    } else if (!isTerminalCollapsed && panel.isCollapsed()) {
+      panel.expand();
+    }
+  }, [isTerminalCollapsed]);
 
   const handleToggleCollapse = () => {
     const panel = terminalPanelRef.current;
