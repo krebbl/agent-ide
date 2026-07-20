@@ -87,6 +87,43 @@ Always run `npx tsc --noEmit` and `cargo check` (in `src-tauri/`) after making c
 - **SSH uses russh (pure Rust)** — no Node.js sidecar, no native dependency issues.
 - **PTY uses portable-pty** — cross-platform, native to Tauri's Rust core.
 
+## Backend-first Logic Principle
+
+Keep the frontend thin: React components and Zustand stores should primarily handle UI state, presentation, and orchestration of backend commands. Domain logic, I/O, file-system semantics, git operations, SSH lifecycle, and persistence should live in the Rust backend.
+
+### Frontend responsibilities
+
+- UI state (expanded tree nodes, active tabs, dialogs, selection, focus)
+- Mapping backend data to React renders
+- Calling coarse-grained backend commands and updating local store with returned canonical state
+- Presentation helpers that are purely visual (icon colors, breadcrumbs, name formatting)
+
+### Backend responsibilities
+
+- File-system operations and path resolution (already covered by `FileSystemProvider`)
+- Gitignore parsing and filtered directory listings
+- Sorting, filtering, or aggregating file-system/git data before returning it
+- Project CRUD, persistence, and project-lifecycle side effects (SSH connect/disconnect, keychain password storage/deletion)
+- Normalizing and validating stored project state (e.g., ensuring only one active worktree)
+- Git worktree and branch operations
+- SSH connection lifecycle and auto-reconnection
+- Terminal process state (cwd resolution, activity/busy inference, process-group tracking)
+- Binary-safe or low-overhead IPC payloads for streaming data (e.g., terminal output)
+
+### When implementing a feature
+
+1. Ask whether the logic touches files, git, SSH, processes, secrets, or persisted state. If yes, implement it in Rust.
+2. Expose a small, coarse-grained Tauri command rather than multiple fine-grained frontend calls that reconstruct state from raw IPC.
+3. Return canonical state from mutating commands so the frontend can replace local store state instead of duplicating validation.
+4. Avoid duplicating backend knowledge in the frontend (e.g., path formats, worktree layout, connection schemas, active-state invariants).
+
+### Concrete examples
+
+- **Do not** parse `.gitignore` or filter directory entries in TypeScript. Add filtered listing to the `FileSystemProvider`.
+- **Do not** manually sort directory entries after `fs_read_dir`. Let the backend sort, or add a `sort` parameter.
+- **Do not** call `save_projects`, `ssh_connect`, and `ssh_store_password` separately from UI code. Use a unified `add_project` command that handles persistence, secret storage, and connection setup.
+- **Do not** infer terminal busy state from output bytes and timers. Push process-group or shell-state events from the backend.
+
 ## GitHub
 
 - **Repo:** https://github.com/krebbl/agent-ide
@@ -102,7 +139,7 @@ When generating tool calls, you must only call the explicitly provided tools. Do
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **agent-ide** (450 symbols, 770 relationships, 35 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **agent-ide** (790 symbols, 1422 relationships, 68 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
