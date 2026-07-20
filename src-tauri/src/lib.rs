@@ -594,7 +594,6 @@ pub struct AppState {
     pub app_handle: StdMutex<Option<tauri::AppHandle>>,
     pub active_pty_id: StdMutex<Option<String>>,
     pub pty_titles: StdMutex<HashMap<String, String>>,
-    pub pty_last_output: StdMutex<HashMap<String, std::time::Instant>>,
 }
 
 impl AppState {
@@ -611,26 +610,8 @@ impl AppState {
             .insert(pty_id.to_string(), title.to_string());
     }
 
-    pub fn record_pty_output(&self, pty_id: &str) {
-        self.pty_last_output
-            .lock()
-            .unwrap()
-            .insert(pty_id.to_string(), std::time::Instant::now());
-    }
-
     pub fn clear_pty_state(&self, pty_id: &str) {
         self.pty_titles.lock().unwrap().remove(pty_id);
-        self.pty_last_output.lock().unwrap().remove(pty_id);
-    }
-
-    pub fn check_idle_sessions(&self, idle_threshold: std::time::Duration) {
-        let last_outputs = self.pty_last_output.lock().unwrap();
-        let now = std::time::Instant::now();
-        for (pty_id, last) in last_outputs.iter() {
-            if now.duration_since(*last) >= idle_threshold {
-                self.emit_idle(pty_id);
-            }
-        }
     }
 
     pub fn emit_idle(&self, pty_id: &str) {
@@ -2318,16 +2299,6 @@ pub fn run() {
                 start_health_check(state_clone).await;
             });
 
-            let idle_state = state.inner().clone();
-            tauri::async_runtime::spawn(async move {
-                let idle_threshold = std::time::Duration::from_secs(2);
-                let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
-                loop {
-                    interval.tick().await;
-                    idle_state.check_idle_sessions(idle_threshold);
-                }
-            });
-
             let pty_manager = Arc::new(pty::PtyManager::new(
                 app.handle().clone(),
                 state.inner().clone(),
@@ -2341,7 +2312,6 @@ pub fn run() {
             app_handle: StdMutex::new(None),
             active_pty_id: StdMutex::new(None),
             pty_titles: StdMutex::new(HashMap::new()),
-            pty_last_output: StdMutex::new(HashMap::new()),
         }))
         .invoke_handler(tauri::generate_handler![
             save_projects,

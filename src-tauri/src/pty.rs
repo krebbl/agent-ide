@@ -134,7 +134,6 @@ impl PtyManager {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(n) => {
-                        reader_app_state.record_pty_output(&reader_session_id);
                         if contains_osc133_command_end(&buffer[..n]) {
                             reader_app_state.emit_idle(&reader_session_id);
                         }
@@ -505,7 +504,6 @@ async fn run_remote_terminal(
                 msg = channel.wait() => {
                     match msg {
                         Some(ChannelMsg::Data { data }) => {
-                            app_state.record_pty_output(&session_id);
                             if contains_osc133_command_end(data.as_ref()) {
                                 app_state.emit_idle(&session_id);
                             }
