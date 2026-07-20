@@ -35,6 +35,7 @@ export default function TerminalView({
   const isWindowFocusedRef = useRef(document.hasFocus());
   const wasBusyRef = useRef<boolean>(false);
   const notifiedForIdleRef = useRef<boolean>(false);
+  const skipFirstIdleRef = useRef<boolean>(true);
 
   useEffect(() => {
     isVisibleRef.current = isVisible;
@@ -59,6 +60,12 @@ export default function TerminalView({
     !isVisibleRef.current || !isWindowFocusedRef.current;
 
   const notifyIdle = (title: string) => {
+    if (skipFirstIdleRef.current) {
+      skipFirstIdleRef.current = false;
+      notifiedForIdleRef.current = true;
+      wasBusyRef.current = false;
+      return;
+    }
     if (notifiedForIdleRef.current) return;
     if (!wasBusyRef.current) return;
     if (shouldNotify()) {
