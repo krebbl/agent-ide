@@ -913,85 +913,193 @@ async fn list_worktrees_ssh(
     repo_path: &str,
     state: &Arc<AppState>,
 ) -> Result<Vec<WorktreeInfo>, String> {
-    let output = run_git_command_ssh(project_id, repo_path, &["worktree", "list", "--porcelain"], state).await?;
+    let connections = state.ssh_connections.lock().await;
+    let conn = connections
+        .get(project_id)
+        .ok_or("No SSH connection found for this project")?;
+
+    let worktree_quoted = shlex::try_quote(repo_path)
+        .map_err(|_| "Repository path contains invalid characters".to_string())?
+        .into_owned();
+
+    let script = format!(
+        r#"cd {} && \
+echo 'WT_LIST_BEGIN' && \
+git worktree list --porcelain && \
+echo 'WT_LIST_END' && \
+wt_list=$(git worktree list --porcelain) && \
+echo 'WT_STATES_BEGIN' && \
+wt_path="" && \
+wt_branch="" && \
+while IFS= read -r line; do \
+  case "$line" in \
+    worktree*) wt_path="${{line#worktree }}" ;; \
+    branch*) \
+      branch="${{line#branch }}" && \
+      branch="${{branch#refs/heads/}}" && \
+      branch="${{branch#refs/remotes/}}" && \
+      wt_branch="$branch" && \
+      if [ -n "$wt_path" ]; then \
+        echo "WT_STATE_BEGIN $wt_path $wt_branch" && \
+        (cd "$wt_path" && if [ -n "$(git status --porcelain)" ]; then echo "WT_DIRTY"; else echo "WT_CLEAN"; fi && echo "WT_AHEAD_BEHIND" && (git rev-list --left-right --count "$wt_branch...origin/$wt_branch" 2>/dev/null || echo "0 0")) && \
+        echo "WT_STATE_END"; \
+      fi \
+      ;; \
+  esac; \
+done <<EOF
+$wt_list
+EOF
+echo 'WT_STATES_END'"#,
+        worktree_quoted
+    );
+
+    info!("list_worktrees_ssh: executing combined worktree script");
+
+    let mut channel = conn
+        .session
+        .channel_open_session()
+        .await
+        .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
+
+    channel
+        .exec(false, script.as_str())
+        .await
+        .map_err(|e| format!("Failed to execute command: {}", e))?;
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    let mut exit_status: Option<u32> = None;
+
+    while let Some(msg) = channel.wait().await {
+        match msg {
+            russh::ChannelMsg::Data { data } => {
+                stdout.push_str(&String::from_utf8_lossy(&data));
+            }
+            russh::ChannelMsg::ExtendedData { data, ext } => {
+                if ext == 1 {
+                    stderr.push_str(&String::from_utf8_lossy(&data));
+                } else {
+                    stdout.push_str(&String::from_utf8_lossy(&data));
+                }
+            }
+            russh::ChannelMsg::ExitStatus { exit_status: status } => {
+                exit_status = Some(status);
+                break;
+            }
+            russh::ChannelMsg::Close => break,
+            _ => {}
+        }
+    }
+
+    if exit_status != Some(0) {
+        return Err(format!(
+            "Failed to list worktrees: {}",
+            stderr.trim()
+        ));
+    }
 
     let mut worktrees = Vec::new();
-    let mut current_worktree: Option<WorktreeInfo> = None;
+    let mut current: Option<WorktreeInfo> = None;
+    let mut in_list = false;
+    let mut in_states = false;
+    let mut state_idx: Option<usize> = None;
 
-    for line in output.lines() {
+    for line in stdout.lines() {
         let line = line.trim();
 
-        if line.starts_with("worktree ") {
-            if let Some(wt) = current_worktree.take() {
+        if line == "WT_LIST_BEGIN" {
+            in_list = true;
+            in_states = false;
+            continue;
+        }
+        if line == "WT_LIST_END" {
+            in_list = false;
+            if let Some(wt) = current.take() {
                 worktrees.push(wt);
             }
-            let path = line.trim_start_matches("worktree ").to_string();
-            let id = path.clone();
-            current_worktree = Some(WorktreeInfo {
-                id,
-                branch: String::new(),
-                path: path.clone(),
-                is_main: false,
-                status: "unknown".to_string(),
-                ahead: 0,
-                behind: 0,
-            });
-        } else if line.starts_with("branch ") {
-            if let Some(ref mut wt) = current_worktree {
-                let branch_ref = line.trim_start_matches("branch ");
-                wt.branch = branch_ref
-                    .trim_start_matches("refs/heads/")
-                    .trim_start_matches("refs/remotes/")
-                    .to_string();
-            }
-        } else if line == "bare" {
-            if let Some(ref mut wt) = current_worktree {
-                wt.is_main = true;
-            }
-        } else if line.starts_with("HEAD ") {
-            if let Some(ref mut wt) = current_worktree {
-                let head_ref = line.trim_start_matches("HEAD ");
-                if wt.branch.is_empty() {
-                    wt.branch = head_ref
+            continue;
+        }
+        if line == "WT_STATES_BEGIN" {
+            in_states = true;
+            continue;
+        }
+        if line == "WT_STATES_END" {
+            break;
+        }
+
+        if in_list {
+            if line.starts_with("worktree ") {
+                if let Some(wt) = current.take() {
+                    worktrees.push(wt);
+                }
+                let path = line.trim_start_matches("worktree ").to_string();
+                let id = path.clone();
+                current = Some(WorktreeInfo {
+                    id,
+                    branch: String::new(),
+                    path,
+                    is_main: false,
+                    status: "unknown".to_string(),
+                    ahead: 0,
+                    behind: 0,
+                });
+            } else if line.starts_with("branch ") {
+                if let Some(ref mut wt) = current {
+                    let branch_ref = line.trim_start_matches("branch ");
+                    wt.branch = branch_ref
                         .trim_start_matches("refs/heads/")
                         .trim_start_matches("refs/remotes/")
                         .to_string();
+                }
+            } else if line == "bare" {
+                if let Some(ref mut wt) = current {
+                    wt.is_main = true;
+                }
+            } else if line.starts_with("HEAD ") {
+                if let Some(ref mut wt) = current {
+                    let head_ref = line.trim_start_matches("HEAD ");
+                    if wt.branch.is_empty() {
+                        wt.branch = head_ref
+                            .trim_start_matches("refs/heads/")
+                            .trim_start_matches("refs/remotes/")
+                            .to_string();
+                    }
+                }
+            }
+        } else if in_states {
+            if let Some(rest) = line.strip_prefix("WT_STATE_BEGIN ") {
+                let mut parts = rest.rsplitn(2, ' ');
+                let _branch = parts.next();
+                let path = parts.next().unwrap_or("").to_string();
+                state_idx = worktrees.iter().position(|w| w.path == path);
+            } else if line == "WT_DIRTY" {
+                if let Some(idx) = state_idx {
+                    worktrees[idx].status = "dirty".to_string();
+                }
+            } else if line == "WT_CLEAN" {
+                if let Some(idx) = state_idx {
+                    worktrees[idx].status = "clean".to_string();
+                }
+            } else if line == "WT_STATE_END" {
+                state_idx = None;
+            } else if !line.is_empty() {
+                if let Some(idx) = state_idx {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() == 2 {
+                        if let (Ok(ahead), Ok(behind)) =
+                            (parts[0].parse::<i32>(), parts[1].parse::<i32>())
+                        {
+                            worktrees[idx].ahead = ahead;
+                            worktrees[idx].behind = behind;
+                        }
+                    }
                 }
             }
         }
     }
 
-    if let Some(wt) = current_worktree {
-        worktrees.push(wt);
-    }
-
     if !worktrees.is_empty() {
         worktrees[0].is_main = true;
-    }
-
-    for wt in &mut worktrees {
-        let status_output = run_git_command_ssh(project_id, &wt.path, &["status", "--porcelain"], state).await;
-        wt.status = match status_output {
-            Ok(output) => if output.is_empty() { "clean".to_string() } else { "dirty".to_string() },
-            Err(_) => "unknown".to_string(),
-        };
-
-        let branch = &wt.branch;
-        let ahead_output = run_git_command_ssh(
-            project_id,
-            &wt.path,
-            &["rev-list", "--left-right", "--count", &format!("{}...origin/{}", branch, branch)],
-            state,
-        )
-        .await;
-
-        if let Ok(output) = ahead_output {
-            let parts: Vec<&str> = output.split_whitespace().collect();
-            if parts.len() == 2 {
-                wt.ahead = parts[0].parse().unwrap_or(0);
-                wt.behind = parts[1].parse().unwrap_or(0);
-            }
-        }
     }
 
     Ok(worktrees)
