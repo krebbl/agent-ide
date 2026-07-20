@@ -4,6 +4,7 @@ import StatusBar from "./StatusBar";
 import LeftSidebar from "../sidebar/LeftSidebar";
 import RightSidebar from "../sidebar/RightSidebar";
 import MainArea from "../main/MainArea";
+import DevNotificationContainer from "../ui/DevNotificationContainer";
 
 export default function AppLayout() {
   return (
@@ -39,6 +40,7 @@ export default function AppLayout() {
         </Group>
       </div>
       <StatusBar />
+      {import.meta.env.DEV && <DevNotificationContainer />}
     </div>
   );
 }

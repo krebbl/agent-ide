@@ -15,6 +15,10 @@ dist-ssr
 # Rust / Tauri
 target/
 src-tauri/target/
+
+# Agent IDE generated hooks/events per project
+.agent-ide/
+.claude/settings.json
 src-tauri/gen/schemas/*.json
 
 # Editor directories and files

@@ -1,4 +1,6 @@
 import { Terminal, Plus, X, ChevronDown, ChevronUp } from "lucide-react";
+import { useEffect, useMemo } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { useProjectStore } from "../../stores/projectStore";
 import TerminalView from "./TerminalView";
@@ -21,15 +23,32 @@ export default function TerminalZone({
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const selectedWorktreeId = useProjectStore((s) => s.selectedWorktreeId);
 
-  const visibleSessions = sessions.filter(
-    (s) =>
-      s.projectId === activeProjectId && s.worktreeId === selectedWorktreeId,
+  const visibleSessions = useMemo(
+    () =>
+      sessions.filter(
+        (s) =>
+          s.projectId === activeProjectId && s.worktreeId === selectedWorktreeId,
+      ),
+    [sessions, activeProjectId, selectedWorktreeId],
   );
 
   const effectiveActiveId =
     visibleSessions.find((s) => s.id === activeSessionId)?.id ??
     visibleSessions[visibleSessions.length - 1]?.id ??
     null;
+
+  useEffect(() => {
+    if (isCollapsed) {
+      invoke("pty_set_active", { ptyId: null }).catch(() => {});
+      return;
+    }
+    const activeSession = visibleSessions.find((s) => s.id === effectiveActiveId);
+    if (activeSession) {
+      invoke("pty_set_active", { ptyId: activeSession.ptyId }).catch(() => {});
+    } else {
+      invoke("pty_set_active", { ptyId: null }).catch(() => {});
+    }
+  }, [effectiveActiveId, visibleSessions, isCollapsed]);
 
   const canAddTerminal = activeProjectId && selectedWorktreeId;
 
@@ -120,6 +139,7 @@ export default function TerminalZone({
             sessionId={session.id}
             ptyId={session.ptyId}
             isActive={session.id === effectiveActiveId}
+            isCollapsed={isCollapsed}
           />
         ))}
       </div>

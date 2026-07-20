@@ -5,29 +5,83 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import {
   registerTerminal,
+  registerTerminalIdle,
   unregisterTerminal,
 } from "../../services/terminalEvents";
 import { useTerminalStore } from "../../stores/terminalStore";
+import { notify } from "../../services/notifications";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalViewProps {
   sessionId: string;
   ptyId: string;
   isActive: boolean;
+  isCollapsed: boolean;
 }
 
 export default function TerminalView({
   sessionId,
   ptyId,
   isActive,
+  isCollapsed,
 }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const rafRef = useRef<number | null>(null);
   const busyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isVisible = isActive && !isCollapsed;
+  const isVisibleRef = useRef(isVisible);
+  const isWindowFocusedRef = useRef(document.hasFocus());
+  const wasBusyRef = useRef<boolean>(false);
+  const notifiedForIdleRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    isVisibleRef.current = isVisible;
+  }, [isVisible]);
+
+  useEffect(() => {
+    const handleFocus = () => {
+      isWindowFocusedRef.current = true;
+    };
+    const handleBlur = () => {
+      isWindowFocusedRef.current = false;
+    };
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("blur", handleBlur);
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, []);
+
+  const shouldNotify = () =>
+    !isVisibleRef.current || !isWindowFocusedRef.current;
+
+  const notifyIdle = (title: string) => {
+    notify({
+      title: "Terminal ready",
+      body: ` "${title}" has finished.`,
+    });
+  };
+
+  const resetIdleState = () => {
+    notifiedForIdleRef.current = false;
+  };
+
+  const handleIdle = (title: string) => {
+    if (notifiedForIdleRef.current) return;
+    if (!wasBusyRef.current) return;
+    if (shouldNotify()) {
+      notifyIdle(title);
+    }
+    notifiedForIdleRef.current = true;
+    wasBusyRef.current = false;
+  };
 
   const markBusy = () => {
+    wasBusyRef.current = true;
+    resetIdleState();
     useTerminalStore
       .getState()
       .setSessionActivity(sessionId, { isBusy: true, needsInput: false });
@@ -104,12 +158,29 @@ export default function TerminalView({
     xtermRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
+    console.log(`[TerminalView] registering ptyId=${ptyId} sessionId=${sessionId}`);
     registerTerminal(ptyId, {
       onOutput: (data) => {
         terminal.write(data);
         markBusy();
       },
-      onExit: () => useTerminalStore.getState().removeSession(sessionId).catch(() => {}),
+      onExit: () => {
+        const { sessions } = useTerminalStore.getState();
+        const session = sessions.find((s) => s.id === sessionId);
+        console.log(
+          `[TerminalView.onExit] sessionId=${sessionId} isVisible=${isVisibleRef.current} title=${session?.title}`,
+        );
+        if (session && shouldNotify()) {
+          notify({
+            title: "Terminal finished",
+            body: ` "${session.title}" has finished.`,
+          });
+        }
+        useTerminalStore.getState().removeSession(sessionId).catch(() => {});
+      },
+    });
+    registerTerminalIdle(ptyId, (title) => {
+      handleIdle(title);
     });
 
     const handleInput = (data: string) => {
@@ -141,17 +212,17 @@ export default function TerminalView({
   }, [sessionId, ptyId]);
 
   useEffect(() => {
-    if (!isActive) return;
+    if (!isVisible) return;
     const id = requestAnimationFrame(() => fitAndResize(true));
     return () => {
       if (id) cancelAnimationFrame(id);
     };
-  }, [isActive]);
+  }, [isVisible]);
 
   return (
     <div
       ref={containerRef}
-      className={`absolute inset-0 h-full w-full ${isActive ? "" : "hidden"}`}
+      className={`absolute inset-0 h-full w-full ${isVisible ? "" : "hidden"}`}
     />
   );
 }

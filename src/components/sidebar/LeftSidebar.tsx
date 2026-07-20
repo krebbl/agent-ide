@@ -153,18 +153,19 @@ function WorktreeItem({
 }) {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const activity = useTerminalStore((s) =>
-    s.sessions.reduce<"idle" | "busy" | "input">((state, session) => {
+  const activity = useTerminalStore((s) => {
+    const activeSessionId = s.activeSessionId;
+    return s.sessions.reduce<"idle" | "busy" | "input">((state, session) => {
       if (
         session.projectId === projectId &&
         session.worktreeId === worktree.id
       ) {
-        if (session.isBusy) return "busy";
+        if (session.isBusy && session.id !== activeSessionId) return "busy";
         if (session.needsInput && state !== "busy") return "input";
       }
       return state;
-    }, "idle"),
-  );
+    }, "idle");
+  });
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();

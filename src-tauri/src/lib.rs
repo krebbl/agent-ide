@@ -1,3 +1,5 @@
+mod agents;
+mod notification;
 mod pty;
 
 use git2::{BranchType, Repository};
@@ -530,6 +532,17 @@ async fn fs_exists(
     Ok(provider.exists(&path).await)
 }
 
+#[tauri::command]
+fn check_agent_ready(id: String) -> Result<agents::AgentStatus, String> {
+    agents::check_agent_ready(&id)
+        .ok_or_else(|| format!("Unknown agent: {}", id))
+}
+
+#[tauri::command]
+fn check_agents_ready() -> Result<Vec<agents::AgentStatus>, String> {
+    Ok(agents::check_all_agents_ready())
+}
+
 pub struct ClientHandler;
 
 impl client::Handler for ClientHandler {
@@ -579,9 +592,66 @@ pub struct SshConnection {
 pub struct AppState {
     pub ssh_connections: Mutex<HashMap<String, SshConnection>>,
     pub app_handle: StdMutex<Option<tauri::AppHandle>>,
+    pub active_pty_id: StdMutex<Option<String>>,
+    pub pty_titles: StdMutex<HashMap<String, String>>,
+    pub pty_last_output: StdMutex<HashMap<String, std::time::Instant>>,
 }
 
 impl AppState {
+    pub fn set_active_pty(&self, pty_id: Option<String>) {
+        let mut active = self.active_pty_id.lock().unwrap();
+        *active = pty_id.clone();
+        tracing::debug!(active_pty_id = ?pty_id, "set active pty");
+    }
+
+    pub fn set_pty_title(&self, pty_id: &str, title: &str) {
+        self.pty_titles
+            .lock()
+            .unwrap()
+            .insert(pty_id.to_string(), title.to_string());
+    }
+
+    pub fn record_pty_output(&self, pty_id: &str) {
+        self.pty_last_output
+            .lock()
+            .unwrap()
+            .insert(pty_id.to_string(), std::time::Instant::now());
+    }
+
+    pub fn clear_pty_state(&self, pty_id: &str) {
+        self.pty_titles.lock().unwrap().remove(pty_id);
+        self.pty_last_output.lock().unwrap().remove(pty_id);
+    }
+
+    pub fn check_idle_sessions(&self, idle_threshold: std::time::Duration) {
+        let last_outputs = self.pty_last_output.lock().unwrap();
+        let now = std::time::Instant::now();
+        for (pty_id, last) in last_outputs.iter() {
+            if now.duration_since(*last) >= idle_threshold {
+                self.emit_idle(pty_id);
+            }
+        }
+    }
+
+    pub fn emit_idle(&self, pty_id: &str) {
+        let title = self
+            .pty_titles
+            .lock()
+            .unwrap()
+            .get(pty_id)
+            .cloned()
+            .unwrap_or_else(|| "Terminal".to_string());
+        if let Some(handle) = self.app_handle.lock().unwrap().as_ref() {
+            let _ = handle.emit(
+                "pty_idle",
+                pty::PtyIdleEvent {
+                    session_id: pty_id.to_string(),
+                    title,
+                },
+            );
+        }
+    }
+
     pub fn emit_status(&self, project_id: &str, status: ConnectionStatus, error: Option<String>) {
         if let Some(handle) = self.app_handle.lock().unwrap().as_ref() {
             let _ = handle.emit("ssh_connection_status", ConnectionStatusEvent {
@@ -2238,6 +2308,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let state: tauri::State<Arc<AppState>> = app.state();
             *state.app_handle.lock().unwrap() = Some(app.handle().clone());
@@ -2245,6 +2316,16 @@ pub fn run() {
             let state_clone = state.inner().clone();
             tauri::async_runtime::spawn(async move {
                 start_health_check(state_clone).await;
+            });
+
+            let idle_state = state.inner().clone();
+            tauri::async_runtime::spawn(async move {
+                let idle_threshold = std::time::Duration::from_secs(2);
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+                loop {
+                    interval.tick().await;
+                    idle_state.check_idle_sessions(idle_threshold);
+                }
             });
 
             let pty_manager = Arc::new(pty::PtyManager::new(
@@ -2258,6 +2339,9 @@ pub fn run() {
         .manage(Arc::new(AppState {
             ssh_connections: Mutex::new(HashMap::new()),
             app_handle: StdMutex::new(None),
+            active_pty_id: StdMutex::new(None),
+            pty_titles: StdMutex::new(HashMap::new()),
+            pty_last_output: StdMutex::new(HashMap::new()),
         }))
         .invoke_handler(tauri::generate_handler![
             save_projects,
@@ -2279,10 +2363,12 @@ pub fn run() {
             ssh_store_password,
             ssh_get_password,
             ssh_delete_password,
+            notification::notification_show,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
+            pty::pty_set_active,
             fs_read_dir,
             fs_read_file,
             fs_write_file,
@@ -2291,6 +2377,8 @@ pub fn run() {
             fs_rm,
             fs_mv,
             fs_exists,
+            check_agent_ready,
+            check_agents_ready,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

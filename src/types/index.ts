@@ -51,3 +51,27 @@ export interface EditorTab {
   isDirty: boolean;
   language: string;
 }
+
+export type AgentId =
+  | "claude"
+  | "amp"
+  | "codex"
+  | "gemini"
+  | "mastracode"
+  | "opencode"
+  | "pi"
+  | "copilot"
+  | "cursor-agent";
+
+export type PromptTransport = "argv" | "stdin";
+
+export interface AgentStatus {
+  id: AgentId;
+  label: string;
+  description: string;
+  command: string[];
+  promptTransport: PromptTransport;
+  enabled: boolean;
+  installed: boolean;
+  binaryPath: string | null;
+}

@@ -1,4 +1,3 @@
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use russh::{client::Msg, Channel, ChannelMsg};
 use serde::Serialize;
@@ -10,6 +9,7 @@ use std::time::Duration;
 use tauri::Emitter;
 use tokio::sync::{mpsc, oneshot};
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use crate::AppState;
 
 #[derive(Debug, Clone, Serialize)]
@@ -24,6 +24,13 @@ pub struct PtyOutputEvent {
 pub struct PtyExitEvent {
     pub session_id: String,
     pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyIdleEvent {
+    pub session_id: String,
+    pub title: String,
 }
 
 enum PtySession {
@@ -60,6 +67,10 @@ impl PtyManager {
         }
     }
 
+    pub fn set_active_pty(&self, pty_id: Option<String>) {
+        self.app_state.set_active_pty(pty_id);
+    }
+
     pub async fn spawn(
         &self,
         cwd: Option<String>,
@@ -92,9 +103,11 @@ impl PtyManager {
 
         let shell = default_shell();
         let mut cmd = CommandBuilder::new(&shell);
-        if let Some(cwd) = cwd {
+        if let Some(ref cwd) = cwd {
             cmd.cwd(cwd);
         }
+
+        let session_id = uuid::Uuid::new_v4().to_string();
 
         let child = pair
             .slave
@@ -111,10 +124,9 @@ impl PtyManager {
             .map_err(|e| format!("Failed to take PTY writer: {}", e))?;
         let master = pair.master;
 
-        let session_id = uuid::Uuid::new_v4().to_string();
-
         let reader_session_id = session_id.clone();
-        let reader_app = self.app_handle.clone();
+        let reader_app_state = self.app_state.clone();
+        let reader_app_handle = self.app_handle.clone();
         let reader_handle = thread::spawn(move || {
             let mut reader = master_reader;
             let mut buffer = [0u8; 4096];
@@ -122,8 +134,12 @@ impl PtyManager {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(n) => {
+                        reader_app_state.record_pty_output(&reader_session_id);
+                        if contains_osc133_command_end(&buffer[..n]) {
+                            reader_app_state.emit_idle(&reader_session_id);
+                        }
                         let data = STANDARD.encode(&buffer[..n]);
-                        let _ = reader_app.emit(
+                        let _ = reader_app_handle.emit(
                             "pty_output",
                             PtyOutputEvent {
                                 session_id: reader_session_id.clone(),
@@ -136,15 +152,42 @@ impl PtyManager {
             }
         });
 
+        let master_fd = master.as_raw_fd();
+        let child_pid = child.process_id().map(|pid| pid as libc::pid_t);
+        let shell_pgid = master
+            .process_group_leader()
+            .map(|pid| pid as libc::pid_t)
+            .or_else(|| {
+                child_pid.and_then(|pid| {
+                    let pgid = unsafe { libc::getpgid(pid) };
+                    if pgid < 0 { None } else { Some(pgid) }
+                })
+            });
+        tracing::info!(
+            session_id = %session_id,
+            master_fd = ?master_fd,
+            child_pid = ?child_pid,
+            shell_pgid = ?shell_pgid,
+            "local pty process group info"
+        );
+
         let child_arc = Arc::new(Mutex::new(child));
         let monitor_session_id = session_id.clone();
         let monitor_app = self.app_handle.clone();
+        let monitor_app_state = self.app_state.clone();
         let monitor_child = child_arc.clone();
         let monitor_handle = thread::spawn(move || {
+            tracing::info!(session_id = monitor_session_id, "local pty monitor started");
             let mut child = monitor_child.lock().unwrap();
+            let mut command_running = false;
             loop {
                 match child.try_wait() {
                     Ok(Some(status)) => {
+                        tracing::info!(
+                            session_id = monitor_session_id,
+                            exit_code = status.exit_code(),
+                            "emitting pty_exit"
+                        );
                         let _ = monitor_app.emit(
                             "pty_exit",
                             PtyExitEvent {
@@ -154,13 +197,49 @@ impl PtyManager {
                         );
                         break;
                     }
-                    Ok(None) => {}
-                    Err(_) => break,
+                    Ok(None) => {
+                        tracing::trace!(session_id = monitor_session_id, "pty try_wait: still running");
+                    }
+                    Err(e) => {
+                        tracing::error!(session_id = monitor_session_id, error = %e, "pty try_wait failed");
+                        break;
+                    }
                 }
+
+                #[cfg(unix)]
+                if let (Some(fd), Some(pgid)) = (master_fd, shell_pgid) {
+                    let fg_pgid = unsafe { libc::tcgetpgrp(fd) };
+                    if fg_pgid < 0 {
+                        let err = std::io::Error::last_os_error();
+                        tracing::error!(session_id = monitor_session_id, error = %err, "tcgetpgrp failed");
+                    } else if fg_pgid != pgid && !command_running {
+                        command_running = true;
+                        tracing::info!(
+                            session_id = monitor_session_id,
+                            fg_pgid,
+                            shell_pgid = pgid,
+                            "foreground command started"
+                        );
+                    } else if fg_pgid == pgid && command_running {
+                        command_running = false;
+                        tracing::info!(session_id = monitor_session_id, "foreground command finished");
+                        monitor_app_state.emit_idle(&monitor_session_id);
+                    } else {
+                        tracing::trace!(
+                            session_id = monitor_session_id,
+                            fg_pgid,
+                            shell_pgid = pgid,
+                            command_running,
+                            "tcgetpgrp status"
+                        );
+                    }
+                }
+
                 drop(child);
                 thread::sleep(Duration::from_millis(100));
                 child = monitor_child.lock().unwrap();
             }
+            tracing::info!(session_id = monitor_session_id, "local pty monitor ended");
         });
 
         let session = PtySession::Local(LocalPtySession {
@@ -172,6 +251,9 @@ impl PtyManager {
         });
 
         self.sessions.lock().unwrap().insert(session_id.clone(), session);
+        self.app_state
+            .set_pty_title(&session_id, &basename(cwd.as_deref().unwrap_or("~")));
+        self.app_state.active_pty_id.lock().unwrap().get_or_insert(session_id.clone());
         Ok(session_id)
     }
 
@@ -204,17 +286,21 @@ impl PtyManager {
             shutdown_tx: Some(shutdown_tx),
         });
         self.sessions.lock().unwrap().insert(session_id.clone(), session);
+        self.app_state
+            .set_pty_title(&session_id, &basename(cwd.as_deref().unwrap_or("~")));
 
         let app_handle = self.app_handle.clone();
+        let app_state_for_task = self.app_state.clone();
         let session_id_for_task = session_id.clone();
         tauri::async_runtime::spawn(async move {
             run_remote_terminal(
-                session_id_for_task,
+                session_id_for_task.clone(),
                 cwd,
                 cols,
                 rows,
                 channel,
                 app_handle,
+                app_state_for_task,
                 input_rx,
                 resize_rx,
                 shutdown_rx,
@@ -293,12 +379,14 @@ impl PtyManager {
     }
 
     pub async fn kill(&self, session_id: &str) -> Result<(), String> {
+        tracing::info!(session_id, "pty_kill called");
         let session = self
             .sessions
             .lock()
             .unwrap()
             .remove(session_id)
             .ok_or_else(|| format!("PTY session {} not found", session_id))?;
+        self.app_state.clear_pty_state(session_id);
 
         match session {
             PtySession::Local(local) => {
@@ -368,6 +456,7 @@ async fn run_remote_terminal(
     rows: u16,
     mut channel: Channel<Msg>,
     app_handle: tauri::AppHandle,
+    app_state: Arc<AppState>,
     mut input_rx: mpsc::Receiver<String>,
     mut resize_rx: mpsc::Receiver<PtySize>,
     mut shutdown_rx: oneshot::Receiver<()>,
@@ -404,8 +493,8 @@ async fn run_remote_terminal(
     }
 
     if setup_ok {
-        if let Some(cwd) = cwd {
-            let cmd = format!("cd {}\n", shell_escape(&cwd));
+        if let Some(ref cwd) = cwd {
+            let cmd = format!("cd {}\n", shell_escape(cwd));
             let _ = channel.data(Cursor::new(cmd.into_bytes())).await;
         }
 
@@ -416,6 +505,10 @@ async fn run_remote_terminal(
                 msg = channel.wait() => {
                     match msg {
                         Some(ChannelMsg::Data { data }) => {
+                            app_state.record_pty_output(&session_id);
+                            if contains_osc133_command_end(data.as_ref()) {
+                                app_state.emit_idle(&session_id);
+                            }
                             let encoded = STANDARD.encode(data.as_ref());
                             let _ = app_handle.emit(
                                 "pty_output",
@@ -452,6 +545,11 @@ async fn run_remote_terminal(
             }
         }
 
+        tracing::info!(
+            session_id = session_id,
+            ?exit_code,
+            "emitting remote pty_exit"
+        );
         let _ = app_handle.emit(
             "pty_exit",
             PtyExitEvent {
@@ -460,6 +558,29 @@ async fn run_remote_terminal(
             },
         );
     }
+}
+
+pub fn contains_osc133_command_end(data: &[u8]) -> bool {
+    // Look for OSC 133 ; D followed by BEL (\x07) or ST (ESC \
+    static MARKER: &[u8] = b"\x1b]133;D";
+    let mut start = 0;
+    while let Some(pos) = data[start..].windows(MARKER.len()).position(|w| w == MARKER) {
+        let idx = start + pos + MARKER.len();
+        for &b in &data[idx..] {
+            if b == 0x07 || b == 0x9c {
+                return true;
+            }
+            if b == 0x1b {
+                // check for ESC \
+                if data.get(idx + 1) == Some(&b'\\') {
+                    return true;
+                }
+                break;
+            }
+        }
+        start = idx;
+    }
+    false
 }
 
 fn shell_escape(s: &str) -> String {
@@ -505,6 +626,19 @@ pub async fn pty_kill(
     pty_manager: tauri::State<'_, Arc<PtyManager>>,
 ) -> Result<(), String> {
     pty_manager.kill(&session_id).await
+}
+
+#[tauri::command]
+pub fn pty_set_active(
+    pty_id: Option<String>,
+    pty_manager: tauri::State<'_, Arc<PtyManager>>,
+) -> Result<(), String> {
+    pty_manager.set_active_pty(pty_id);
+    Ok(())
+}
+
+fn basename(path: &str) -> String {
+    path.split('/').filter(|s| !s.is_empty()).last().map(|s| s.to_string()).unwrap_or_else(|| path.to_string())
 }
 
 fn default_shell() -> String {
