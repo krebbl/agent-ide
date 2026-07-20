@@ -98,6 +98,9 @@ export default function TerminalView({
   };
 
   const handleBusy = () => {
+    console.log(
+      `[TerminalView.handleBusy] session ${sessionId} isBusy=true`,
+    );
     wasBusyRef.current = true;
     resetIdleState();
     if (busyTimeoutRef.current) {
@@ -108,6 +111,9 @@ export default function TerminalView({
   };
 
   const markBusy = () => {
+    console.log(
+      `[TerminalView.markBusy] session ${sessionId} busy`,
+    );
     handleBusy();
     busyTimeoutRef.current = setTimeout(() => {
       const session = useTerminalStore
@@ -212,6 +218,9 @@ export default function TerminalView({
     const handleInput = (data: string) => {
       invoke("pty_write", { sessionId: ptyId, data }).catch(() => {});
       if (data === "\r" || data.includes("\n")) {
+        console.log(
+          `[TerminalView] Enter pressed for session ${sessionId} (ptyId=${ptyId}), marking busy`,
+        );
         markBusy();
       }
     };

@@ -161,7 +161,11 @@ function WorktreeItem({
         session.projectId === projectId &&
         session.worktreeId === worktree.id
       ) {
-        if (session.isBusy && (session.id !== activeSessionId || isCollapsed)) return "busy";
+        const wouldBeBusy = session.isBusy && (session.id !== activeSessionId || isCollapsed);
+        console.log(
+          `[LeftSidebar] worktree ${worktree.id} session ${session.id} isBusy=${session.isBusy} active=${session.id === activeSessionId} collapsed=${isCollapsed} busy=${wouldBeBusy}`,
+        );
+        if (wouldBeBusy) return "busy";
         if (session.needsInput && state !== "busy") return "input";
       }
       return state;
