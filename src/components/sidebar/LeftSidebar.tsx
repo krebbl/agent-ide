@@ -154,18 +154,15 @@ function WorktreeItem({
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const activity = useTerminalStore((s) => {
-    const activeSessionId = s.activeSessionId;
-    const isCollapsed = s.isCollapsed;
     return s.sessions.reduce<"idle" | "busy" | "input">((state, session) => {
       if (
         session.projectId === projectId &&
         session.worktreeId === worktree.id
       ) {
-        const wouldBeBusy = session.isBusy && (session.id !== activeSessionId || isCollapsed);
         console.log(
-          `[LeftSidebar] worktree ${worktree.id} session ${session.id} isBusy=${session.isBusy} active=${session.id === activeSessionId} collapsed=${isCollapsed} busy=${wouldBeBusy}`,
+          `[LeftSidebar] worktree ${worktree.id} session ${session.id} isBusy=${session.isBusy}`,
         );
-        if (wouldBeBusy) return "busy";
+        if (session.isBusy) return "busy";
         if (session.needsInput && state !== "busy") return "input";
       }
       return state;
