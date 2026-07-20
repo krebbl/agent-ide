@@ -571,37 +571,109 @@ pub fn contains_osc133_command_end(state: &mut Vec<u8>, data: &[u8]) -> bool {
     buffer.extend_from_slice(data);
 
     let mut found = false;
+    let mut carry_start: Option<usize> = None;
     let mut start = 0;
-    while let Some(pos) = buffer[start..].windows(MARKER.len()).position(|w| w == MARKER) {
-        let idx = start + pos + MARKER.len();
-        let mut terminated = false;
-        for &b in &buffer[idx..] {
-            if b == 0x07 || b == 0x9c {
-                found = true;
-                terminated = true;
-                break;
-            }
-            if b == 0x1b {
-                // check for ESC \
-                if buffer.get(idx + 1) == Some(&b'\\') {
+    while start + MARKER.len() <= buffer.len() {
+        if let Some(pos) = buffer[start..].windows(MARKER.len()).position(|w| w == MARKER) {
+            let marker_start = start + pos;
+            let idx = marker_start + MARKER.len();
+
+            let mut terminated = false;
+            if let Some(&b) = buffer.get(idx) {
+                if b == 0x07 || b == 0x9c {
                     found = true;
+                    terminated = true;
+                } else if b == 0x1b {
+                    match buffer.get(idx + 1) {
+                        Some(&b'\\') => {
+                            found = true;
+                            terminated = true;
+                        }
+                        Some(_) => terminated = true, // non-ST escape, skip this marker
+                        None => terminated = false,   // ST may continue in next chunk
+                    }
                 }
-                terminated = true;
+            }
+
+            if terminated {
+                start = idx;
+            } else {
+                carry_start = Some(marker_start);
                 break;
             }
-        }
-        if terminated {
-            start = idx;
         } else {
-            // Marker may be split across chunks; keep scanning from here
             break;
         }
     }
 
-    let keep = buffer.len().min(MARKER.len() - 1);
     state.clear();
-    state.extend_from_slice(&buffer[buffer.len().saturating_sub(keep)..]);
+    if let Some(from) = carry_start {
+        state.extend_from_slice(&buffer[from..]);
+    } else {
+        let keep = buffer.len().min(MARKER.len() - 1);
+        state.extend_from_slice(&buffer[buffer.len().saturating_sub(keep)..]);
+    }
     found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scan_once(data: &[u8]) -> bool {
+        let mut state = Vec::new();
+        contains_osc133_command_end(&mut state, data)
+    }
+
+    fn scan_split(parts: &[&[u8]]) -> (bool, Vec<u8>) {
+        let mut state = Vec::new();
+        let mut found = false;
+        for part in parts {
+            if contains_osc133_command_end(&mut state, part) {
+                found = true;
+            }
+        }
+        (found, state)
+    }
+
+    #[test]
+    fn detects_bel_terminator() {
+        assert!(scan_once(b"\x1b]133;D\x07"));
+    }
+
+    #[test]
+    fn detects_st_terminator() {
+        assert!(scan_once(b"\x1b]133;D\x1b\\"));
+    }
+
+    #[test]
+    fn no_marker() {
+        assert!(!scan_once(b"hello world"));
+    }
+
+    #[test]
+    fn split_marker_parts() {
+        let (found, _) = scan_split(&[b"foo \x1b]133;", b"D\x07 bar"]);
+        assert!(found);
+    }
+
+    #[test]
+    fn split_after_marker_before_bel() {
+        let (found, _) = scan_split(&[b"foo \x1b]133;D", b"\x07 bar"]);
+        assert!(found);
+    }
+
+    #[test]
+    fn split_after_marker_before_st() {
+        let (found, _) = scan_split(&[b"foo \x1b]133;D", b"\x1b\\ bar"]);
+        assert!(found);
+    }
+
+    #[test]
+    fn split_between_st_bytes() {
+        let (found, _) = scan_split(&[b"foo \x1b]133;D\x1b", b"\\ bar"]);
+        assert!(found);
+    }
 }
 
 fn shell_escape(s: &str) -> String {
