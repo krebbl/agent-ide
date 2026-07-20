@@ -2312,6 +2312,7 @@ pub fn run() {
         .setup(|app| {
             let state: tauri::State<Arc<AppState>> = app.state();
             *state.app_handle.lock().unwrap() = Some(app.handle().clone());
+            crate::notification::set_app_handle(app.handle().clone());
 
             let state_clone = state.inner().clone();
             tauri::async_runtime::spawn(async move {

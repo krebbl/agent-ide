@@ -1,6 +1,9 @@
 #import "notification.h"
 #import <Foundation/Foundation.h>
 
+// Implemented in Rust; called when the user clicks the notification.
+extern void agent_ide_notification_clicked(const char *session_id);
+
 static BOOL is_running_in_bundle(void) {
     NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
     return [bundlePath hasSuffix:@".app"];
@@ -8,7 +11,7 @@ static BOOL is_running_in_bundle(void) {
 
 static void setup_ns_user_notification_delegate(void);
 
-void show_notification(const char *title, const char *body) {
+void show_notification(const char *title, const char *body, const char *session_id) {
     if (!is_running_in_bundle()) {
         NSString *titleNs = [NSString stringWithUTF8String:title];
         NSString *bodyNs = [NSString stringWithUTF8String:body];
@@ -17,14 +20,18 @@ void show_notification(const char *title, const char *body) {
     }
     NSString *titleNs = [NSString stringWithUTF8String:title];
     NSString *bodyNs = [NSString stringWithUTF8String:body];
+    NSString *sessionIdNs = session_id ? [NSString stringWithUTF8String:session_id] : nil;
     dispatch_async(dispatch_get_main_queue(), ^{
         setup_ns_user_notification_delegate();
         NSUserNotification *notification = [[NSUserNotification alloc] init];
         notification.title = titleNs;
         notification.informativeText = bodyNs;
         notification.soundName = NSUserNotificationDefaultSoundName;
+        if (sessionIdNs) {
+            notification.identifier = sessionIdNs;
+        }
         [[NSUserNotificationCenter defaultUserNotificationCenter] deliverNotification:notification];
-        NSLog(@"Delivered native notification: %@ - %@", titleNs, bodyNs);
+        NSLog(@"Delivered native notification: %@ - %@ (%@)", titleNs, bodyNs, sessionIdNs ?: @"");
     });
 }
 
@@ -44,6 +51,9 @@ void show_notification(const char *title, const char *body) {
 
 - (void)userNotificationCenter:(NSUserNotificationCenter *)center didActivateNotification:(NSUserNotification *)notification {
     NSLog(@"didActivateNotification called");
+    if (notification.identifier) {
+        agent_ide_notification_clicked([notification.identifier UTF8String]);
+    }
 }
 
 @end

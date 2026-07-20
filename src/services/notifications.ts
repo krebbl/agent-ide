@@ -1,10 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useDevNotificationStore } from "../stores/devNotificationStore";
+import { useTerminalStore } from "../stores/terminalStore";
 
 export interface NotifyOptions {
   title: string;
   body: string;
   sessionId?: string;
+}
+
+export function initNotificationClickListener() {
+  listen<{ sessionId: string }>("notification_clicked", (event) => {
+    useTerminalStore.getState().focusSession(event.payload.sessionId);
+  }).catch(() => {});
 }
 
 let audioContext: AudioContext | null = null;
@@ -47,6 +55,7 @@ export function notify(options: NotifyOptions) {
   invoke("notification_show", {
     title: options.title,
     body: options.body,
+    sessionId: options.sessionId ?? null,
   }).catch((e) => {
     console.error("Failed to send notification:", e);
   });

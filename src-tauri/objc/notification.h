@@ -6,7 +6,7 @@ extern "C" {
 #endif
 
 void request_notification_permission(void);
-void show_notification(const char *title, const char *body);
+void show_notification(const char *title, const char *body, const char *session_id);
 
 #ifdef __cplusplus
 }
