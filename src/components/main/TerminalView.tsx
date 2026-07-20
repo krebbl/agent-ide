@@ -59,11 +59,17 @@ export default function TerminalView({
     !isVisibleRef.current || !isWindowFocusedRef.current;
 
   const notifyIdle = (title: string) => {
-    notify({
-      title: "Terminal ready",
-      body: ` "${title}" has finished.`,
-      sessionId,
-    });
+    if (notifiedForIdleRef.current) return;
+    if (!wasBusyRef.current) return;
+    if (shouldNotify()) {
+      notify({
+        title: "Terminal ready",
+        body: ` "${title}" has finished.`,
+        sessionId,
+      });
+    }
+    notifiedForIdleRef.current = true;
+    wasBusyRef.current = false;
   };
 
   const resetIdleState = () => {
@@ -71,13 +77,7 @@ export default function TerminalView({
   };
 
   const handleIdle = (title: string) => {
-    if (notifiedForIdleRef.current) return;
-    if (!wasBusyRef.current) return;
-    if (shouldNotify()) {
-      notifyIdle(title);
-    }
-    notifiedForIdleRef.current = true;
-    wasBusyRef.current = false;
+    notifyIdle(title);
   };
 
   const markBusy = () => {
@@ -90,6 +90,10 @@ export default function TerminalView({
       clearTimeout(busyTimeoutRef.current);
     }
     busyTimeoutRef.current = setTimeout(() => {
+      const session = useTerminalStore
+        .getState()
+        .sessions.find((s) => s.id === sessionId);
+      notifyIdle(session?.title ?? "Terminal");
       useTerminalStore
         .getState()
         .setSessionActivity(sessionId, { isBusy: false, needsInput: true });
