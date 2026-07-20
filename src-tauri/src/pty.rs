@@ -521,6 +521,16 @@ async fn run_remote_terminal(
                                 },
                             );
                         }
+                        Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+                            let encoded = STANDARD.encode(data.as_ref());
+                            let _ = app_handle.emit(
+                                "pty_output",
+                                PtyOutputEvent {
+                                    session_id: session_id.clone(),
+                                    data: encoded,
+                                },
+                            );
+                        }
                         Some(ChannelMsg::ExitStatus { exit_status }) => {
                             exit_code = Some(exit_status as i32);
                             break;
