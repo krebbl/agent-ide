@@ -184,15 +184,44 @@ pub struct SftpFileSystem {
 }
 
 impl SftpFileSystem {
+    async fn ensure_connection(&self) -> Result<Arc<SftpSession>, String> {
+        let maybe_stale = {
+            let connections = self.state.ssh_connections.lock().await;
+            if let Some(conn) = connections.get(&self.project_id) {
+                if conn.status != ConnectionStatus::Connected {
+                    return Err("SSH connection is not connected".to_string());
+                }
+                if let Some(sftp) = &conn.sftp {
+                    match tokio::time::timeout(Duration::from_secs(3), sftp.read_dir("/")).await {
+                        Ok(Ok(_)) => return Ok(Arc::clone(sftp)),
+                        _ => true,
+                    }
+                } else {
+                    return Err("SFTP is not available for this connection".to_string());
+                }
+            } else {
+                return Err("No SSH connection found for this project".to_string());
+            }
+        };
+
+        if maybe_stale {
+            check_and_reconnect(&self.project_id, &self.state).await;
+            let connections = self.state.ssh_connections.lock().await;
+            if let Some(conn) = connections.get(&self.project_id) {
+                if conn.status == ConnectionStatus::Connected {
+                    if let Some(sftp) = &conn.sftp {
+                        return Ok(Arc::clone(sftp));
+                    }
+                }
+            }
+            return Err("SSH reconnection failed".to_string());
+        }
+
+        Err("No SSH connection found for this project".to_string())
+    }
+
     async fn get_sftp(&self) -> Result<Arc<SftpSession>, String> {
-        let connections = self.state.ssh_connections.lock().await;
-        let conn = connections
-            .get(&self.project_id)
-            .ok_or("No SSH connection found for this project")?;
-        conn.sftp
-            .as_ref()
-            .ok_or("SFTP is not available for this connection".to_string())
-            .map(Arc::clone)
+        self.ensure_connection().await
     }
 
     async fn resolve_path(&self, path: &str) -> Result<String, String> {
