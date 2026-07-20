@@ -633,6 +633,25 @@ impl AppState {
         }
     }
 
+    pub fn emit_busy(&self, pty_id: &str) {
+        let title = self
+            .pty_titles
+            .lock()
+            .unwrap()
+            .get(pty_id)
+            .cloned()
+            .unwrap_or_else(|| "Terminal".to_string());
+        if let Some(handle) = self.app_handle.lock().unwrap().as_ref() {
+            let _ = handle.emit(
+                "pty_busy",
+                pty::PtyBusyEvent {
+                    session_id: pty_id.to_string(),
+                    title,
+                },
+            );
+        }
+    }
+
     pub fn emit_status(&self, project_id: &str, status: ConnectionStatus, error: Option<String>) {
         if let Some(handle) = self.app_handle.lock().unwrap().as_ref() {
             let _ = handle.emit("ssh_connection_status", ConnectionStatusEvent {

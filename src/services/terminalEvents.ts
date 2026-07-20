@@ -15,9 +15,15 @@ interface PtyIdleEvent {
   title: string;
 }
 
+interface PtyBusyEvent {
+  sessionId: string;
+  title: string;
+}
+
 const outputHandlers = new Map<string, (data: Uint8Array) => void>();
 const exitHandlers = new Map<string, () => void>();
 const idleHandlers = new Map<string, (title: string) => void>();
+const busyHandlers = new Map<string, (title: string) => void>();
 
 function base64ToUint8Array(base64: string): Uint8Array {
   const binary = atob(base64);
@@ -53,6 +59,16 @@ export async function initTerminalEventListeners() {
       console.warn("[terminalEvents] no idle handler for", event.payload.sessionId);
     }
   });
+
+  await listen<PtyBusyEvent>("pty_busy", (event) => {
+    console.log("[terminalEvents] pty_busy received:", event.payload.sessionId);
+    const handler = busyHandlers.get(event.payload.sessionId);
+    if (handler) {
+      handler(event.payload.title);
+    } else {
+      console.warn("[terminalEvents] no busy handler for", event.payload.sessionId);
+    }
+  });
 }
 
 export function registerTerminal(
@@ -70,6 +86,7 @@ export function unregisterTerminal(ptyId: string) {
   outputHandlers.delete(ptyId);
   exitHandlers.delete(ptyId);
   idleHandlers.delete(ptyId);
+  busyHandlers.delete(ptyId);
 }
 
 export function registerTerminalIdle(
@@ -77,4 +94,11 @@ export function registerTerminalIdle(
   handler: (title: string) => void,
 ) {
   idleHandlers.set(ptyId, handler);
+}
+
+export function registerTerminalBusy(
+  ptyId: string,
+  handler: (title: string) => void,
+) {
+  busyHandlers.set(ptyId, handler);
 }

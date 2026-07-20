@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   registerTerminal,
   registerTerminalIdle,
+  registerTerminalBusy,
   unregisterTerminal,
 } from "../../services/terminalEvents";
 import { useTerminalStore } from "../../stores/terminalStore";
@@ -59,7 +60,12 @@ export default function TerminalView({
   const shouldNotify = () =>
     !isVisibleRef.current || !isWindowFocusedRef.current;
 
+  const setActivity = (activity: { isBusy: boolean; needsInput: boolean }) => {
+    useTerminalStore.getState().setSessionActivity(sessionId, activity);
+  };
+
   const notifyIdle = (title: string) => {
+    setActivity({ isBusy: false, needsInput: true });
     if (skipFirstIdleRef.current) {
       skipFirstIdleRef.current = false;
       notifiedForIdleRef.current = true;
@@ -84,26 +90,30 @@ export default function TerminalView({
   };
 
   const handleIdle = (title: string) => {
+    if (busyTimeoutRef.current) {
+      clearTimeout(busyTimeoutRef.current);
+      busyTimeoutRef.current = null;
+    }
     notifyIdle(title);
   };
 
-  const markBusy = () => {
+  const handleBusy = () => {
     wasBusyRef.current = true;
     resetIdleState();
-    useTerminalStore
-      .getState()
-      .setSessionActivity(sessionId, { isBusy: true, needsInput: false });
     if (busyTimeoutRef.current) {
       clearTimeout(busyTimeoutRef.current);
+      busyTimeoutRef.current = null;
     }
+    setActivity({ isBusy: true, needsInput: false });
+  };
+
+  const markBusy = () => {
+    handleBusy();
     busyTimeoutRef.current = setTimeout(() => {
       const session = useTerminalStore
         .getState()
         .sessions.find((s) => s.id === sessionId);
       notifyIdle(session?.title ?? "Terminal");
-      useTerminalStore
-        .getState()
-        .setSessionActivity(sessionId, { isBusy: false, needsInput: true });
     }, 1500);
   };
 
@@ -194,6 +204,9 @@ export default function TerminalView({
     });
     registerTerminalIdle(ptyId, (title) => {
       handleIdle(title);
+    });
+    registerTerminalBusy(ptyId, () => {
+      handleBusy();
     });
 
     const handleInput = (data: string) => {
