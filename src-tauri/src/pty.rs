@@ -130,11 +130,12 @@ impl PtyManager {
         let reader_handle = thread::spawn(move || {
             let mut reader = master_reader;
             let mut buffer = [0u8; 4096];
+            let mut osc_state = Vec::new();
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if contains_osc133_command_end(&buffer[..n]) {
+                        if contains_osc133_command_end(&mut osc_state, &buffer[..n]) {
                             reader_app_state.emit_idle(&reader_session_id);
                         }
                         let data = STANDARD.encode(&buffer[..n]);
@@ -492,19 +493,23 @@ async fn run_remote_terminal(
     }
 
     if setup_ok {
+        let shell_setup = "export PROMPT_COMMAND='printf \"\\033]133;D\\007\"'\n[ -n \"$ZSH_VERSION\" ] && precmd() { printf \"\\033]133;D\\007\"; }\n";
+        let _ = channel.data(Cursor::new(shell_setup.as_bytes())).await;
+
         if let Some(ref cwd) = cwd {
             let cmd = format!("cd {}\n", shell_escape(cwd));
             let _ = channel.data(Cursor::new(cmd.into_bytes())).await;
         }
 
         let mut exit_code: Option<i32> = None;
+        let mut osc_state = Vec::new();
 
         loop {
             tokio::select! {
                 msg = channel.wait() => {
                     match msg {
                         Some(ChannelMsg::Data { data }) => {
-                            if contains_osc133_command_end(data.as_ref()) {
+                            if contains_osc133_command_end(&mut osc_state, data.as_ref()) {
                                 app_state.emit_idle(&session_id);
                             }
                             let encoded = STANDARD.encode(data.as_ref());
@@ -558,27 +563,45 @@ async fn run_remote_terminal(
     }
 }
 
-pub fn contains_osc133_command_end(data: &[u8]) -> bool {
+pub fn contains_osc133_command_end(state: &mut Vec<u8>, data: &[u8]) -> bool {
     // Look for OSC 133 ; D followed by BEL (\x07) or ST (ESC \
-    static MARKER: &[u8] = b"\x1b]133;D";
+    const MARKER: &[u8] = b"\x1b]133;D";
+    let mut buffer = Vec::with_capacity(state.len() + data.len());
+    buffer.extend_from_slice(state);
+    buffer.extend_from_slice(data);
+
+    let mut found = false;
     let mut start = 0;
-    while let Some(pos) = data[start..].windows(MARKER.len()).position(|w| w == MARKER) {
+    while let Some(pos) = buffer[start..].windows(MARKER.len()).position(|w| w == MARKER) {
         let idx = start + pos + MARKER.len();
-        for &b in &data[idx..] {
+        let mut terminated = false;
+        for &b in &buffer[idx..] {
             if b == 0x07 || b == 0x9c {
-                return true;
+                found = true;
+                terminated = true;
+                break;
             }
             if b == 0x1b {
                 // check for ESC \
-                if data.get(idx + 1) == Some(&b'\\') {
-                    return true;
+                if buffer.get(idx + 1) == Some(&b'\\') {
+                    found = true;
                 }
+                terminated = true;
                 break;
             }
         }
-        start = idx;
+        if terminated {
+            start = idx;
+        } else {
+            // Marker may be split across chunks; keep scanning from here
+            break;
+        }
     }
-    false
+
+    let keep = buffer.len().min(MARKER.len() - 1);
+    state.clear();
+    state.extend_from_slice(&buffer[buffer.len().saturating_sub(keep)..]);
+    found
 }
 
 fn shell_escape(s: &str) -> String {
