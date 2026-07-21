@@ -239,7 +239,12 @@ export default function TerminalView({
     });
 
     const handleInput = (data: string) => {
-      const base64 = btoa(data);
+      const bytes = new TextEncoder().encode(data);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binary);
       invoke("pty_write", { sessionId: ptyId, data: base64 }).catch(() => {});
       if (data === "\r" || data.includes("\n")) {
         console.log(
