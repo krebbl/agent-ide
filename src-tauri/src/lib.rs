@@ -2329,10 +2329,14 @@ async fn check_and_reconnect(project_id: &str, state: &Arc<AppState>) {
 }
 
 pub fn run_pty_daemon(daemonize: bool) -> Result<(), String> {
+    let config_dir = pty_client::daemon_config_dir();
+    if let Err(e) = std::fs::create_dir_all(&config_dir) {
+        eprintln!("Failed to create config directory: {}", e);
+    }
     #[cfg(unix)]
     if daemonize {
         let daemonize = daemonize::Daemonize::new()
-            .working_directory(pty_client::daemon_config_dir());
+            .working_directory(config_dir);
         if let Err(e) = daemonize.start() {
             eprintln!("Failed to daemonize: {}", e);
             std::process::exit(1);
