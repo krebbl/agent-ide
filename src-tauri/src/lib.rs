@@ -397,11 +397,11 @@ impl FileSystemProvider for SftpFileSystem {
             .map_err(|e| format!("Failed to stat: {}", e))?;
         if stat.is_dir() {
             if recursive {
+                sftp_remove_recursive(sftp, &resolved).await
+            } else {
                 sftp.remove_dir(&resolved)
                     .await
                     .map_err(|e| format!("Failed to remove directory: {}", e))
-            } else {
-                Err("Cannot remove non-empty directory without recursive flag".to_string())
             }
         } else {
             sftp.remove_file(&resolved)
@@ -431,6 +431,34 @@ impl FileSystemProvider for SftpFileSystem {
         };
         sftp.metadata(&resolved).await.is_ok()
     }
+}
+
+async fn sftp_remove_recursive(sftp: Arc<SftpSession>, path: &str) -> Result<(), String> {
+    let entries = sftp
+        .read_dir(path)
+        .await
+        .map_err(|e| format!("Failed to read directory {}: {}", path, e))?;
+    for entry in entries {
+        let name = entry.file_name();
+        if name == "." || name == ".." {
+            continue;
+        }
+        let child = if path == "/" {
+            format!("/{}", name)
+        } else {
+            format!("{}/{}", path, name)
+        };
+        if entry.metadata().is_dir() {
+            Box::pin(sftp_remove_recursive(Arc::clone(&sftp), &child)).await?;
+        } else {
+            sftp.remove_file(&child)
+                .await
+                .map_err(|e| format!("Failed to remove file {}: {}", child, e))?;
+        }
+    }
+    sftp.remove_dir(path)
+        .await
+        .map_err(|e| format!("Failed to remove directory {}: {}", path, e))
 }
 
 async fn get_fs_provider(project_id: &str, state: &Arc<AppState>) -> Result<Box<dyn FileSystemProvider>, String> {
