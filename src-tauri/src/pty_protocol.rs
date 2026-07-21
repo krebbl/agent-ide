@@ -25,6 +25,22 @@ pub enum DaemonRequest {
         project_id: Option<String>,
         worktree_id: Option<String>,
     },
+    CreateRemote {
+        session_id: String,
+        project_id: String,
+        cwd: Option<String>,
+        cols: u16,
+        rows: u16,
+    },
+    RegisterSshProject {
+        project_id: String,
+        host: String,
+        port: u16,
+        username: String,
+        auth_method: String,
+        key_path: Option<String>,
+        password: Option<String>,
+    },
     Write {
         session_id: String,
         data: String,

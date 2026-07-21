@@ -5,6 +5,7 @@ pub mod pty_client;
 pub mod pty_daemon;
 pub mod pty_engine;
 pub mod pty_protocol;
+pub mod remote_ssh;
 
 use git2::{BranchType, Repository};
 use russh::keys::agent::client::AgentClient;
@@ -2425,6 +2426,7 @@ pub fn run() {
             pty::pty_kill,
             pty::pty_set_active,
             pty::pty_list_sessions,
+            pty::pty_register_ssh_project,
             fs_read_dir,
             fs_read_file,
             fs_write_file,

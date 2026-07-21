@@ -8,6 +8,39 @@ use tracing::{info, trace};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use crate::pty::scan_osc133_command;
 
+pub trait PtyEngine: Send + Sync {
+    fn write(&self, data: &[u8]) -> Result<(), String>;
+    fn resize(&self, cols: u16, rows: u16) -> Result<(), String>;
+    fn kill(&self) -> Result<(), String>;
+}
+
+impl PtyEngine for LocalPtyEngine {
+    fn write(&self, data: &[u8]) -> Result<(), String> {
+        let mut writer = self.writer.lock().unwrap();
+        writer
+            .write_all(data)
+            .and_then(|_| writer.flush())
+            .map_err(|e| format!("Failed to write to PTY: {}", e))
+    }
+
+    fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
+        let master = self.master.lock().unwrap();
+        master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| format!("Failed to resize PTY: {}", e))
+    }
+
+    fn kill(&self) -> Result<(), String> {
+        let mut child = self.child.lock().unwrap();
+        child.kill().map_err(|e| format!("Failed to kill PTY: {}", e))
+    }
+}
+
 pub enum EngineEvent {
     Output(String),
     Idle,
@@ -194,31 +227,6 @@ impl LocalPtyEngine {
             _reader_handle: reader_handle,
             _monitor_handle: monitor_handle,
         })
-    }
-
-    pub fn write(&self, data: &[u8]) -> Result<(), String> {
-        let mut writer = self.writer.lock().unwrap();
-        writer
-            .write_all(data)
-            .and_then(|_| writer.flush())
-            .map_err(|e| format!("Failed to write to PTY: {}", e))
-    }
-
-    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
-        let master = self.master.lock().unwrap();
-        master
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| format!("Failed to resize PTY: {}", e))
-    }
-
-    pub fn kill(&self) -> Result<(), String> {
-        let mut child = self.child.lock().unwrap();
-        child.kill().map_err(|e| format!("Failed to kill PTY: {}", e))
     }
 }
 

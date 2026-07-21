@@ -747,11 +747,12 @@ pub async fn pty_spawn(
 ) -> Result<String, String> {
     let is_remote = session_type.as_deref() == Some("ssh")
         || (project_id.is_some() && session_type.as_deref() != Some("local"));
-    if is_remote {
-        return Err("Remote sessions are not yet supported by the persistent daemon".to_string());
-    }
     let session_id = uuid::Uuid::new_v4().to_string();
-    pty_client.spawn(session_id.clone(), cwd, cols, rows, project_id, worktree_id)?;
+    if is_remote {
+        pty_client.create_remote(session_id.clone(), project_id.unwrap_or_default(), cwd, cols, rows)?;
+    } else {
+        pty_client.spawn(session_id.clone(), cwd, cols, rows, project_id, worktree_id)?;
+    }
     Ok(session_id)
 }
 
@@ -796,6 +797,28 @@ pub fn pty_set_active(
 ) -> Result<(), String> {
     app_state.set_active_pty(pty_id);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn pty_register_ssh_project(
+    project_id: String,
+    host: String,
+    port: u16,
+    username: String,
+    auth_method: String,
+    key_path: Option<String>,
+    password: Option<String>,
+    pty_client: tauri::State<'_, Arc<crate::pty_client::PtyClient>>,
+) -> Result<(), String> {
+    pty_client.register_ssh_project(
+        project_id,
+        host,
+        port,
+        username,
+        auth_method,
+        key_path,
+        password,
+    )
 }
 
 fn basename(path: &str) -> String {

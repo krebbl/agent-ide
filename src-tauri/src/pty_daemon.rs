@@ -4,15 +4,104 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex as TokioMutex};
 use tracing::{error, info, warn};
 
-use crate::pty_engine::{EngineEvent, LocalPtyEngine};
+use crate::pty_engine::{EngineEvent, LocalPtyEngine, PtyEngine};
 use crate::pty_protocol::{DaemonEvent, DaemonRequest, SessionMeta};
+use crate::remote_ssh::{self, RemotePtyEngine, SessionHandle};
 
 struct DaemonSession {
     meta: SessionMeta,
-    engine: Option<LocalPtyEngine>,
+    engine: Option<Box<dyn PtyEngine>>,
+}
+
+struct SshProject {
+    host: String,
+    port: u16,
+    username: String,
+    auth_method: String,
+    key_path: Option<String>,
+    password: Option<String>,
+    session: Option<SessionHandle>,
+}
+
+struct SshManager {
+    projects: Mutex<HashMap<String, SshProject>>,
+}
+
+impl SshManager {
+    fn new() -> Self {
+        Self {
+            projects: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn register(
+        &self,
+        project_id: String,
+        host: String,
+        port: u16,
+        username: String,
+        auth_method: String,
+        key_path: Option<String>,
+        password: Option<String>,
+    ) {
+        let mut projects = self.projects.lock().unwrap();
+        projects.insert(
+            project_id,
+            SshProject {
+                host,
+                port,
+                username,
+                auth_method,
+                key_path,
+                password,
+                session: None,
+            },
+        );
+    }
+
+    async fn ensure_connection(&self, project_id: &str) -> Result<SessionHandle, String> {
+        let project = {
+            let projects = self.projects.lock().unwrap();
+            projects
+                .get(project_id)
+                .ok_or("SSH project not registered")?
+                .clone()
+        };
+
+        let session = remote_ssh::connect_ssh(
+            &project.host,
+            project.port,
+            &project.username,
+            &project.auth_method,
+            project.key_path.as_deref(),
+            project.password.as_deref(),
+        )
+        .await?;
+
+        let session = Arc::new(TokioMutex::new(session));
+        let mut projects = self.projects.lock().unwrap();
+        if let Some(p) = projects.get_mut(project_id) {
+            p.session = Some(session.clone());
+        }
+        Ok(session)
+    }
+}
+
+impl Clone for SshProject {
+    fn clone(&self) -> Self {
+        Self {
+            host: self.host.clone(),
+            port: self.port,
+            username: self.username.clone(),
+            auth_method: self.auth_method.clone(),
+            key_path: self.key_path.clone(),
+            password: self.password.clone(),
+            session: self.session.as_ref().map(Arc::clone),
+        }
+    }
 }
 
 pub struct PtyDaemon {
@@ -22,6 +111,7 @@ pub struct PtyDaemon {
     client_tx: Arc<Mutex<Option<mpsc::UnboundedSender<DaemonEvent>>>>,
     event_tx: mpsc::Sender<(String, EngineEvent)>,
     _event_rx_handle: Option<tokio::task::JoinHandle<()>>,
+    ssh_manager: Arc<SshManager>,
 }
 
 impl PtyDaemon {
@@ -46,6 +136,7 @@ impl PtyDaemon {
             client_tx,
             event_tx,
             _event_rx_handle: Some(event_rx_handle),
+            ssh_manager: Arc::new(SshManager::new()),
         }
     }
 
@@ -56,18 +147,21 @@ impl PtyDaemon {
         info!(socket = %self.socket_path.display(), "pty daemon listening");
 
         self.load_sessions();
+        let daemon = Arc::new(self);
 
         loop {
             match listener.accept().await {
                 Ok((stream, _)) => {
                     info!("pty daemon client connected");
-                    let sessions = Arc::clone(&self.sessions);
-                    let persistence_path = self.persistence_path.clone();
-                    let event_tx = self.event_tx.clone();
-                    let client_tx_cell = Arc::clone(&self.client_tx);
+                    let daemon = Arc::clone(&daemon);
+                    let sessions = Arc::clone(&daemon.sessions);
+                    let persistence_path = daemon.persistence_path.clone();
+                    let event_tx = daemon.event_tx.clone();
+                    let client_tx_cell = Arc::clone(&daemon.client_tx);
 
                     let (client_tx, mut client_rx) = mpsc::unbounded_channel::<DaemonEvent>();
                     *client_tx_cell.lock().unwrap() = Some(client_tx);
+                    let ssh_manager = Arc::clone(&daemon.ssh_manager);
 
                     let (read_half, mut write_half) = stream.into_split();
 
@@ -96,12 +190,13 @@ impl PtyDaemon {
                                     if let Ok(req) =
                                         serde_json::from_str::<DaemonRequest>(line.trim())
                                     {
-                                        Self::handle_request(
+                                        daemon.handle_request(
                                             req,
                                             &sessions,
                                             &persistence_path,
                                             &event_tx,
                                             client_tx_cell.lock().unwrap().as_ref(),
+                                            &ssh_manager,
                                         );
                                     }
                                 }
@@ -195,11 +290,13 @@ impl PtyDaemon {
     }
 
     fn handle_request(
+        &self,
         req: DaemonRequest,
         sessions: &Arc<Mutex<HashMap<String, DaemonSession>>>,
         persistence_path: &PathBuf,
         event_tx: &mpsc::Sender<(String, EngineEvent)>,
         client_tx: Option<&mpsc::UnboundedSender<DaemonEvent>>,
+        ssh_manager: &Arc<SshManager>,
     ) {
         match req {
             DaemonRequest::CreateLocal {
@@ -210,28 +307,10 @@ impl PtyDaemon {
                 project_id,
                 worktree_id,
             } => {
-                let mut map = sessions.lock().unwrap();
-                if map.contains_key(&session_id) {
+                if sessions.lock().unwrap().contains_key(&session_id) {
                     warn!(session_id, "session already exists");
                     return;
                 }
-                drop(map);
-
-                let engine = match LocalPtyEngine::spawn(
-                    session_id.clone(),
-                    cwd.clone(),
-                    cols,
-                    rows,
-                    event_tx.clone(),
-                ) {
-                    Ok(e) => e,
-                    Err(e) => {
-                        if let Some(tx) = client_tx {
-                            let _ = tx.send(DaemonEvent::Error { message: e });
-                        }
-                        return;
-                    }
-                };
 
                 let title = basename(cwd.as_deref().unwrap_or("~"));
                 let meta = SessionMeta {
@@ -246,12 +325,28 @@ impl PtyDaemon {
                     rows,
                 };
 
+                let engine = match LocalPtyEngine::spawn(
+                    session_id.clone(),
+                    meta.cwd.clone(),
+                    cols,
+                    rows,
+                    event_tx.clone(),
+                ) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        if let Some(tx) = client_tx {
+                            let _ = tx.send(DaemonEvent::Error { message: e });
+                        }
+                        return;
+                    }
+                };
+
                 let mut map = sessions.lock().unwrap();
                 map.insert(
                     session_id.clone(),
                     DaemonSession {
                         meta,
-                        engine: Some(engine),
+                        engine: Some(Box::new(engine)),
                     },
                 );
                 drop(map);
@@ -264,6 +359,100 @@ impl PtyDaemon {
                         title,
                     });
                 }
+            }
+            DaemonRequest::CreateRemote {
+                session_id,
+                project_id,
+                cwd,
+                cols,
+                rows,
+            } => {
+                if sessions.lock().unwrap().contains_key(&session_id) {
+                    warn!(session_id, "session already exists");
+                    return;
+                }
+
+                let title = basename(cwd.as_deref().unwrap_or("~"));
+                let meta = SessionMeta {
+                    session_id: session_id.clone(),
+                    session_type: "ssh".to_string(),
+                    worktree_id: None,
+                    project_id: Some(project_id.clone()),
+                    cwd,
+                    title: title.clone(),
+                    is_busy: false,
+                    cols,
+                    rows,
+                };
+
+                let ssh_manager = Arc::clone(ssh_manager);
+                let event_tx = event_tx.clone();
+                let sessions = Arc::clone(sessions);
+                let persistence_path = persistence_path.clone();
+                let client_tx = client_tx.cloned();
+
+                tokio::spawn(async move {
+                    let ssh_session = match ssh_manager.ensure_connection(&project_id).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            if let Some(tx) = client_tx {
+                                let _ = tx.send(DaemonEvent::Error { message: e });
+                            }
+                            return;
+                        }
+                    };
+
+                    let engine = match RemotePtyEngine::spawn(
+                        session_id.clone(),
+                        meta.cwd.clone(),
+                        cols,
+                        rows,
+                        ssh_session,
+                        event_tx.clone(),
+                    )
+                    .await
+                    {
+                        Ok(e) => e,
+                        Err(e) => {
+                            if let Some(tx) = client_tx {
+                                let _ = tx.send(DaemonEvent::Error { message: e });
+                            }
+                            return;
+                        }
+                    };
+
+                    let mut map = sessions.lock().unwrap();
+                    map.insert(
+                        session_id.clone(),
+                        DaemonSession {
+                            meta: meta.clone(),
+                            engine: Some(Box::new(engine)),
+                        },
+                    );
+                    drop(map);
+                    PtyDaemon::persist(&sessions, &persistence_path);
+
+                    if let Some(tx) = client_tx {
+                        let _ = tx.send(DaemonEvent::StateSnapshot {
+                            session_id,
+                            is_busy: false,
+                            title: meta.title,
+                        });
+                    }
+                });
+            }
+            DaemonRequest::RegisterSshProject {
+                project_id,
+                host,
+                port,
+                username,
+                auth_method,
+                key_path,
+                password,
+            } => {
+                let pid = project_id.clone();
+                ssh_manager.register(project_id, host, port, username, auth_method, key_path, password);
+                self.respawn_remote_sessions(&pid);
             }
             DaemonRequest::Write { session_id, data } => {
                 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -284,9 +473,9 @@ impl PtyDaemon {
                     }
                     session.meta.cols = cols;
                     session.meta.rows = rows;
-                    drop(map);
-                    Self::persist(sessions, persistence_path);
                 }
+                drop(map);
+                Self::persist(sessions, persistence_path);
             }
             DaemonRequest::Kill { session_id } => {
                 let mut map = sessions.lock().unwrap();
@@ -332,18 +521,22 @@ impl PtyDaemon {
         let mut map = self.sessions.lock().unwrap();
         for meta in persisted {
             let session_id = meta.session_id.clone();
-            let engine = match self.respawn_engine(&meta) {
-                Ok(e) => Some(e),
-                Err(e) => {
-                    error!(session_id = %session_id, error = %e, "failed to respawn persisted pty session");
-                    None
+            let engine: Option<Box<dyn PtyEngine>> = if meta.session_type == "local" {
+                match self.respawn_local_engine(&meta) {
+                    Ok(e) => Some(Box::new(e)),
+                    Err(e) => {
+                        error!(session_id = %session_id, error = %e, "failed to respawn persisted local pty session");
+                        None
+                    }
                 }
+            } else {
+                None
             };
             map.insert(session_id, DaemonSession { meta, engine });
         }
     }
 
-    fn respawn_engine(&self, meta: &SessionMeta) -> Result<LocalPtyEngine, String> {
+    fn respawn_local_engine(&self, meta: &SessionMeta) -> Result<LocalPtyEngine, String> {
         LocalPtyEngine::spawn(
             meta.session_id.clone(),
             meta.cwd.clone(),
@@ -351,6 +544,77 @@ impl PtyDaemon {
             meta.rows,
             self.event_tx.clone(),
         )
+    }
+
+    fn respawn_remote_sessions(
+        &self,
+        project_id: &str,
+    ) {
+        let sessions = Arc::clone(&self.sessions);
+        let persistence_path = self.persistence_path.clone();
+        let event_tx = self.event_tx.clone();
+        let ssh_manager = Arc::clone(&self.ssh_manager);
+        let project_id = project_id.to_string();
+
+        tokio::spawn(async move {
+            let to_respawn: Vec<SessionMeta> = {
+                let map = sessions.lock().unwrap();
+                map.values()
+                    .filter(|s| {
+                        s.meta.session_type == "ssh"
+                            && s.meta.project_id.as_ref() == Some(&project_id)
+                            && s.engine.is_none()
+                    })
+                    .map(|s| s.meta.clone())
+                    .collect()
+            };
+
+            for meta in to_respawn {
+                let ssh_session = match ssh_manager.ensure_connection(&project_id).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!(session_id = %meta.session_id, error = %e, "failed to reconnect SSH for persisted remote session");
+                        continue;
+                    }
+                };
+
+                let session_id = meta.session_id.clone();
+                let event_tx = event_tx.clone();
+                let persistence_path = persistence_path.clone();
+                let sessions = Arc::clone(&sessions);
+                let engine = match RemotePtyEngine::spawn(
+                    session_id.clone(),
+                    meta.cwd.clone(),
+                    meta.cols,
+                    meta.rows,
+                    ssh_session,
+                    event_tx.clone(),
+                )
+                .await
+                {
+                    Ok(e) => e,
+                    Err(e) => {
+                        error!(session_id = %session_id, error = %e, "failed to respawn remote pty session");
+                        continue;
+                    }
+                };
+
+                let mut map = sessions.lock().unwrap();
+                if let Some(session) = map.get_mut(&session_id) {
+                    session.engine = Some(Box::new(engine));
+                } else {
+                    map.insert(
+                        session_id,
+                        DaemonSession {
+                            meta,
+                            engine: Some(Box::new(engine)),
+                        },
+                    );
+                }
+                drop(map);
+                PtyDaemon::persist(&sessions, &persistence_path);
+            }
+        });
     }
 
     fn persist(

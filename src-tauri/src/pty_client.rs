@@ -137,6 +137,48 @@ impl PtyClient {
             .map_err(|_| "pty daemon disconnected".to_string())
     }
 
+    pub fn create_remote(
+        &self,
+        session_id: String,
+        project_id: String,
+        cwd: Option<String>,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), String> {
+        self.request_tx
+            .send(DaemonRequest::CreateRemote {
+                session_id,
+                project_id,
+                cwd,
+                cols,
+                rows,
+            })
+            .map_err(|_| "pty daemon disconnected".to_string())
+    }
+
+    pub fn register_ssh_project(
+        &self,
+        project_id: String,
+        host: String,
+        port: u16,
+        username: String,
+        auth_method: String,
+        key_path: Option<String>,
+        password: Option<String>,
+    ) -> Result<(), String> {
+        self.request_tx
+            .send(DaemonRequest::RegisterSshProject {
+                project_id,
+                host,
+                port,
+                username,
+                auth_method,
+                key_path,
+                password,
+            })
+            .map_err(|_| "pty daemon disconnected".to_string())
+    }
+
     pub fn write(&self, session_id: String, data: String) -> Result<(), String> {
         self.request_tx
             .send(DaemonRequest::Write { session_id, data })
