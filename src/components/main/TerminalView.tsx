@@ -239,7 +239,8 @@ export default function TerminalView({
     });
 
     const handleInput = (data: string) => {
-      invoke("pty_write", { sessionId: ptyId, data }).catch(() => {});
+      const base64 = btoa(data);
+      invoke("pty_write", { sessionId: ptyId, data: base64 }).catch(() => {});
       if (data === "\r" || data.includes("\n")) {
         console.log(
           `[TerminalView] Enter pressed for session ${sessionId} (ptyId=${ptyId}), starting process`,

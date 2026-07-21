@@ -749,7 +749,7 @@ pub async fn pty_spawn(
         || (project_id.is_some() && session_type.as_deref() != Some("local"));
     let session_id = uuid::Uuid::new_v4().to_string();
     if is_remote {
-        pty_client.create_remote(session_id.clone(), project_id.unwrap_or_default(), cwd, cols, rows)?;
+        pty_client.create_remote(session_id.clone(), project_id.unwrap_or_default(), cwd, cols, rows, worktree_id, false)?;
     } else {
         pty_client.spawn(session_id.clone(), cwd, cols, rows, project_id, worktree_id)?;
     }

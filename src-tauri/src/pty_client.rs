@@ -113,6 +113,7 @@ impl PtyClient {
             DaemonEvent::Error { message } => {
                 warn!("pty daemon error: {}", message);
             }
+            DaemonEvent::Version { .. } => {}
         }
     }
 
@@ -144,6 +145,8 @@ impl PtyClient {
         cwd: Option<String>,
         cols: u16,
         rows: u16,
+        worktree_id: Option<String>,
+        attach: bool,
     ) -> Result<(), String> {
         self.request_tx
             .send(DaemonRequest::CreateRemote {
@@ -152,6 +155,8 @@ impl PtyClient {
                 cwd,
                 cols,
                 rows,
+                worktree_id,
+                attach,
             })
             .map_err(|_| "pty daemon disconnected".to_string())
     }
@@ -220,11 +225,16 @@ impl PtyClient {
     }
 }
 
+const DAEMON_TOKEN: &str = env!("AGENT_IDE_DAEMON_TOKEN");
+
 async fn ensure_daemon_running(socket_path: &PathBuf) -> Result<(), String> {
     if socket_path.exists() {
-        if UnixStream::connect(socket_path).await.is_ok() {
-            return Ok(());
+        if let Ok(is_current) = check_existing_daemon(socket_path).await {
+            if is_current {
+                return Ok(());
+            }
         }
+        kill_existing_daemon(socket_path).await;
         let _ = std::fs::remove_file(socket_path);
     }
     let current_exe = std::env::current_exe()
@@ -244,6 +254,77 @@ async fn ensure_daemon_running(socket_path: &PathBuf) -> Result<(), String> {
         }
     }
     Err("Timed out waiting for pty daemon".to_string())
+}
+
+async fn check_existing_daemon(socket_path: &PathBuf) -> Result<bool, String> {
+    let mut stream = UnixStream::connect(socket_path)
+        .await
+        .map_err(|e| format!("Failed to connect to daemon socket: {}", e))?;
+    let req = DaemonRequest::Version {
+        token: DAEMON_TOKEN.to_string(),
+    };
+    let json = serde_json::to_string(&req).unwrap_or_default();
+    stream
+        .write_all(format!("{}\n", json).as_bytes())
+        .await
+        .map_err(|e| format!("Failed to write version request: {}", e))?;
+    stream
+        .flush()
+        .await
+        .map_err(|e| format!("Failed to flush version request: {}", e))?;
+
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    match tokio::time::timeout(
+        tokio::time::Duration::from_secs(1),
+        reader.read_line(&mut line),
+    )
+    .await
+    {
+        Ok(Ok(_)) => {
+            if let Ok(DaemonEvent::Version { token }) = serde_json::from_str(line.trim()) {
+                return Ok(token == DAEMON_TOKEN);
+            }
+            Ok(false)
+        }
+        _ => Ok(false),
+    }
+}
+
+async fn kill_existing_daemon(socket_path: &PathBuf) {
+    let pid_path = daemon_pid_path();
+    let mut killed = false;
+    if let Ok(content) = std::fs::read_to_string(&pid_path) {
+        if let Ok(pid) = content.trim().parse::<libc::pid_t>() {
+            unsafe {
+                let _ = libc::kill(pid, libc::SIGTERM);
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+            unsafe {
+                let _ = libc::kill(pid, libc::SIGKILL);
+            }
+            killed = true;
+        }
+    }
+    if !killed {
+        if let Ok(output) = tokio::process::Command::new("lsof")
+            .arg("-t")
+            .arg(socket_path.as_os_str())
+            .output()
+            .await
+        {
+            if let Ok(text) = String::from_utf8(output.stdout) {
+                for pid_str in text.lines() {
+                    if let Ok(pid) = pid_str.trim().parse::<libc::pid_t>() {
+                        unsafe {
+                            let _ = libc::kill(pid, libc::SIGTERM);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_file(pid_path);
 }
 
 async fn connect_with_retry(socket_path: &PathBuf) -> Result<UnixStream, String> {
@@ -278,6 +359,10 @@ pub fn daemon_config_dir() -> PathBuf {
 
 pub fn daemon_socket_path() -> PathBuf {
     daemon_config_dir().join("pty_daemon.sock")
+}
+
+pub fn daemon_pid_path() -> PathBuf {
+    daemon_config_dir().join("pty_daemon.pid")
 }
 
 pub fn daemon_persistence_path() -> PathBuf {

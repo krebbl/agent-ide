@@ -31,6 +31,8 @@ pub enum DaemonRequest {
         cwd: Option<String>,
         cols: u16,
         rows: u16,
+        worktree_id: Option<String>,
+        attach: bool,
     },
     RegisterSshProject {
         project_id: String,
@@ -55,6 +57,9 @@ pub enum DaemonRequest {
     },
     ListSessions,
     AttachAll,
+    Version {
+        token: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,5 +91,8 @@ pub enum DaemonEvent {
     },
     Error {
         message: String,
+    },
+    Version {
+        token: String,
     },
 }

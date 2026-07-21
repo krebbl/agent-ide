@@ -2342,6 +2342,8 @@ pub fn run_pty_daemon(daemonize: bool) -> Result<(), String> {
             std::process::exit(1);
         }
     }
+    let pid_path = pty_client::daemon_pid_path();
+    let _ = std::fs::write(&pid_path, std::process::id().to_string());
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

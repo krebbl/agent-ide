@@ -170,6 +170,7 @@ impl RemotePtyEngine {
         rows: u16,
         ssh_session: SessionHandle,
         event_tx: tokio::sync::mpsc::Sender<(String, crate::pty_engine::EngineEvent)>,
+        attach: bool,
     ) -> Result<Self, String> {
         let mut channel = ssh_session
             .lock()
@@ -187,13 +188,16 @@ impl RemotePtyEngine {
             .await
             .map_err(|e| format!("request_shell failed: {}", e))?;
 
-        if let Some(ref dir) = cwd {
+        if attach {
+            let tmux_cmd = format!(
+                "exec tmux set -g status off \\; new-session -A -s {} 2>/dev/null || exec ${{SHELL:-/bin/sh}} -l\n",
+                shell_escape(&session_id)
+            );
+            let _ = channel.data(std::io::Cursor::new(tmux_cmd.into_bytes())).await;
+        } else if let Some(ref dir) = cwd {
             let cmd = format!("cd {}\n", shell_escape(dir));
             let _ = channel.data(std::io::Cursor::new(cmd.into_bytes())).await;
         }
-
-        let tmux_cmd = format!("exec tmux new -A -s {}\n", shell_escape(&session_id));
-        let _ = channel.data(std::io::Cursor::new(tmux_cmd.into_bytes())).await;
 
         let (input_tx, mut input_rx) = mpsc::channel::<String>(64);
         let (resize_tx, mut resize_rx) = mpsc::channel::<PtySize>(16);

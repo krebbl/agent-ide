@@ -32,7 +32,12 @@ impl PtyEngine for LocalPtyEngine {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| format!("Failed to resize PTY: {}", e))
+            .map_err(|e| format!("Failed to resize PTY: {}", e))?;
+        #[cfg(unix)]
+        if let Some(pgid) = self.shell_pgid {
+            let _ = unsafe { libc::kill(-pgid, libc::SIGWINCH) };
+        }
+        Ok(())
     }
 
     fn kill(&self) -> Result<(), String> {
@@ -52,6 +57,7 @@ pub struct LocalPtyEngine {
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    shell_pgid: Option<libc::pid_t>,
     _reader_handle: thread::JoinHandle<()>,
     _monitor_handle: thread::JoinHandle<()>,
 }
@@ -224,6 +230,7 @@ impl LocalPtyEngine {
             child: child_arc,
             writer: Arc::new(Mutex::new(master_writer)),
             master: Arc::new(Mutex::new(master)),
+            shell_pgid,
             _reader_handle: reader_handle,
             _monitor_handle: monitor_handle,
         })

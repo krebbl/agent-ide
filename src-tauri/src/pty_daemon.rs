@@ -366,6 +366,8 @@ impl PtyDaemon {
                 cwd,
                 cols,
                 rows,
+                worktree_id,
+                attach,
             } => {
                 if sessions.lock().unwrap().contains_key(&session_id) {
                     warn!(session_id, "session already exists");
@@ -376,7 +378,7 @@ impl PtyDaemon {
                 let meta = SessionMeta {
                     session_id: session_id.clone(),
                     session_type: "ssh".to_string(),
-                    worktree_id: None,
+                    worktree_id,
                     project_id: Some(project_id.clone()),
                     cwd,
                     title: title.clone(),
@@ -409,6 +411,7 @@ impl PtyDaemon {
                         rows,
                         ssh_session,
                         event_tx.clone(),
+                        attach,
                     )
                     .await
                     {
@@ -461,6 +464,8 @@ impl PtyDaemon {
                     if let Some(engine) = session.engine.as_ref() {
                         if let Ok(bytes) = STANDARD.decode(&data) {
                             let _ = engine.write(&bytes);
+                        } else {
+                            warn!(session_id = %session_id, "failed to decode write data");
                         }
                     }
                 }
@@ -507,6 +512,13 @@ impl PtyDaemon {
                         });
                     }
                     let _ = tx.send(DaemonEvent::SessionList { sessions: list });
+                }
+            }
+            DaemonRequest::Version { .. } => {
+                if let Some(tx) = client_tx {
+                    let _ = tx.send(DaemonEvent::Version {
+                        token: env!("AGENT_IDE_DAEMON_TOKEN").to_string(),
+                    });
                 }
             }
         }
@@ -589,6 +601,7 @@ impl PtyDaemon {
                     meta.rows,
                     ssh_session,
                     event_tx.clone(),
+                    true,
                 )
                 .await
                 {
