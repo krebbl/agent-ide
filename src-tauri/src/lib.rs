@@ -1,6 +1,10 @@
 mod agents;
 mod notification;
 mod pty;
+pub mod pty_client;
+pub mod pty_daemon;
+pub mod pty_engine;
+pub mod pty_protocol;
 
 use git2::{BranchType, Repository};
 use russh::keys::agent::client::AgentClient;
@@ -2323,6 +2327,24 @@ async fn check_and_reconnect(project_id: &str, state: &Arc<AppState>) {
     }
 }
 
+pub fn run_pty_daemon() -> Result<(), String> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+    tokio::runtime::Runtime::new()
+        .map_err(|e| format!("Failed to create tokio runtime: {}", e))?
+        .block_on(async {
+            let daemon = pty_daemon::PtyDaemon::new(
+                pty_client::daemon_socket_path(),
+                pty_client::daemon_persistence_path(),
+            );
+            daemon.run().await
+        })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -2347,11 +2369,17 @@ pub fn run() {
                 start_health_check(state_clone).await;
             });
 
-            let pty_manager = Arc::new(pty::PtyManager::new(
-                app.handle().clone(),
-                state.inner().clone(),
-            ));
-            app.manage(pty_manager);
+            let pty_client = Arc::new(
+                tauri::async_runtime::block_on(async {
+                    pty_client::PtyClient::new(
+                        pty_client::daemon_socket_path(),
+                        app.handle().clone(),
+                    )
+                    .await
+                })
+                .expect("failed to connect to pty daemon"),
+            );
+            app.manage(pty_client);
 
             Ok(())
         })
@@ -2401,7 +2429,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state: Arc<AppState> = window.state::<Arc<AppState>>().inner().clone();
-                let pty_manager: Arc<pty::PtyManager> = window.state::<Arc<pty::PtyManager>>().inner().clone();
+                let _pty_client: Arc<pty_client::PtyClient> = window.state::<Arc<pty_client::PtyClient>>().inner().clone();
                 let handle = window.app_handle().clone();
                 let connections = state.ssh_connections.blocking_lock();
                 let project_ids: Vec<String> = connections.keys().cloned().collect();
@@ -2418,7 +2446,7 @@ pub fn run() {
                             ).await;
                         }
                     }
-                    pty_manager.kill_all();
+                    // daemon keeps PTYs alive
                     let _ = handle.exit(0);
                 });
 

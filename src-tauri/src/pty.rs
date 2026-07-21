@@ -742,20 +742,25 @@ pub async fn pty_spawn(
     rows: u16,
     project_id: Option<String>,
     session_type: Option<String>,
-    pty_manager: tauri::State<'_, Arc<PtyManager>>,
+    pty_client: tauri::State<'_, Arc<crate::pty_client::PtyClient>>,
 ) -> Result<String, String> {
-    pty_manager
-        .spawn(cwd, cols, rows, project_id, session_type)
-        .await
+    let is_remote = session_type.as_deref() == Some("ssh")
+        || (project_id.is_some() && session_type.as_deref() != Some("local"));
+    if is_remote {
+        return Err("Remote sessions are not yet supported by the persistent daemon".to_string());
+    }
+    let session_id = uuid::Uuid::new_v4().to_string();
+    pty_client.spawn(session_id.clone(), cwd, cols, rows)?;
+    Ok(session_id)
 }
 
 #[tauri::command]
 pub async fn pty_write(
     session_id: String,
     data: String,
-    pty_manager: tauri::State<'_, Arc<PtyManager>>,
+    pty_client: tauri::State<'_, Arc<crate::pty_client::PtyClient>>,
 ) -> Result<(), String> {
-    pty_manager.write(&session_id, &data).await
+    pty_client.write(session_id, data)
 }
 
 #[tauri::command]
@@ -763,25 +768,25 @@ pub async fn pty_resize(
     session_id: String,
     cols: u16,
     rows: u16,
-    pty_manager: tauri::State<'_, Arc<PtyManager>>,
+    pty_client: tauri::State<'_, Arc<crate::pty_client::PtyClient>>,
 ) -> Result<(), String> {
-    pty_manager.resize(&session_id, cols, rows).await
+    pty_client.resize(session_id, cols, rows)
 }
 
 #[tauri::command]
 pub async fn pty_kill(
     session_id: String,
-    pty_manager: tauri::State<'_, Arc<PtyManager>>,
+    pty_client: tauri::State<'_, Arc<crate::pty_client::PtyClient>>,
 ) -> Result<(), String> {
-    pty_manager.kill(&session_id).await
+    pty_client.kill(session_id)
 }
 
 #[tauri::command]
 pub fn pty_set_active(
     pty_id: Option<String>,
-    pty_manager: tauri::State<'_, Arc<PtyManager>>,
+    app_state: tauri::State<'_, Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    pty_manager.set_active_pty(pty_id);
+    app_state.set_active_pty(pty_id);
     Ok(())
 }
 
