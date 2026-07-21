@@ -6,6 +6,7 @@ interface ProjectStore {
   projects: Project[];
   activeProjectId: string | null;
   selectedWorktreeId: string | null;
+  expandedProjectIds: Set<string>;
   isLoading: boolean;
   error: string | null;
   worktreeLoading: Record<string, boolean>;
@@ -16,6 +17,7 @@ interface ProjectStore {
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
   setActiveProject: (id: string | null) => void;
   getActiveProject: () => Project | undefined;
+  toggleProjectExpanded: (id: string) => void;
   fetchWorktrees: (projectId: string) => Promise<void>;
   setActiveWorktree: (projectId: string, worktreeId: string) => Promise<void>;
   removeWorktree: (projectId: string, worktreePath: string, force?: boolean) => Promise<void>;
@@ -27,6 +29,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   projects: [],
   activeProjectId: null,
   selectedWorktreeId: null,
+  expandedProjectIds: new Set<string>(),
   isLoading: false,
   error: null,
   worktreeLoading: {},
@@ -50,7 +53,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         }
         return p;
       });
-      set({ projects, isLoading: false, activeProjectId, selectedWorktreeId });
+      const expandedIds = await invoke<string[]>("load_expanded_projects").catch(() => []);
+      set({
+        projects,
+        isLoading: false,
+        activeProjectId,
+        selectedWorktreeId,
+        expandedProjectIds: new Set(expandedIds),
+      });
       if (foundSelected) {
         await invoke("save_projects", { projects }).catch(() => {});
       }
@@ -187,6 +197,21 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   getActiveProject: () => {
     const { projects, activeProjectId } = get();
     return projects.find((p) => p.id === activeProjectId);
+  },
+
+  toggleProjectExpanded: (id: string) => {
+    set((state) => {
+      const next = new Set(state.expandedProjectIds);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      invoke("save_expanded_projects", {
+        ids: Array.from(next),
+      }).catch(() => {});
+      return { expandedProjectIds: next };
+    });
   },
 
   fetchWorktrees: async (projectId: string) => {

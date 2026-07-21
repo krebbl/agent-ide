@@ -417,25 +417,23 @@ function ProjectItem({
 }
 
 export default function LeftSidebar() {
-  const { projects, activeProjectId, setActiveProject, loadProjects, removeProject } =
-    useProjectStore();
+  const {
+    projects,
+    activeProjectId,
+    expandedProjectIds,
+    setActiveProject,
+    loadProjects,
+    removeProject,
+    toggleProjectExpanded,
+  } = useProjectStore();
   const [showAddDialog, setShowAddDialog] = useState(false);
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
 
   const handleToggle = (id: string) => {
-    setExpandedProjects((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
+    toggleProjectExpanded(id);
   };
 
   return (
@@ -463,7 +461,7 @@ export default function LeftSidebar() {
             key={project.id}
             project={project}
             isActive={project.id === activeProjectId}
-            isExpanded={expandedProjects.has(project.id)}
+            isExpanded={expandedProjectIds.has(project.id)}
             onToggle={() => handleToggle(project.id)}
             onSelect={() => setActiveProject(project.id)}
             onRemove={() => removeProject(project.id)}

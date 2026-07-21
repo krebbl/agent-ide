@@ -701,12 +701,16 @@ impl AppState {
     }
 }
 
-#[tauri::command]
-fn save_projects(projects: Vec<Project>, app_handle: tauri::AppHandle) -> Result<(), String> {
-    let config_path = app_handle
+fn app_config_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app_handle
         .path()
         .app_config_dir()
-        .map_err(|e| format!("Failed to get config path: {}", e))?;
+        .map_err(|e| format!("Failed to get config path: {}", e))
+}
+
+#[tauri::command]
+fn save_projects(projects: Vec<Project>, app_handle: tauri::AppHandle) -> Result<(), String> {
+    let config_path = app_config_path(&app_handle)?;
 
     std::fs::create_dir_all(&config_path)
         .map_err(|e| format!("Failed to create config directory: {}", e))?;
@@ -719,6 +723,35 @@ fn save_projects(projects: Vec<Project>, app_handle: tauri::AppHandle) -> Result
         .map_err(|e| format!("Failed to write projects file: {}", e))?;
 
     Ok(())
+}
+
+#[tauri::command]
+fn save_expanded_projects(
+    ids: Vec<String>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let config_path = app_config_path(&app_handle)?;
+    std::fs::create_dir_all(&config_path)
+        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    let file_path = config_path.join("expanded_projects.json");
+    let json = serde_json::to_string_pretty(&ids)
+        .map_err(|e| format!("Failed to serialize expanded projects: {}", e))?;
+    std::fs::write(&file_path, json)
+        .map_err(|e| format!("Failed to write expanded projects file: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn load_expanded_projects(app_handle: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let config_path = app_config_path(&app_handle)?;
+    let file_path = config_path.join("expanded_projects.json");
+    if !file_path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read expanded projects file: {}", e))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse expanded projects file: {}", e))
 }
 
 #[tauri::command]
@@ -2408,6 +2441,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             save_projects,
             load_projects,
+            save_expanded_projects,
+            load_expanded_projects,
             check_is_git_repo,
             git_init,
             git_worktree_list,
