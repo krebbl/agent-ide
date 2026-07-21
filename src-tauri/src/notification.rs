@@ -7,18 +7,13 @@ use tauri::Emitter;
 
 static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
-pub fn set_app_handle(handle: tauri::AppHandle) {
-    let _ = APP_HANDLE.set(handle);
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationClickedEvent {
     pub session_id: String,
 }
 
-#[no_mangle]
-pub extern "C" fn agent_ide_notification_clicked(session_id: *const i8) {
+extern "C" fn on_notification_clicked(session_id: *const i8) {
     if session_id.is_null() {
         return;
     }
@@ -34,10 +29,19 @@ pub extern "C" fn agent_ide_notification_clicked(session_id: *const i8) {
     }
 }
 
+pub fn set_app_handle(handle: tauri::AppHandle) {
+    let _ = APP_HANDLE.set(handle);
+    #[cfg(target_os = "macos")]
+    unsafe {
+        set_notification_clicked_callback(on_notification_clicked);
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[link(name = "agent_ide_notification", kind = "static")]
 extern "C" {
     fn show_notification(title: *const i8, body: *const i8, session_id: *const i8);
+    fn set_notification_clicked_callback(callback: extern "C" fn(*const i8));
 }
 
 pub fn show(title: &str, body: &str, session_id: Option<&str>) -> Result<(), String> {

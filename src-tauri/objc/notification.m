@@ -1,8 +1,7 @@
 #import "notification.h"
 #import <Foundation/Foundation.h>
 
-// Implemented in Rust; called when the user clicks the notification.
-extern void agent_ide_notification_clicked(const char *session_id);
+static void (*g_notification_clicked_callback)(const char *session_id) = NULL;
 
 static BOOL is_running_in_bundle(void) {
     NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
@@ -51,12 +50,16 @@ void show_notification(const char *title, const char *body, const char *session_
 
 - (void)userNotificationCenter:(NSUserNotificationCenter *)center didActivateNotification:(NSUserNotification *)notification {
     NSLog(@"didActivateNotification called");
-    if (notification.identifier) {
-        agent_ide_notification_clicked([notification.identifier UTF8String]);
+    if (notification.identifier && g_notification_clicked_callback) {
+        g_notification_clicked_callback([notification.identifier UTF8String]);
     }
 }
 
 @end
+
+void set_notification_clicked_callback(void (*callback)(const char *session_id)) {
+    g_notification_clicked_callback = callback;
+}
 
 static AgentIDENotificationDelegate *g_notification_delegate = nil;
 
