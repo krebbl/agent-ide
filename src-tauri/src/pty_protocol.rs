@@ -8,6 +8,10 @@ pub struct SessionMeta {
     pub cwd: Option<String>,
     pub title: String,
     pub is_busy: bool,
+    pub project_id: Option<String>,
+    pub worktree_id: Option<String>,
+    pub cols: u16,
+    pub rows: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +22,8 @@ pub enum DaemonRequest {
         cwd: Option<String>,
         cols: u16,
         rows: u16,
+        project_id: Option<String>,
+        worktree_id: Option<String>,
     },
     Write {
         session_id: String,

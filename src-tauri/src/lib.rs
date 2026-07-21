@@ -2327,7 +2327,16 @@ async fn check_and_reconnect(project_id: &str, state: &Arc<AppState>) {
     }
 }
 
-pub fn run_pty_daemon() -> Result<(), String> {
+pub fn run_pty_daemon(daemonize: bool) -> Result<(), String> {
+    #[cfg(unix)]
+    if daemonize {
+        let daemonize = daemonize::Daemonize::new()
+            .working_directory(pty_client::daemon_config_dir());
+        if let Err(e) = daemonize.start() {
+            eprintln!("Failed to daemonize: {}", e);
+            std::process::exit(1);
+        }
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -2415,6 +2424,7 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_kill,
             pty::pty_set_active,
+            pty::pty_list_sessions,
             fs_read_dir,
             fs_read_file,
             fs_write_file,

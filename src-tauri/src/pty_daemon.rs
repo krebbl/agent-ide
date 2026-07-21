@@ -207,6 +207,8 @@ impl PtyDaemon {
                 cwd,
                 cols,
                 rows,
+                project_id,
+                worktree_id,
             } => {
                 let mut map = sessions.lock().unwrap();
                 if map.contains_key(&session_id) {
@@ -238,6 +240,10 @@ impl PtyDaemon {
                     cwd,
                     title: title.clone(),
                     is_busy: false,
+                    project_id,
+                    worktree_id,
+                    cols,
+                    rows,
                 };
 
                 let mut map = sessions.lock().unwrap();
@@ -271,11 +277,15 @@ impl PtyDaemon {
                 }
             }
             DaemonRequest::Resize { session_id, cols, rows } => {
-                let map = sessions.lock().unwrap();
-                if let Some(session) = map.get(&session_id) {
+                let mut map = sessions.lock().unwrap();
+                if let Some(session) = map.get_mut(&session_id) {
                     if let Some(engine) = session.engine.as_ref() {
                         let _ = engine.resize(cols, rows);
                     }
+                    session.meta.cols = cols;
+                    session.meta.rows = rows;
+                    drop(map);
+                    Self::persist(sessions, persistence_path);
                 }
             }
             DaemonRequest::Kill { session_id } => {
@@ -318,17 +328,29 @@ impl PtyDaemon {
             return;
         }
         let content = std::fs::read_to_string(&self.persistence_path).unwrap_or_default();
-        let sessions: Vec<SessionMeta> = serde_json::from_str(&content).unwrap_or_default();
+        let persisted: Vec<SessionMeta> = serde_json::from_str(&content).unwrap_or_default();
         let mut map = self.sessions.lock().unwrap();
-        for meta in sessions {
-            map.insert(
-                meta.session_id.clone(),
-                DaemonSession {
-                    meta,
-                    engine: None,
-                },
-            );
+        for meta in persisted {
+            let session_id = meta.session_id.clone();
+            let engine = match self.respawn_engine(&meta) {
+                Ok(e) => Some(e),
+                Err(e) => {
+                    error!(session_id = %session_id, error = %e, "failed to respawn persisted pty session");
+                    None
+                }
+            };
+            map.insert(session_id, DaemonSession { meta, engine });
         }
+    }
+
+    fn respawn_engine(&self, meta: &SessionMeta) -> Result<LocalPtyEngine, String> {
+        LocalPtyEngine::spawn(
+            meta.session_id.clone(),
+            meta.cwd.clone(),
+            meta.cols,
+            meta.rows,
+            self.event_tx.clone(),
+        )
     }
 
     fn persist(

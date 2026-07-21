@@ -4,7 +4,8 @@
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--pty-daemon") {
-        if let Err(e) = agent_ide_lib::run_pty_daemon() {
+        let daemonize = args.iter().any(|a| a == "--daemonize");
+        if let Err(e) = agent_ide_lib::run_pty_daemon(daemonize) {
             eprintln!("pty daemon failed: {}", e);
             std::process::exit(1);
         }

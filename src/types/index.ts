@@ -40,8 +40,22 @@ export interface TerminalSession {
   type: "local" | "ssh";
   ptyId: string;
   cwd: string;
+  title: string;
   isBusy?: boolean;
   needsInput?: boolean;
+  processRunning?: boolean;
+}
+
+export interface DaemonSessionMeta {
+  sessionId: string;
+  sessionType: string;
+  cwd?: string;
+  title: string;
+  isBusy: boolean;
+  projectId?: string;
+  worktreeId?: string;
+  cols: number;
+  rows: number;
 }
 
 export interface EditorTab {

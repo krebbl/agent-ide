@@ -42,4 +42,5 @@ async-trait = "0.1"
 tokio-util = { version = "0.7", features = ["io"] }
 shlex = "1"
 dirs = "6"
+daemonize = "0.5"
 

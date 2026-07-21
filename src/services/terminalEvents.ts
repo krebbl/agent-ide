@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
+import { useTerminalStore } from "../stores/terminalStore";
 
 interface PtyOutputEvent {
   sessionId: string;
@@ -17,6 +18,12 @@ interface PtyIdleEvent {
 
 interface PtyBusyEvent {
   sessionId: string;
+  title: string;
+}
+
+interface PtyStateSnapshotEvent {
+  sessionId: string;
+  isBusy: boolean;
   title: string;
 }
 
@@ -42,32 +49,43 @@ export async function initTerminalEventListeners() {
     }
   });
   await listen<PtyExitEvent>("pty_exit", (event) => {
-    console.log("[terminalEvents] pty_exit received:", event.payload.sessionId);
     const handler = exitHandlers.get(event.payload.sessionId);
     if (handler) {
       handler();
     } else {
-      console.warn("[terminalEvents] no exit handler for", event.payload.sessionId);
+      useTerminalStore.getState().removeSession(
+        useTerminalStore.getState().sessions.find((s) => s.ptyId === event.payload.sessionId)?.id ?? ""
+      ).catch(() => {});
     }
   });
   await listen<PtyIdleEvent>("pty_idle", (event) => {
-    console.log("[terminalEvents] pty_idle received:", event.payload.sessionId);
+    useTerminalStore.getState().updateSessionByPtyId(event.payload.sessionId, {
+      isBusy: false,
+      needsInput: true,
+      title: event.payload.title,
+    });
     const handler = idleHandlers.get(event.payload.sessionId);
     if (handler) {
       handler(event.payload.title);
-    } else {
-      console.warn("[terminalEvents] no idle handler for", event.payload.sessionId);
     }
   });
-
   await listen<PtyBusyEvent>("pty_busy", (event) => {
-    console.log("[terminalEvents] pty_busy received:", event.payload.sessionId);
+    useTerminalStore.getState().updateSessionByPtyId(event.payload.sessionId, {
+      isBusy: true,
+      needsInput: false,
+      title: event.payload.title,
+    });
     const handler = busyHandlers.get(event.payload.sessionId);
     if (handler) {
       handler(event.payload.title);
-    } else {
-      console.warn("[terminalEvents] no busy handler for", event.payload.sessionId);
     }
+  });
+  await listen<PtyStateSnapshotEvent>("pty_state_snapshot", (event) => {
+    useTerminalStore.getState().updateSessionByPtyId(event.payload.sessionId, {
+      isBusy: event.payload.isBusy,
+      needsInput: !event.payload.isBusy,
+      title: event.payload.title,
+    });
   });
 }
 

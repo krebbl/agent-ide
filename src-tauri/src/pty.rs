@@ -741,6 +741,7 @@ pub async fn pty_spawn(
     cols: u16,
     rows: u16,
     project_id: Option<String>,
+    worktree_id: Option<String>,
     session_type: Option<String>,
     pty_client: tauri::State<'_, Arc<crate::pty_client::PtyClient>>,
 ) -> Result<String, String> {
@@ -750,8 +751,15 @@ pub async fn pty_spawn(
         return Err("Remote sessions are not yet supported by the persistent daemon".to_string());
     }
     let session_id = uuid::Uuid::new_v4().to_string();
-    pty_client.spawn(session_id.clone(), cwd, cols, rows)?;
+    pty_client.spawn(session_id.clone(), cwd, cols, rows, project_id, worktree_id)?;
     Ok(session_id)
+}
+
+#[tauri::command]
+pub async fn pty_list_sessions(
+    pty_client: tauri::State<'_, Arc<crate::pty_client::PtyClient>>,
+) -> Result<Vec<crate::pty_protocol::SessionMeta>, String> {
+    pty_client.list_sessions().await
 }
 
 #[tauri::command]

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { DaemonSessionMeta } from "../types";
 import { useProjectStore } from "./projectStore";
 
 export interface TerminalSession {
@@ -26,9 +27,11 @@ interface TerminalStore {
     worktreeId?: string,
   ) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
+  restoreSessions: () => Promise<void>;
   setActiveSession: (id: string | null) => void;
   updateSessionCwd: (id: string, cwd: string) => void;
   updateSessionTitle: (id: string, title: string) => void;
+  updateSessionByPtyId: (ptyId: string, updates: Partial<TerminalSession>) => void;
   setCollapsed: (collapsed: boolean) => void;
   focusSession: (sessionId: string) => void;
   setSessionActivity: (
@@ -129,6 +132,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       cols: 80,
       rows: 24,
       projectId: resolvedProjectId,
+      worktreeId: resolvedWorktreeId,
       sessionType: resolvedType,
     });
 
@@ -170,6 +174,33 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }
   },
 
+  restoreSessions: async () => {
+    const sessions = await invoke<DaemonSessionMeta[]>("pty_list_sessions").catch(() => []);
+    if (sessions.length === 0) return;
+
+    set((state) => {
+      const existingPtyIds = new Set(state.sessions.map((s) => s.ptyId));
+      const toAdd: TerminalSession[] = sessions
+        .filter((meta) => !existingPtyIds.has(meta.sessionId))
+        .map((meta) => ({
+          id: crypto.randomUUID(),
+          ptyId: meta.sessionId,
+          cwd: meta.cwd ?? "~",
+          title: meta.title,
+          type: meta.sessionType as "local" | "ssh",
+          projectId: meta.projectId,
+          worktreeId: meta.worktreeId,
+          isBusy: meta.isBusy,
+          needsInput: !meta.isBusy,
+        }));
+      if (toAdd.length === 0) return state;
+      return {
+        sessions: [...state.sessions, ...toAdd],
+        activeSessionId: state.activeSessionId ?? toAdd[toAdd.length - 1].id,
+      };
+    });
+  },
+
   setActiveSession: (id) => set({ activeSessionId: id }),
 
   updateSessionCwd: (id, cwd) =>
@@ -183,6 +214,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     set((state) => ({
       sessions: state.sessions.map((s) =>
         s.id === id ? { ...s, title } : s,
+      ),
+    })),
+
+  updateSessionByPtyId: (ptyId, updates) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.ptyId === ptyId ? { ...s, ...updates } : s,
       ),
     })),
 

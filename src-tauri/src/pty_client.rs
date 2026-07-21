@@ -1,5 +1,6 @@
 use serde_json;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -13,6 +14,7 @@ use crate::pty_protocol::{DaemonEvent, DaemonRequest, SessionMeta};
 
 pub struct PtyClient {
     request_tx: mpsc::UnboundedSender<DaemonRequest>,
+    list_waiter: Arc<Mutex<Option<tokio::sync::oneshot::Sender<Vec<SessionMeta>>>>>,
     _read_task: tokio::task::JoinHandle<()>,
 }
 
@@ -34,6 +36,8 @@ impl PtyClient {
             }
         });
 
+        let list_waiter = Arc::new(Mutex::new(None::<tokio::sync::oneshot::Sender<Vec<SessionMeta>>>));
+        let list_waiter_read = Arc::clone(&list_waiter);
         let app_handle_for_read = app_handle.clone();
         let read_task = tokio::spawn(async move {
             let mut reader = BufReader::new(read_half);
@@ -44,6 +48,11 @@ impl PtyClient {
                     Ok(0) => break,
                     Ok(_) => {
                         if let Ok(ev) = serde_json::from_str::<DaemonEvent>(line.trim()) {
+                            if let DaemonEvent::SessionList { sessions } = &ev {
+                                if let Some(tx) = list_waiter_read.lock().unwrap().take() {
+                                    let _ = tx.send(sessions.clone());
+                                }
+                            }
                             Self::emit_event(&app_handle_for_read, ev);
                         }
                     }
@@ -59,6 +68,7 @@ impl PtyClient {
 
         Ok(Self {
             request_tx,
+            list_waiter,
             _read_task: read_task,
         })
     }
@@ -112,6 +122,8 @@ impl PtyClient {
         cwd: Option<String>,
         cols: u16,
         rows: u16,
+        project_id: Option<String>,
+        worktree_id: Option<String>,
     ) -> Result<(), String> {
         self.request_tx
             .send(DaemonRequest::CreateLocal {
@@ -119,6 +131,8 @@ impl PtyClient {
                 cwd,
                 cols,
                 rows,
+                project_id,
+                worktree_id,
             })
             .map_err(|_| "pty daemon disconnected".to_string())
     }
@@ -145,10 +159,16 @@ impl PtyClient {
             .map_err(|_| "pty daemon disconnected".to_string())
     }
 
-    pub fn list_sessions(&self) -> Result<(), String> {
+    pub async fn list_sessions(&self) -> Result<Vec<SessionMeta>, String> {
+        let (tx, rx) = tokio::sync::oneshot::channel::<Vec<SessionMeta>>();
+        *self.list_waiter.lock().unwrap() = Some(tx);
         self.request_tx
             .send(DaemonRequest::ListSessions)
-            .map_err(|_| "pty daemon disconnected".to_string())
+            .map_err(|_| "pty daemon disconnected".to_string())?;
+        tokio::time::timeout(tokio::time::Duration::from_secs(5), rx)
+            .await
+            .map_err(|_| "Timed out waiting for session list".to_string())?
+            .map_err(|_| "Session list channel closed".to_string())
     }
 
     pub fn attach_all(&self) -> Result<(), String> {
@@ -169,6 +189,7 @@ async fn ensure_daemon_running(socket_path: &PathBuf) -> Result<(), String> {
         .map_err(|e| format!("Failed to get current executable: {}", e))?;
     let _ = tokio::process::Command::new(current_exe)
         .arg("--pty-daemon")
+        .arg("--daemonize")
         .spawn()
         .map_err(|e| format!("Failed to spawn pty daemon: {}", e))?;
 
