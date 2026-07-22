@@ -24,6 +24,7 @@ interface ProjectStore {
   removeWorktree: (projectId: string, worktreePath: string, force?: boolean, deleteBranch?: boolean) => Promise<void>;
   refreshWorktrees: (projectId: string) => Promise<void>;
   addWorktree: (projectId: string, branch: string, name: string, newBranch: boolean) => Promise<void>;
+  reorderProjects: (fromIndex: number, toIndex: number) => Promise<void>;
 }
 
 export const useProjectStore = create<ProjectStore>((set, get) => ({
@@ -301,5 +302,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   refreshWorktrees: async (projectId: string) => {
     await get().fetchWorktrees(projectId);
+  },
+
+  reorderProjects: async (fromIndex: number, toIndex: number) => {
+    const { projects } = get();
+    const updated = [...projects];
+    const [moved] = updated.splice(fromIndex, 1);
+    updated.splice(toIndex, 0, moved);
+    set({ projects: updated });
+    try {
+      await invoke("save_projects", { projects: updated });
+    } catch (e) {
+      set({ error: String(e) });
+    }
   },
 }));

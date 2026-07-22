@@ -6,6 +6,18 @@ import { useTerminalStore } from "../../stores/terminalStore";
 import AddProjectDialog from "../dialogs/AddProjectDialog";
 import AddWorktreeDialog from "../dialogs/AddWorktreeDialog";
 import { Project } from "../../types";
+import { useSortable } from "@dnd-kit/sortable";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 
 function WorktreeContextMenu({
   worktree,
@@ -291,6 +303,8 @@ function ProjectItem({
   onSelect: () => void;
   onRemove: () => void;
 }) {
+  const { attributes, listeners, setNodeRef, isDragging } =
+    useSortable({ id: project.id });
   const connectionStatus = useConnectionStatusStore((s) => s.statuses[project.id]?.status);
   const { fetchWorktrees, setActiveWorktree, worktreeLoading, removeWorktree, refreshWorktrees, selectedWorktreeId, activeProjectId } = useProjectStore();
   const isWorktreeLoading = worktreeLoading[project.id] ?? false;
@@ -332,13 +346,16 @@ function ProjectItem({
   };
 
   return (
-    <div>
+    <>
       <div
-        className={`group relative flex items-center gap-1.5 px-3 py-1.5 text-sm cursor-pointer transition-colors ${
+        ref={setNodeRef}
+        {...attributes}
+        {...listeners}
+        className={`group relative flex items-center gap-1.5 px-3 py-1.5 text-sm cursor-pointer transition-colors select-none ${
           isActive
             ? "bg-[var(--color-surface0)] text-[var(--color-text)]"
             : "text-[var(--color-subtext1)] hover:bg-[var(--color-surface0)]/50"
-        }`}
+        } ${isDragging ? "opacity-50 z-10" : ""}`}
         onClick={onSelect}
       >
         <button
@@ -422,7 +439,7 @@ function ProjectItem({
         </div>
       )}
       {showAddDialog && <AddWorktreeDialog projectId={project.id} onClose={() => setShowAddDialog(false)} />}
-    </div>
+    </>
   );
 }
 
@@ -435,8 +452,15 @@ export default function LeftSidebar() {
     loadProjects,
     removeProject,
     toggleProjectExpanded,
+    reorderProjects,
   } = useProjectStore();
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [dragActiveId, setDragActiveId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } })
+  );
 
   useEffect(() => {
     loadProjects();
@@ -446,40 +470,91 @@ export default function LeftSidebar() {
     toggleProjectExpanded(id);
   };
 
+  const handleDragStart = (event: import("@dnd-kit/core").DragStartEvent) => {
+    setDragActiveId(event.active.id?.toString() ?? null);
+  };
+
+  const handleDragOver = (event: import("@dnd-kit/core").DragOverEvent) => {
+    setDragOverId(event.over?.id?.toString() ?? null);
+  };
+
+  const handleDragEnd = (event: import("@dnd-kit/core").DragEndEvent) => {
+    setDragActiveId(null);
+    setDragOverId(null);
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const fromIndex = projects.findIndex((p) => p.id === active.id);
+    const toIndex = projects.findIndex((p) => p.id === over.id);
+    if (fromIndex !== -1 && toIndex !== -1) {
+      reorderProjects(fromIndex, toIndex);
+    }
+  };
+
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-[var(--color-surface0)] px-3 min-w-0">
-        <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-subtext1)] truncate">
-          Projects
-        </span>
-        <button
-          onClick={() => setShowAddDialog(true)}
-          className="shrink-0 text-[var(--color-overlay1)] transition-colors hover:text-[var(--color-blue)]"
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDragEnd={handleDragEnd}
+    >
+      <div className="flex h-full flex-col">
+        <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-[var(--color-surface0)] px-3 min-w-0">
+          <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-subtext1)] truncate">
+            Projects
+          </span>
+          <button
+            onClick={() => setShowAddDialog(true)}
+            className="shrink-0 text-[var(--color-overlay1)] transition-colors hover:text-[var(--color-blue)]"
+          >
+            <FolderPlus size={16} />
+          </button>
+        </div>
+
+        <SortableContext
+          items={projects.map((p) => p.id)}
+          strategy={verticalListSortingStrategy}
         >
-          <FolderPlus size={16} />
-        </button>
-      </div>
+          <div className="flex-1 overflow-y-auto py-1 select-none">
+            {projects.length === 0 && (
+              <div className="flex flex-1 items-center justify-center p-4">
+                <span className="text-sm text-[var(--color-overlay0)]">No projects yet</span>
+              </div>
+            )}
+            {projects.map((project, i) => {
+              const activeIdx = dragActiveId
+                ? projects.findIndex((p) => p.id === dragActiveId)
+                : -1;
+              const showAbove =
+                dragOverId === project.id && activeIdx !== -1 && activeIdx > i;
+              const showBelow =
+                dragOverId === project.id && activeIdx !== -1 && activeIdx < i;
 
-      <div className="flex-1 overflow-y-auto py-1">
-        {projects.length === 0 && (
-          <div className="flex flex-1 items-center justify-center p-4">
-            <span className="text-sm text-[var(--color-overlay0)]">No projects yet</span>
+              return (
+                <>
+                  {showAbove && (
+                    <div className="h-0.5 bg-[var(--color-blue)]" />
+                  )}
+                  <ProjectItem
+                    key={project.id}
+                    project={project}
+                    isActive={project.id === activeProjectId}
+                    isExpanded={expandedProjectIds.has(project.id)}
+                    onToggle={() => handleToggle(project.id)}
+                    onSelect={() => setActiveProject(project.id)}
+                    onRemove={() => removeProject(project.id)}
+                  />
+                  {showBelow && (
+                    <div className="h-0.5 bg-[var(--color-blue)]" />
+                  )}
+                </>
+              );
+            })}
           </div>
-        )}
-        {projects.map((project) => (
-          <ProjectItem
-            key={project.id}
-            project={project}
-            isActive={project.id === activeProjectId}
-            isExpanded={expandedProjectIds.has(project.id)}
-            onToggle={() => handleToggle(project.id)}
-            onSelect={() => setActiveProject(project.id)}
-            onRemove={() => removeProject(project.id)}
-          />
-        ))}
-      </div>
+        </SortableContext>
 
-      {showAddDialog && <AddProjectDialog onClose={() => setShowAddDialog(false)} />}
-    </div>
+        {showAddDialog && <AddProjectDialog onClose={() => setShowAddDialog(false)} />}
+      </div>
+    </DndContext>
   );
 }
