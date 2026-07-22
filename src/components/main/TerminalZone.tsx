@@ -7,7 +7,7 @@ import {
   Circle,
   Loader2,
 } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { useProjectStore } from "../../stores/projectStore";
@@ -60,12 +60,33 @@ export default function TerminalZone({
 
   const canAddTerminal = activeProjectId && selectedWorktreeId;
 
-  const handleNewTerminal = () => {
+  const handleNewTerminal = useCallback(() => {
     if (!canAddTerminal) return;
     addSession(undefined, undefined, activeProjectId, selectedWorktreeId).catch(
       () => {},
     );
-  };
+  }, [canAddTerminal, activeProjectId, selectedWorktreeId, addSession]);
+
+  const handleCloseActiveTerminal = useCallback(() => {
+    if (!effectiveActiveId) return;
+    removeSession(effectiveActiveId).catch(() => {});
+  }, [effectiveActiveId, removeSession]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const isMod = e.metaKey || e.ctrlKey;
+      if (!isMod) return;
+      if (e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        handleNewTerminal();
+      } else if (e.key.toLowerCase() === "w") {
+        e.preventDefault();
+        handleCloseActiveTerminal();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [handleNewTerminal, handleCloseActiveTerminal]);
 
   return (
     <div className="flex h-full flex-col">
