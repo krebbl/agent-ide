@@ -226,13 +226,13 @@ function WorktreeItem({
         <div className="flex shrink-0 flex-col items-end gap-0.5">
           <div className="flex items-center gap-1">
             {worktree.ahead > 0 && (
-              <span className="flex items-center gap-0.5 text-[var(--color-green)]">
+              <span className="flex items-center gap-0.5 text-[9px] text-[var(--color-green)]">
                 <ArrowUp size={8} />
                 {worktree.ahead}
               </span>
             )}
             {worktree.behind > 0 && (
-              <span className="flex items-center gap-0.5 text-[var(--color-peach)]">
+              <span className="flex items-center gap-0.5 text-[9px] text-[var(--color-red)]">
                 <ArrowDown size={8} />
                 {worktree.behind}
               </span>
