@@ -249,15 +249,6 @@ function WorktreeItem({
               </span>
             )}
           </div>
-          <span
-            className={`h-1.5 w-1.5 rounded-full ${
-              worktree.status === "clean"
-                ? "bg-[var(--color-green)]"
-                : worktree.status === "dirty"
-                  ? "bg-[var(--color-yellow)]"
-                  : "bg-[var(--color-overlay0)]"
-            }`}
-          />
         </div>
 
       </div>
