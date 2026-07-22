@@ -3,6 +3,29 @@ import { invoke } from "@tauri-apps/api/core";
 import { DaemonSessionMeta, Pane, LeafPane, SplitPane, TerminalTab } from "../types";
 import { useProjectStore } from "./projectStore";
 
+const WORKTREE_TAB_MAP_KEY = "agent-ide:worktree-tab-map";
+
+function worktreeKey(projectId: string, worktreeId: string): string {
+  return `${projectId}:${worktreeId}`;
+}
+
+function loadWorktreeTabMap(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(WORKTREE_TAB_MAP_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistWorktreeTabMap(map: Record<string, string>) {
+  try {
+    localStorage.setItem(WORKTREE_TAB_MAP_KEY, JSON.stringify(map));
+  } catch {
+    // ignore quota errors
+  }
+}
+
 export interface TerminalSession {
   id: string;
   ptyId: string;
@@ -22,6 +45,9 @@ interface TerminalStore {
   activeTabId: string | null;
   activeSessionId: string | null;
   isCollapsed: boolean;
+  worktreeTabMap: Record<string, string>;
+
+  getWorktreeTabId: (projectId: string, worktreeId: string) => string | null;
 
   addSession: (
     cwd?: string,
@@ -213,6 +239,11 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   activeTabId: null,
   activeSessionId: null,
   isCollapsed: false,
+  worktreeTabMap: loadWorktreeTabMap(),
+
+  getWorktreeTabId: (projectId, worktreeId) => {
+    return get().worktreeTabMap[worktreeKey(projectId, worktreeId)] ?? null;
+  },
 
   setCollapsed: (collapsed) => set({ isCollapsed: collapsed }),
 
@@ -234,9 +265,15 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     if (tab) {
       const leaf = findLeafBySession(tab.rootPane, sessionId);
       if (leaf) {
+        const pid = session.projectId;
+        const wid = session.worktreeId;
         set((state) => ({
           activeTabId: tab.id,
           activeSessionId: sessionId,
+          worktreeTabMap:
+            pid && wid
+              ? { ...state.worktreeTabMap, [worktreeKey(pid, wid)]: tab.id }
+              : state.worktreeTabMap,
           tabs: state.tabs.map((t) =>
             t.id === tab.id ? { ...t, focusedPaneId: leaf.id } : t,
           ),
@@ -250,9 +287,15 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     });
     if (matchingTab) {
       const matchingLeaf = findLeafBySession(matchingTab.rootPane, sessionId);
+      const pid = session.projectId;
+      const wid = session.worktreeId;
       set((state) => ({
         activeTabId: matchingTab.id,
         activeSessionId: sessionId,
+        worktreeTabMap:
+          pid && wid
+            ? { ...state.worktreeTabMap, [worktreeKey(pid, wid)]: matchingTab.id }
+            : state.worktreeTabMap,
         tabs: state.tabs.map((t) =>
           t.id === matchingTab.id && matchingLeaf
             ? { ...t, focusedPaneId: matchingLeaf.id }
@@ -318,6 +361,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       tabs: [...state.tabs, tab],
       activeTabId: tabId,
       activeSessionId: sessionId,
+      worktreeTabMap:
+        resolvedProjectId && resolvedWorktreeId
+          ? {
+              ...state.worktreeTabMap,
+              [worktreeKey(resolvedProjectId, resolvedWorktreeId)]: tabId,
+            }
+          : state.worktreeTabMap,
     }));
   },
 
@@ -381,6 +431,26 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         tabs,
         activeTabId,
         activeSessionId,
+        worktreeTabMap: (() => {
+          if (!tab.projectId || !tab.worktreeId) return state.worktreeTabMap;
+          const key = worktreeKey(tab.projectId, tab.worktreeId);
+          const savedTabId = state.worktreeTabMap[key];
+          if (savedTabId === tab.id || savedTabId === undefined) {
+            const remaining = tabs.filter(
+              (t) =>
+                t.projectId === tab.projectId &&
+                t.worktreeId === tab.worktreeId,
+            );
+            if (remaining.length > 0 && activeTabId) {
+              return { ...state.worktreeTabMap, [key]: activeTabId };
+            }
+            if (remaining.length === 0) {
+              const { [key]: _, ...rest } = state.worktreeTabMap;
+              return rest;
+            }
+          }
+          return state.worktreeTabMap;
+        })(),
       };
     });
 
@@ -610,3 +680,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     });
   },
 }));
+
+useTerminalStore.subscribe((state, prevState) => {
+  if (state.worktreeTabMap !== prevState.worktreeTabMap) {
+    persistWorktreeTabMap(state.worktreeTabMap);
+  }
+});

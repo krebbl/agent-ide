@@ -76,7 +76,18 @@ export default function TerminalZone({
 
   useEffect(() => {
     if (!activeTab && visibleTabs.length > 0 && effectiveActiveId) {
-      const tab = visibleTabs[visibleTabs.length - 1];
+      let tab: (typeof visibleTabs)[number] | undefined;
+      if (activeProjectId && selectedWorktreeId) {
+        const savedTabId = useTerminalStore
+          .getState()
+          .getWorktreeTabId(activeProjectId, selectedWorktreeId);
+        if (savedTabId) {
+          tab = visibleTabs.find((t) => t.id === savedTabId);
+        }
+      }
+      if (!tab) {
+        tab = visibleTabs[visibleTabs.length - 1];
+      }
       const focused = findLeaf(tab.rootPane, tab.focusedPaneId);
       if (focused) {
         useTerminalStore.setState({
@@ -85,7 +96,7 @@ export default function TerminalZone({
         });
       }
     }
-  }, [activeTab, visibleTabs, effectiveActiveId]);
+  }, [activeTab, visibleTabs, effectiveActiveId, activeProjectId, selectedWorktreeId]);
 
   useEffect(() => {
     if (isCollapsed) {
