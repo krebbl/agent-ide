@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { X, Loader2, AlertCircle } from "lucide-react";
+import { Loader2, AlertCircle } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import SearchableSelect from "../ui/SearchableSelect";
+import Dialog from "../ui/Dialog";
 
 interface AddWorktreeDialogProps {
   projectId: string;
@@ -84,96 +85,14 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="flex w-[480px] max-h-[80vh] flex-col rounded-lg border border-[var(--color-surface0)] bg-[var(--color-mantle)] shadow-2xl">
-        <div className="flex items-center justify-between border-b border-[var(--color-surface0)] px-4 py-3">
-          <h2 className="text-sm font-semibold text-[var(--color-text)]">Add Worktree</h2>
-          <button onClick={onClose} className="text-[var(--color-overlay1)] hover:text-[var(--color-text)]">
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">Branch</label>
-            <div className="flex gap-2 mb-2">
-              <button
-                onClick={() => setMode("existing")}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  mode === "existing"
-                    ? "bg-[var(--color-blue)]/20 text-[var(--color-blue)]"
-                    : "bg-[var(--color-surface0)] text-[var(--color-overlay1)] hover:bg-[var(--color-surface1)]"
-                }`}
-              >
-                Existing Branch
-              </button>
-              <button
-                onClick={() => setMode("new")}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  mode === "new"
-                    ? "bg-[var(--color-blue)]/20 text-[var(--color-blue)]"
-                    : "bg-[var(--color-surface0)] text-[var(--color-overlay1)] hover:bg-[var(--color-surface1)]"
-                }`}
-              >
-                New Branch
-              </button>
-            </div>
-            {mode === "existing" ? (
-              <>
-                <SearchableSelect
-                  value={selectedBranch}
-                  options={branchOptions}
-                  onChange={(v) => setSelectedBranch(v)}
-                  placeholder="Select a branch..."
-                  emptyMessage="No branches found"
-                  loading={branchesLoading}
-                  loadingMessage="Loading branches..."
-                />
-                {branchesError && (
-                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-[var(--color-peach)]">
-                    <AlertCircle size={12} />
-                    {branchesError}
-                  </div>
-                )}
-              </>
-            ) : (
-              <input
-                type="text"
-                value={newBranchName}
-                onChange={(e) => setNewBranchName(e.target.value)}
-                placeholder="feature/my-branch"
-                className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
-              />
-            )}
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">
-              Worktree Name <span className="text-[var(--color-overlay0)]">(optional, auto-generated)</span>
-            </label>
-            <input
-              type="text"
-              value={worktreeName}
-              onChange={(e) => setWorktreeName(e.target.value.replace(/\s/g, "-").replace(/[^a-zA-Z0-9_-]/g, ""))}
-              pattern="[a-zA-Z0-9_-]*"
-              placeholder="auto-generated from branch"
-              className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
-            />
-          </div>
-
-          {error && (
-            <div className="flex items-center gap-2 text-sm text-[var(--color-peach)]">
-              <AlertCircle size={14} />
-              {error}
-            </div>
-          )}
-        </div>
-
-        <div className="flex justify-end gap-2 border-t border-[var(--color-surface0)] px-4 py-3">
-          <button
-            onClick={onClose}
-            className="rounded-md px-4 py-2 text-sm text-[var(--color-overlay1)] hover:bg-[var(--color-surface0)]"
-          >
+    <Dialog
+      title="Add Worktree"
+      width="480px"
+      scrollable
+      onClose={onClose}
+      footer={
+        <>
+          <button onClick={onClose} className="rounded-md px-4 py-2 text-sm text-[var(--color-overlay1)] hover:bg-[var(--color-surface0)]">
             Cancel
           </button>
           <button
@@ -190,8 +109,84 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
               "Create Worktree"
             )}
           </button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div>
+          <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">Branch</label>
+          <div className="flex gap-2 mb-2">
+            <button
+              onClick={() => setMode("existing")}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                mode === "existing"
+                  ? "bg-[var(--color-blue)]/20 text-[var(--color-blue)]"
+                  : "bg-[var(--color-surface0)] text-[var(--color-overlay1)] hover:bg-[var(--color-surface1)]"
+              }`}
+            >
+              Existing Branch
+            </button>
+            <button
+              onClick={() => setMode("new")}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                mode === "new"
+                  ? "bg-[var(--color-blue)]/20 text-[var(--color-blue)]"
+                  : "bg-[var(--color-surface0)] text-[var(--color-overlay1)] hover:bg-[var(--color-surface1)]"
+              }`}
+            >
+              New Branch
+            </button>
+          </div>
+          {mode === "existing" ? (
+            <>
+              <SearchableSelect
+                value={selectedBranch}
+                options={branchOptions}
+                onChange={(v) => setSelectedBranch(v)}
+                placeholder="Select a branch..."
+                emptyMessage="No branches found"
+                loading={branchesLoading}
+                loadingMessage="Loading branches..."
+              />
+              {branchesError && (
+                <div className="mt-1.5 flex items-center gap-1.5 text-xs text-[var(--color-peach)]">
+                  <AlertCircle size={12} />
+                  {branchesError}
+                </div>
+              )}
+            </>
+          ) : (
+            <input
+              type="text"
+              value={newBranchName}
+              onChange={(e) => setNewBranchName(e.target.value)}
+              placeholder="feature/my-branch"
+              className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
+            />
+          )}
         </div>
+
+        <div>
+          <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">
+            Worktree Name <span className="text-[var(--color-overlay0)]">(optional, auto-generated)</span>
+          </label>
+          <input
+            type="text"
+            value={worktreeName}
+            onChange={(e) => setWorktreeName(e.target.value.replace(/\s/g, "-").replace(/[^a-zA-Z0-9_-]/g, ""))}
+            pattern="[a-zA-Z0-9_-]*"
+            placeholder="auto-generated from branch"
+            className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
+          />
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 text-sm text-[var(--color-peach)]">
+            <AlertCircle size={14} />
+            {error}
+          </div>
+        )}
       </div>
-    </div>
+    </Dialog>
   );
 }

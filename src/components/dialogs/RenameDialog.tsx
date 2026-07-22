@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { X, Pencil } from "lucide-react";
+import { Pencil } from "lucide-react";
+import Dialog from "../ui/Dialog";
 
 interface RenameDialogProps {
   currentName: string;
@@ -33,31 +34,12 @@ export default function RenameDialog({ currentName, isDir, onConfirm, onCancel }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onCancel}>
-      <div className="flex w-[400px] flex-col rounded-lg border border-[var(--color-surface0)] bg-[var(--color-mantle)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2 border-b border-[var(--color-surface0)] px-4 py-3">
-          <Pencil size={16} className="text-[var(--color-yellow)]" />
-          <span className="text-sm font-semibold text-[var(--color-text)]">Rename</span>
-          <button onClick={onCancel} className="ml-auto rounded p-0.5 text-[var(--color-overlay1)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface0)]">
-            <X size={16} />
-          </button>
-        </div>
-
-        <div className="p-4">
-          <div className="mb-2 text-xs text-[var(--color-overlay0)]">
-            {isDir ? "Folder" : "File"}: <span className="text-[var(--color-text)]">{currentName}</span>
-          </div>
-          <input
-            ref={inputRef}
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); if (e.key === "Escape") onCancel(); }}
-            className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] focus:border-[var(--color-blue)] focus:outline-none"
-          />
-        </div>
-
-        <div className="flex justify-end gap-2 border-t border-[var(--color-surface0)] px-4 py-3">
+    <Dialog
+      title="Rename"
+      icon={<Pencil size={16} className="text-[var(--color-yellow)]" />}
+      onClose={onCancel}
+      footer={
+        <>
           <button onClick={onCancel} className="rounded-md px-4 py-2 text-sm text-[var(--color-overlay1)] hover:bg-[var(--color-surface0)]">
             Cancel
           </button>
@@ -68,8 +50,20 @@ export default function RenameDialog({ currentName, isDir, onConfirm, onCancel }
           >
             Rename
           </button>
-        </div>
+        </>
+      }
+    >
+      <div className="mb-2 text-xs text-[var(--color-overlay0)]">
+        {isDir ? "Folder" : "File"}: <span className="text-[var(--color-text)]">{currentName}</span>
       </div>
-    </div>
+      <input
+        ref={inputRef}
+        type="text"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); if (e.key === "Escape") onCancel(); }}
+        className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] focus:border-[var(--color-blue)] focus:outline-none"
+      />
+    </Dialog>
   );
 }
