@@ -2,7 +2,6 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 import TitleBar from "./TitleBar";
 import StatusBar from "./StatusBar";
 import LeftSidebar from "../sidebar/LeftSidebar";
-import RightSidebar from "../sidebar/RightSidebar";
 import MainArea from "../main/MainArea";
 import DevNotificationContainer from "../ui/DevNotificationContainer";
 
@@ -28,15 +27,7 @@ export default function AppLayout() {
           >
             <MainArea />
           </Panel>
-          <Separator className="w-px bg-[var(--color-surface0)] transition-colors hover:bg-[var(--color-blue)]" />
-          <Panel
-            defaultSize={"20%"}
-            minSize={"15%"}
-            maxSize={"40%"}
-            className="bg-[var(--color-mantle)]"
-          >
-            <RightSidebar />
-          </Panel>
+
         </Group>
       </div>
       <StatusBar />
