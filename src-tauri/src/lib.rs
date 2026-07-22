@@ -25,6 +25,12 @@ use tauri::Manager;
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
+use open::that;
+
+#[tauri::command]
+fn util_open_url(url: String) -> Result<(), String> {
+    that(&url).map_err(|e| e.to_string())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -966,7 +972,28 @@ fn add_worktree_local(
     Ok(())
 }
 
-fn remove_worktree_local(repo_path: &str, worktree_path: &str, force: bool) -> Result<(), String> {
+/// Resolve the branch for a given worktree path by parsing
+/// `git worktree list --porcelain` output.
+fn resolve_worktree_branch_local(repo_path: &str, worktree_path: &str) -> Result<Option<String>, String> {
+    let output = run_git_command(repo_path, &["worktree", "list", "--porcelain"])?;
+    let mut current_worktree: Option<&str> = None;
+    for line in output.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current_worktree = Some(path);
+        } else if let Some(branch_ref) = line.strip_prefix("branch ") {
+            if let Some(wt) = current_worktree {
+                if wt == worktree_path {
+                    let branch = branch_ref.trim_start_matches("refs/heads/").to_string();
+                    return Ok(Some(branch));
+                }
+            }
+            current_worktree = None;
+        }
+    }
+    Ok(None)
+}
+
+fn remove_worktree_local(repo_path: &str, worktree_path: &str, force: bool, delete_branch: bool) -> Result<(), String> {
     let mut args = vec!["worktree", "remove"];
     if force {
         args.push("--force");
@@ -974,6 +1001,12 @@ fn remove_worktree_local(repo_path: &str, worktree_path: &str, force: bool) -> R
     args.push(worktree_path);
 
     run_git_command(repo_path, &args)?;
+
+    if delete_branch {
+        if let Some(branch_name) = resolve_worktree_branch_local(repo_path, worktree_path)? {
+            run_git_command(repo_path, &["branch", "-D", &branch_name])?;
+        }
+    }
 
     Ok(())
 }
@@ -1298,12 +1331,37 @@ async fn add_worktree_ssh(
     Ok(())
 }
 
+async fn resolve_worktree_branch_ssh(
+    project_id: &str,
+    repo_path: &str,
+    worktree_path: &str,
+    state: &Arc<AppState>,
+) -> Result<Option<String>, String> {
+    let output = run_git_command_ssh(project_id, repo_path, &["worktree", "list", "--porcelain"], state).await?;
+    let mut current_worktree: Option<&str> = None;
+    for line in output.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current_worktree = Some(path);
+        } else if let Some(branch_ref) = line.strip_prefix("branch ") {
+            if let Some(wt) = current_worktree {
+                if wt == worktree_path {
+                    let branch = branch_ref.trim_start_matches("refs/heads/").to_string();
+                    return Ok(Some(branch));
+                }
+            }
+            current_worktree = None;
+        }
+    }
+    Ok(None)
+}
+
 async fn remove_worktree_ssh(
     project_id: &str,
     repo_path: &str,
     worktree_path: &str,
     force: bool,
     state: &Arc<AppState>,
+    delete_branch: bool,
 ) -> Result<(), String> {
     let mut args = vec!["worktree", "remove"];
     if force {
@@ -1312,6 +1370,12 @@ async fn remove_worktree_ssh(
     args.push(worktree_path);
 
     run_git_command_ssh(project_id, repo_path, &args, state).await?;
+
+    if delete_branch {
+        if let Some(branch_name) = resolve_worktree_branch_ssh(project_id, repo_path, worktree_path, state).await? {
+            run_git_command_ssh(project_id, repo_path, &["branch", "-D", &branch_name], state).await?;
+        }
+    }
 
     Ok(())
 }
@@ -1446,6 +1510,7 @@ async fn git_worktree_remove_async(
     project_id: String,
     worktree_path: String,
     force: Option<bool>,
+    delete_branch: Option<bool>,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let projects = {
@@ -1455,12 +1520,15 @@ async fn git_worktree_remove_async(
     let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
 
     let force = force.unwrap_or(false);
+    let delete_branch = delete_branch.unwrap_or(false);
 
     match &project.connection {
-        Connection::Local { path: repo_path } => remove_worktree_local(repo_path, &worktree_path, force),
+        Connection::Local { path: repo_path } => {
+            remove_worktree_local(repo_path, &worktree_path, force, delete_branch)
+        }
         Connection::Ssh { .. } => {
             let repo_path = get_repo_path(project);
-            remove_worktree_ssh(&project_id, &repo_path, &worktree_path, force, &state).await
+            remove_worktree_ssh(&project_id, &repo_path, &worktree_path, force, &state, delete_branch).await
         }
     }
 }
@@ -2468,6 +2536,7 @@ pub fn run() {
             pty::pty_set_active,
             pty::pty_list_sessions,
             pty::pty_register_ssh_project,
+            util_open_url,
             fs_read_dir,
             fs_read_file,
             fs_write_file,

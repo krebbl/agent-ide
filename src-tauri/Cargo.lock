@@ -55,6 +55,7 @@ dependencies = [
  "git2",
  "keyring",
  "libc",
+ "open",
  "portable-pty",
  "russh",
  "russh-keys",

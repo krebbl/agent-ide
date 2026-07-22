@@ -20,7 +20,7 @@ interface ProjectStore {
   toggleProjectExpanded: (id: string) => void;
   fetchWorktrees: (projectId: string) => Promise<void>;
   setActiveWorktree: (projectId: string, worktreeId: string) => Promise<void>;
-  removeWorktree: (projectId: string, worktreePath: string, force?: boolean) => Promise<void>;
+  removeWorktree: (projectId: string, worktreePath: string, force?: boolean, deleteBranch?: boolean) => Promise<void>;
   refreshWorktrees: (projectId: string) => Promise<void>;
   addWorktree: (projectId: string, branch: string, name: string, newBranch: boolean) => Promise<void>;
 }
@@ -279,8 +279,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     await get().refreshWorktrees(projectId);
   },
 
-  removeWorktree: async (projectId: string, worktreePath: string, force = false) => {
-    await invoke("git_worktree_remove_async", { projectId, worktreePath, force });
+  removeWorktree: async (projectId: string, worktreePath: string, force = false, deleteBranch = false) => {
+    await invoke("git_worktree_remove_async", { projectId, worktreePath, force, deleteBranch });
     await get().refreshWorktrees(projectId);
   },
 

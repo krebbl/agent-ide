@@ -20,10 +20,11 @@ function WorktreeContextMenu({
   projectType: "local" | "ssh";
   isActive: boolean;
   onClose: () => void;
-  onRemove: (force: boolean) => void;
+  onRemove: (force: boolean, deleteBranch: boolean) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [deleteBranch, setDeleteBranch] = useState(false);
 
   const handleCopyPath = async () => {
     try {
@@ -64,9 +65,20 @@ function WorktreeContextMenu({
               This worktree has uncommitted changes.
             </p>
           )}
+          <label className="mb-3 flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={deleteBranch}
+              onChange={(e) => setDeleteBranch(e.target.checked)}
+              className="mt-0.5 accent-[var(--color-blue)]"
+            />
+            <span className="text-xs text-[var(--color-subtext1)]">
+              Also delete branch <span className="font-mono">{worktree.branch}</span>
+            </span>
+          </label>
           <div className="flex gap-2">
             <button
-              onClick={() => { onRemove(false); onClose(); }}
+              onClick={() => { onRemove(false, deleteBranch); onClose(); }}
               disabled={worktree.status === "dirty"}
               className="rounded-md bg-[var(--color-red)]/20 px-3 py-1 text-xs text-[var(--color-red)] hover:bg-[var(--color-red)]/30 disabled:opacity-50"
             >
@@ -74,7 +86,7 @@ function WorktreeContextMenu({
             </button>
             {worktree.status === "dirty" && (
               <button
-                onClick={() => { onRemove(true); onClose(); }}
+                onClick={() => { onRemove(true, deleteBranch); onClose(); }}
                 className="rounded-md bg-[var(--color-peach)]/20 px-3 py-1 text-xs text-[var(--color-peach)] hover:bg-[var(--color-peach)]/30"
               >
                 Force Remove
@@ -149,7 +161,7 @@ function WorktreeItem({
   projectType: "local" | "ssh";
   isActive: boolean;
   onActivate: () => void;
-  onRemove: (force: boolean) => void;
+  onRemove: (force: boolean, deleteBranch: boolean) => void;
 }) {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -317,8 +329,8 @@ function ProjectItem({
     refreshWorktrees(project.id);
   };
 
-  const handleRemoveWorktree = async (worktreePath: string, force: boolean) => {
-    await removeWorktree(project.id, worktreePath, force);
+  const handleRemoveWorktree = async (worktreePath: string, force: boolean, deleteBranch: boolean) => {
+    await removeWorktree(project.id, worktreePath, force, deleteBranch);
   };
 
   return (
@@ -406,7 +418,7 @@ function ProjectItem({
               projectType={project.type}
               isActive={wt.id === selectedWorktreeId && project.id === activeProjectId}
               onActivate={() => setActiveWorktree(project.id, wt.id)}
-              onRemove={(force) => handleRemoveWorktree(wt.path, force)}
+              onRemove={(force, deleteBranch) => handleRemoveWorktree(wt.path, force, deleteBranch)}
             />
           ))}
         </div>

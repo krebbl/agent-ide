@@ -198,11 +198,23 @@ export default function TerminalView({
       cursorBlink: true,
       convertEol: true,
       allowTransparency: true,
+      linkHandler: {
+        activate: async (_event: MouseEvent, uri: string) => {
+          await invoke("util_open_url", { url: uri });
+        },
+        hover: () => {},
+        leave: () => {},
+      },
     });
 
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
-    terminal.loadAddon(new WebLinksAddon());
+    terminal.loadAddon(
+      new WebLinksAddon(async (_event, uri) => {
+        await invoke("util_open_url", { url: uri });
+      }),
+    );
+
     terminal.open(container);
 
     xtermRef.current = terminal;
