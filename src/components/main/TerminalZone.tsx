@@ -4,7 +4,7 @@ import {
   X,
   ChevronDown,
   ChevronUp,
-  Circle,
+  ChevronRight,
   Loader2,
 } from "lucide-react";
 import { useEffect, useMemo, useCallback } from "react";
@@ -110,18 +110,18 @@ export default function TerminalZone({
                 }`}
                 title={session.cwd}
               >
-                {session.needsInput && (
-                  <Circle
-                    size={7}
-                    className="fill-[var(--color-green)] text-[var(--color-green)]"
-                    aria-label="Needs input"
-                  />
-                )}
-                {session.isBusy && !session.needsInput && (
+                {session.isBusy && (
                   <Loader2
                     size={12}
-                    className="animate-spin text-[var(--color-yellow)]"
+                    className="animate-spin text-[var(--color-blue)]"
                     aria-label="Busy"
+                  />
+                )}
+                {!session.isBusy && (
+                  <ChevronRight
+                    size={12}
+                    className="text-[var(--color-green)]"
+                    aria-label="Ready"
                   />
                 )}
                 <span className="max-w-[120px] truncate">{session.title}</span>
