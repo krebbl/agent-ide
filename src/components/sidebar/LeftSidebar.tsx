@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { FolderPlus, Folder, Server, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, MoreVertical, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus } from "lucide-react";
+import { FolderPlus, Folder, Server, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import { useTerminalStore } from "../../stores/terminalStore";
@@ -248,15 +248,6 @@ function WorktreeItem({
                 {worktree.behind}
               </span>
             )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowMenu(true);
-              }}
-              className="shrink-0 text-[var(--color-overlay0)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-[var(--color-text)]"
-            >
-              <MoreVertical size={10} />
-            </button>
           </div>
           <span
             className={`h-1.5 w-1.5 rounded-full ${
