@@ -29,6 +29,7 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
   const [selectedBranch, setSelectedBranch] = useState("");
   const [newBranchName, setNewBranchName] = useState("");
   const [worktreeName, setWorktreeName] = useState("");
+  const [worktreeNameDirty, setWorktreeNameDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [branchesError, setBranchesError] = useState<string | null>(null);
   const [branchesLoading, setBranchesLoading] = useState(false);
@@ -56,11 +57,11 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
   }, [projectId]);
 
   useEffect(() => {
-    if (branch && !worktreeName) {
+    if (branch && !worktreeNameDirty) {
       const generated = generateWorktreeName(branch, existingNames);
       setWorktreeName(generated);
     }
-  }, [branch]);
+  }, [branch, worktreeNameDirty, existingNames]);
 
   const branchOptions = branches.map((b) => ({
     value: b.name,
@@ -117,7 +118,7 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
           <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">Branch</label>
           <div className="flex gap-2 mb-2">
             <button
-              onClick={() => setMode("existing")}
+              onClick={() => { setMode("existing"); setWorktreeNameDirty(false); }}
               className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                 mode === "existing"
                   ? "bg-[var(--color-blue)]/20 text-[var(--color-blue)]"
@@ -127,7 +128,7 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
               Existing Branch
             </button>
             <button
-              onClick={() => setMode("new")}
+              onClick={() => { setMode("new"); setWorktreeNameDirty(false); }}
               className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                 mode === "new"
                   ? "bg-[var(--color-blue)]/20 text-[var(--color-blue)]"
@@ -173,7 +174,10 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
           <input
             type="text"
             value={worktreeName}
-            onChange={(e) => setWorktreeName(e.target.value.replace(/\s/g, "-").replace(/[^a-zA-Z0-9_-]/g, ""))}
+            onChange={(e) => {
+              setWorktreeNameDirty(true);
+              setWorktreeName(e.target.value.replace(/\s/g, "-").replace(/[^a-zA-Z0-9_-]/g, ""));
+            }}
             pattern="[a-zA-Z0-9_-]*"
             placeholder="auto-generated from branch"
             className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
