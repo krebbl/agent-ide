@@ -75,6 +75,19 @@ export default function TerminalZone({
     null;
 
   useEffect(() => {
+    if (!activeTab && visibleTabs.length > 0 && effectiveActiveId) {
+      const tab = visibleTabs[visibleTabs.length - 1];
+      const focused = findLeaf(tab.rootPane, tab.focusedPaneId);
+      if (focused) {
+        useTerminalStore.setState({
+          activeTabId: tab.id,
+          activeSessionId: focused.sessionId,
+        });
+      }
+    }
+  }, [activeTab, visibleTabs, effectiveActiveId]);
+
+  useEffect(() => {
     if (isCollapsed) {
       invoke("pty_set_active", { ptyId: null }).catch(() => {});
       return;

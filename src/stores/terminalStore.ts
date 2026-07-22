@@ -343,7 +343,15 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       if (newRoot === null) {
         tabs = state.tabs.filter((t) => t.id !== tab.id);
         if (activeTabId === tab.id) {
-          activeTabId = tabs.length > 0 ? tabs[tabs.length - 1].id : null;
+          const sameWorktreeTabs = tabs.filter(
+            (t) =>
+              t.projectId === tab.projectId &&
+              t.worktreeId === tab.worktreeId,
+          );
+          activeTabId =
+            sameWorktreeTabs.length > 0
+              ? sameWorktreeTabs[sameWorktreeTabs.length - 1].id
+              : null;
           activeSessionId = null;
           if (activeTabId) {
             const newActive = tabs.find((t) => t.id === activeTabId);
