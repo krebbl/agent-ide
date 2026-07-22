@@ -11,14 +11,12 @@ function WorktreeContextMenu({
   worktree,
   projectId,
   projectType,
-  isActive,
   onClose,
   onRemove,
 }: {
   worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
   projectId: string;
   projectType: "local" | "ssh";
-  isActive: boolean;
   onClose: () => void;
   onRemove: (force: boolean, deleteBranch: boolean) => void;
 }) {
@@ -104,10 +102,8 @@ function WorktreeContextMenu({
     );
   }
 
-  const isDisabled = worktree.isMain || isActive;
-  const disableReason = worktree.isMain
-    ? "Cannot remove the main worktree"
-    : "Cannot remove the active worktree";
+  const isDisabled = worktree.isMain;
+  const disableReason = "Cannot remove the main worktree";
 
   return (
     <div className="absolute z-50 min-w-[180px] rounded-md border border-[var(--color-surface0)] bg-[var(--color-mantle)] py-1 shadow-xl">
@@ -268,7 +264,6 @@ function WorktreeItem({
             worktree={worktree}
             projectId={projectId}
             projectType={projectType}
-            isActive={isActive}
             onClose={() => setShowMenu(false)}
             onRemove={onRemove}
           />

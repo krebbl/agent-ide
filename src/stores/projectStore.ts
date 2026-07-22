@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { Project, Worktree } from "../types";
+import { useTerminalStore } from "./terminalStore";
 
 interface ProjectStore {
   projects: Project[];
@@ -280,7 +281,21 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   removeWorktree: async (projectId: string, worktreePath: string, force = false, deleteBranch = false) => {
+    const project = get().projects.find((p) => p.id === projectId);
+    const wt = project?.worktrees.find((w) => w.path === worktreePath);
+
     await invoke("git_worktree_remove_async", { projectId, worktreePath, force, deleteBranch });
+
+    if (wt) {
+      const terminalStore = useTerminalStore.getState();
+      const sessionsToClose = terminalStore.sessions.filter(
+        (s) => s.projectId === projectId && s.worktreeId === wt.id,
+      );
+      for (const s of sessionsToClose) {
+        await terminalStore.removeSession(s.id);
+      }
+    }
+
     await get().refreshWorktrees(projectId);
   },
 
