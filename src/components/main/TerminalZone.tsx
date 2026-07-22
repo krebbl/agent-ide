@@ -1,4 +1,11 @@
-import { Terminal, Plus, X, ChevronDown, ChevronUp } from "lucide-react";
+import {
+  Terminal,
+  Plus,
+  X,
+  ChevronDown,
+  ChevronUp,
+  Circle,
+} from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTerminalStore } from "../../stores/terminalStore";
@@ -81,6 +88,13 @@ export default function TerminalZone({
                 }`}
                 title={session.cwd}
               >
+                {session.needsInput && (
+                  <Circle
+                    size={7}
+                    className="fill-[var(--color-green)] text-[var(--color-green)]"
+                    aria-label="Needs input"
+                  />
+                )}
                 <span className="max-w-[120px] truncate">{session.title}</span>
                 <button
                   onClick={(e) => {
