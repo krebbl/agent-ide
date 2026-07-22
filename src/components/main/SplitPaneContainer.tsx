@@ -8,18 +8,21 @@ interface SplitPaneContainerProps {
   pane: Pane;
   focusedPaneId: string;
   depth?: number;
+  isWorktreeHidden?: boolean;
 }
 
 export default function SplitPaneContainer({
   pane,
   focusedPaneId,
   depth = 0,
+  isWorktreeHidden = false,
 }: SplitPaneContainerProps) {
   if (pane.type === "leaf") {
     return (
       <LeafPaneView
         pane={pane}
         isFocused={pane.id === focusedPaneId}
+        isWorktreeHidden={isWorktreeHidden}
       />
     );
   }
@@ -29,6 +32,7 @@ export default function SplitPaneContainer({
       pane={pane}
       focusedPaneId={focusedPaneId}
       depth={depth}
+      isWorktreeHidden={isWorktreeHidden}
     />
   );
 }
@@ -36,9 +40,11 @@ export default function SplitPaneContainer({
 function LeafPaneView({
   pane,
   isFocused,
+  isWorktreeHidden,
 }: {
   pane: { type: "leaf"; id: string; sessionId: string };
   isFocused: boolean;
+  isWorktreeHidden: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const focusPane = useTerminalStore((s) => s.focusPane);
@@ -60,7 +66,7 @@ function LeafPaneView({
         sessionId={pane.sessionId}
         ptyId={ptyId}
         isFocused={isFocused}
-        isCollapsed={false}
+        isCollapsed={isWorktreeHidden}
       />
     </div>
   );
@@ -70,10 +76,12 @@ function SplitPaneView({
   pane,
   focusedPaneId,
   depth,
+  isWorktreeHidden,
 }: {
   pane: { type: "split"; id: string; direction: "horizontal" | "vertical"; children: [Pane, Pane]; sizes: [number, number] };
   focusedPaneId: string;
   depth: number;
+  isWorktreeHidden: boolean;
 }) {
   const resizePane = useTerminalStore((s) => s.resizePane);
 
@@ -99,6 +107,7 @@ function SplitPaneView({
           pane={pane.children[0]}
           focusedPaneId={focusedPaneId}
           depth={depth + 1}
+          isWorktreeHidden={isWorktreeHidden}
         />
       </Panel>
       <Separator
@@ -113,6 +122,7 @@ function SplitPaneView({
           pane={pane.children[1]}
           focusedPaneId={focusedPaneId}
           depth={depth + 1}
+          isWorktreeHidden={isWorktreeHidden}
         />
       </Panel>
     </Group>

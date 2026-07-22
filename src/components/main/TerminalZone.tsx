@@ -273,21 +273,28 @@ export default function TerminalZone({
             )}
           </div>
         )}
-        {visibleTabs.map((tab) => (
-          <div
-            key={tab.id}
-            className={
-              tab.id === effectiveActiveId
-                ? "h-full w-full"
-                : "absolute inset-0 hidden"
-            }
-          >
-            <SplitPaneContainer
-              pane={tab.rootPane}
-              focusedPaneId={tab.focusedPaneId}
-            />
-          </div>
-        ))}
+        {tabs.map((tab) => {
+          const tabMatchesWorktree =
+            tab.projectId === activeProjectId &&
+            tab.worktreeId === selectedWorktreeId;
+          const isActiveTab = tabMatchesWorktree && tab.id === effectiveActiveId;
+          return (
+            <div
+              key={tab.id}
+              className={
+                isActiveTab
+                  ? "h-full w-full"
+                  : "absolute inset-0 hidden"
+              }
+            >
+              <SplitPaneContainer
+                pane={tab.rootPane}
+                focusedPaneId={tab.focusedPaneId}
+                isWorktreeHidden={!tabMatchesWorktree}
+              />
+            </div>
+          );
+        })}
       </div>
     </div>
   );
