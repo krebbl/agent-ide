@@ -46,6 +46,30 @@ export interface TerminalSession {
   processRunning?: boolean;
 }
 
+export interface LeafPane {
+  type: "leaf";
+  id: string;
+  sessionId: string;
+}
+
+export interface SplitPane {
+  type: "split";
+  id: string;
+  direction: "horizontal" | "vertical";
+  children: [Pane, Pane];
+  sizes: [number, number];
+}
+
+export type Pane = LeafPane | SplitPane;
+
+export interface TerminalTab {
+  id: string;
+  rootPane: Pane;
+  focusedPaneId: string;
+  projectId?: string;
+  worktreeId?: string;
+}
+
 export interface DaemonSessionMeta {
   sessionId: string;
   sessionType: string;

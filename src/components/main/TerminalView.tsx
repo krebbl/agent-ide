@@ -16,14 +16,14 @@ import "@xterm/xterm/css/xterm.css";
 interface TerminalViewProps {
   sessionId: string;
   ptyId: string;
-  isActive: boolean;
+  isFocused: boolean;
   isCollapsed: boolean;
 }
 
 export default function TerminalView({
   sessionId,
   ptyId,
-  isActive,
+  isFocused,
   isCollapsed,
 }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -31,8 +31,9 @@ export default function TerminalView({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const rafRef = useRef<number | null>(null);
   const processTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isVisible = isActive && !isCollapsed;
+  const isVisible = !isCollapsed;
   const isVisibleRef = useRef(isVisible);
+  const isFocusedRef = useRef(isFocused);
   const isWindowFocusedRef = useRef(document.hasFocus());
   const wasBusyRef = useRef<boolean>(false);
   const processRunningRef = useRef<boolean>(false);
@@ -42,6 +43,15 @@ export default function TerminalView({
   useEffect(() => {
     isVisibleRef.current = isVisible;
   }, [isVisible]);
+
+  useEffect(() => {
+    isFocusedRef.current = isFocused;
+    const terminal = xtermRef.current;
+    if (!terminal) return;
+    if (isFocused) {
+      terminal.focus();
+    }
+  }, [isFocused]);
 
   useEffect(() => {
     const handleFocus = () => {
@@ -91,7 +101,6 @@ export default function TerminalView({
   };
 
   const endProcess = () => {
-    console.log(`[TerminalView.endProcess] session ${sessionId}`);
     processRunningRef.current = false;
     wasBusyRef.current = false;
     if (processTimeoutRef.current) {
@@ -107,12 +116,10 @@ export default function TerminalView({
   };
 
   const handleBusy = () => {
-    console.log(`[TerminalView.handleBusy] session ${sessionId}`);
     startProcess();
   };
 
   const startProcess = () => {
-    console.log(`[TerminalView.startProcess] session ${sessionId}`);
     processRunningRef.current = true;
     wasBusyRef.current = true;
     resetIdleState();
@@ -132,7 +139,6 @@ export default function TerminalView({
 
   const extendProcess = () => {
     if (!processRunningRef.current) return;
-    console.log(`[TerminalView.extendProcess] session ${sessionId}`);
     if (processTimeoutRef.current) {
       clearTimeout(processTimeoutRef.current);
     }
@@ -220,7 +226,6 @@ export default function TerminalView({
     xtermRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
-    console.log(`[TerminalView] registering ptyId=${ptyId} sessionId=${sessionId}`);
     registerTerminal(ptyId, {
       onOutput: (data) => {
         terminal.write(data);
@@ -230,9 +235,6 @@ export default function TerminalView({
         endProcess();
         const { sessions } = useTerminalStore.getState();
         const session = sessions.find((s) => s.id === sessionId);
-        console.log(
-          `[TerminalView.onExit] sessionId=${sessionId} isVisible=${isVisibleRef.current} title=${session?.title}`,
-        );
         if (session && shouldNotify()) {
           notify({
             title: "Terminal finished",
@@ -259,9 +261,6 @@ export default function TerminalView({
       const base64 = btoa(binary);
       invoke("pty_write", { sessionId: ptyId, data: base64 }).catch(() => {});
       if (data === "\r" || data.includes("\n")) {
-        console.log(
-          `[TerminalView] Enter pressed for session ${sessionId} (ptyId=${ptyId}), starting process`,
-        );
         startProcess();
       }
     };
@@ -272,6 +271,10 @@ export default function TerminalView({
     resizeObserver.observe(container);
 
     rafRef.current = requestAnimationFrame(() => fitAndResize(true));
+
+    if (isFocused) {
+      terminal.focus();
+    }
 
     return () => {
       if (rafRef.current) {
@@ -301,7 +304,7 @@ export default function TerminalView({
   return (
     <div
       ref={containerRef}
-      className={`absolute inset-0 h-full w-full ${isVisible ? "" : "hidden"}`}
+      className={`h-full w-full ${isVisible ? "" : "hidden"}`}
     />
   );
 }

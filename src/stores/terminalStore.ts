@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import { DaemonSessionMeta } from "../types";
+import { DaemonSessionMeta, Pane, LeafPane, SplitPane, TerminalTab } from "../types";
 import { useProjectStore } from "./projectStore";
 
 export interface TerminalSession {
@@ -18,8 +18,11 @@ export interface TerminalSession {
 
 interface TerminalStore {
   sessions: TerminalSession[];
+  tabs: TerminalTab[];
+  activeTabId: string | null;
   activeSessionId: string | null;
   isCollapsed: boolean;
+
   addSession: (
     cwd?: string,
     type?: "local" | "ssh",
@@ -39,6 +42,12 @@ interface TerminalStore {
     activity: { isBusy: boolean; needsInput: boolean },
   ) => void;
   setProcessRunning: (id: string, running: boolean) => void;
+
+  splitPane: (sessionId: string, direction: "horizontal" | "vertical") => Promise<void>;
+  closePane: (paneId: string) => Promise<void>;
+  focusPane: (paneId: string) => void;
+  navigatePane: (direction: "up" | "down" | "left" | "right") => void;
+  resizePane: (paneId: string, sizes: [number, number]) => void;
 }
 
 function basename(path: string): string {
@@ -93,8 +102,115 @@ function resolveCwd(
   };
 }
 
+export function findLeaf(root: Pane, paneId: string): LeafPane | null {
+  if (root.type === "leaf") {
+    return root.id === paneId ? root : null;
+  }
+  return findLeaf(root.children[0], paneId) ?? findLeaf(root.children[1], paneId);
+}
+
+export function findLeafBySession(root: Pane, sessionId: string): LeafPane | null {
+  if (root.type === "leaf") {
+    return root.sessionId === sessionId ? root : null;
+  }
+  return findLeafBySession(root.children[0], sessionId) ?? findLeafBySession(root.children[1], sessionId);
+}
+
+export function collectLeaves(root: Pane): LeafPane[] {
+  if (root.type === "leaf") return [root];
+  return [...collectLeaves(root.children[0]), ...collectLeaves(root.children[1])];
+}
+
+function getFirstLeaf(root: Pane): LeafPane {
+  if (root.type === "leaf") return root;
+  return getFirstLeaf(root.children[0]);
+}
+
+function getLastLeaf(root: Pane): LeafPane {
+  if (root.type === "leaf") return root;
+  return getLastLeaf(root.children[1]);
+}
+
+function replacePane(root: Pane, targetId: string, replacement: Pane): Pane {
+  if (root.id === targetId) return replacement;
+  if (root.type === "split") {
+    return {
+      ...root,
+      children: [
+        replacePane(root.children[0], targetId, replacement) as typeof root.children[0],
+        replacePane(root.children[1], targetId, replacement) as typeof root.children[1],
+      ],
+    };
+  }
+  return root;
+}
+
+function navigateFromLeaf(
+  root: Pane,
+  focusedId: string,
+  direction: "up" | "down" | "left" | "right",
+): string | null {
+  const horizTarget = direction === "right" ? 1 : 0;
+  const vertTarget = direction === "down" ? 1 : 0;
+  function walk(
+    node: Pane,
+    ancestors: { split: SplitPane; index: 0 | 1 }[],
+  ): string | null {
+    if (node.type === "leaf" && node.id === focusedId) {
+      for (let i = ancestors.length - 1; i >= 0; i--) {
+        const { split, index } = ancestors[i];
+        if (direction === "left" || direction === "right") {
+          if (split.direction !== "horizontal") continue;
+          const targetIdx = horizTarget;
+          if (index === targetIdx) continue;
+          const drill = targetIdx === 0 ? getFirstLeaf : getLastLeaf;
+          return drill(split.children[targetIdx]).id;
+        } else {
+          if (split.direction !== "vertical") continue;
+          const targetIdx = vertTarget;
+          if (index === targetIdx) continue;
+          const drill = targetIdx === 0 ? getFirstLeaf : getLastLeaf;
+          return drill(split.children[targetIdx]).id;
+        }
+      }
+      return null;
+    }
+    if (node.type === "split") {
+      for (let ci = 0; ci < 2; ci++) {
+        const result = walk(node.children[ci], [
+          ...ancestors,
+          { split: node, index: ci as 0 | 1 },
+        ]);
+        if (result !== null) return result;
+      }
+    }
+    return null;
+  }
+
+  return walk(root, []);
+}
+
+function removePaneFromTree(root: Pane, paneId: string): Pane | null {
+  if (root.type === "leaf") {
+    return root.id === paneId ? null : root;
+  }
+  const left = removePaneFromTree(root.children[0], paneId);
+  const right = removePaneFromTree(root.children[1], paneId);
+
+  if (left === null && right === null) return null;
+  if (left === null) return right!;
+  if (right === null) return left!;
+
+  if (left !== root.children[0] || right !== root.children[1]) {
+    return { ...root, children: [left, right] };
+  }
+  return root;
+}
+
 export const useTerminalStore = create<TerminalStore>((set, get) => ({
   sessions: [],
+  tabs: [],
+  activeTabId: null,
   activeSessionId: null,
   isCollapsed: false,
 
@@ -114,7 +230,36 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       projectStore.setActiveProject(session.projectId);
     }
 
-    set({ activeSessionId: session.id });
+    const tab = get().tabs.find((t) => t.id === get().activeTabId);
+    if (tab) {
+      const leaf = findLeafBySession(tab.rootPane, sessionId);
+      if (leaf) {
+        set((state) => ({
+          activeTabId: tab.id,
+          activeSessionId: sessionId,
+          tabs: state.tabs.map((t) =>
+            t.id === tab.id ? { ...t, focusedPaneId: leaf.id } : t,
+          ),
+        }));
+        return;
+      }
+    }
+
+    const matchingTab = get().tabs.find((t) => {
+      return findLeafBySession(t.rootPane, sessionId) !== null;
+    });
+    if (matchingTab) {
+      const matchingLeaf = findLeafBySession(matchingTab.rootPane, sessionId);
+      set((state) => ({
+        activeTabId: matchingTab.id,
+        activeSessionId: sessionId,
+        tabs: state.tabs.map((t) =>
+          t.id === matchingTab.id && matchingLeaf
+            ? { ...t, focusedPaneId: matchingLeaf.id }
+            : t,
+        ),
+      }));
+    }
   },
 
   addSession: async (cwd, type, projectId, worktreeId) => {
@@ -136,13 +281,30 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       sessionType: resolvedType,
     });
 
-    const id = crypto.randomUUID();
+    const sessionId = crypto.randomUUID();
+    const paneId = crypto.randomUUID();
+    const tabId = crypto.randomUUID();
     const displayCwd = resolvedCwd ?? "~";
+
+    const leaf: LeafPane = {
+      type: "leaf",
+      id: paneId,
+      sessionId,
+    };
+
+    const tab: TerminalTab = {
+      id: tabId,
+      rootPane: leaf,
+      focusedPaneId: paneId,
+      projectId: resolvedProjectId,
+      worktreeId: resolvedWorktreeId,
+    };
+
     set((state) => ({
       sessions: [
         ...state.sessions,
         {
-          id,
+          id: sessionId,
           ptyId,
           cwd: displayCwd,
           title: basename(displayCwd),
@@ -153,25 +315,68 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           needsInput: true,
         },
       ],
-      activeSessionId: id,
+      tabs: [...state.tabs, tab],
+      activeTabId: tabId,
+      activeSessionId: sessionId,
     }));
   },
 
   removeSession: async (id) => {
     const session = get().sessions.find((s) => s.id === id);
+    if (!session) return;
+
+    const tab = get().tabs.find((t) =>
+      findLeafBySession(t.rootPane, id) !== null,
+    );
+    if (!tab) return;
+
+    const leaf = findLeafBySession(tab.rootPane, id);
+    if (!leaf) return;
+
+    const newRoot = removePaneFromTree(tab.rootPane, leaf.id);
+
     set((state) => {
-      const remaining = state.sessions.filter((s) => s.id !== id);
-      const activeSessionId =
-        state.activeSessionId === id
-          ? remaining.length > 0
-            ? remaining[remaining.length - 1].id
-            : null
-          : state.activeSessionId;
-      return { sessions: remaining, activeSessionId };
+      let tabs = state.tabs;
+      let activeTabId = state.activeTabId;
+      let activeSessionId = state.activeSessionId;
+
+      if (newRoot === null) {
+        tabs = state.tabs.filter((t) => t.id !== tab.id);
+        if (activeTabId === tab.id) {
+          activeTabId = tabs.length > 0 ? tabs[tabs.length - 1].id : null;
+          activeSessionId = null;
+          if (activeTabId) {
+            const newActive = tabs.find((t) => t.id === activeTabId);
+            if (newActive) {
+              const focused = findLeaf(newActive.rootPane, newActive.focusedPaneId);
+              activeSessionId = focused?.sessionId ?? null;
+            }
+          }
+        }
+      } else {
+        const newFocusedPaneId = findLeaf(newRoot, tab.focusedPaneId)
+          ? tab.focusedPaneId
+          : getFirstLeaf(newRoot).id;
+        tabs = state.tabs.map((t) =>
+          t.id === tab.id
+            ? { ...t, rootPane: newRoot, focusedPaneId: newFocusedPaneId }
+            : t,
+        );
+        if (activeSessionId === id && activeTabId === tab.id) {
+          const newFocused = findLeaf(newRoot, newFocusedPaneId);
+          activeSessionId = newFocused?.sessionId ?? null;
+        }
+      }
+
+      return {
+        sessions: state.sessions.filter((s) => s.id !== id),
+        tabs,
+        activeTabId,
+        activeSessionId,
+      };
     });
-    if (session) {
-      await invoke("pty_kill", { sessionId: session.ptyId }).catch(() => {});
-    }
+
+    await invoke("pty_kill", { sessionId: session.ptyId }).catch(() => {});
   },
 
   restoreSessions: async () => {
@@ -193,10 +398,27 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           isBusy: meta.isBusy,
           needsInput: !meta.isBusy,
         }));
+
       if (toAdd.length === 0) return state;
+
+      const newTabs: TerminalTab[] = toAdd.map((s) => {
+        const paneId = crypto.randomUUID();
+        const leaf: LeafPane = { type: "leaf", id: paneId, sessionId: s.id };
+        return {
+          id: crypto.randomUUID(),
+          rootPane: leaf,
+          focusedPaneId: paneId,
+          projectId: s.projectId,
+          worktreeId: s.worktreeId,
+        };
+      });
+
       return {
         sessions: [...state.sessions, ...toAdd],
-        activeSessionId: state.activeSessionId ?? toAdd[toAdd.length - 1].id,
+        tabs: [...state.tabs, ...newTabs],
+        activeTabId: state.activeTabId ?? newTabs[newTabs.length - 1]?.id ?? null,
+        activeSessionId:
+          state.activeSessionId ?? toAdd[toAdd.length - 1]?.id ?? null,
       };
     });
   },
@@ -237,4 +459,146 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         s.id === id ? { ...s, processRunning: running } : s,
       ),
     })),
+
+  splitPane: async (sessionId, direction) => {
+    const state = get();
+    const tab = state.tabs.find((t) => t.id === state.activeTabId);
+    if (!tab) return;
+
+    const existingLeaf = findLeafBySession(tab.rootPane, sessionId);
+    if (!existingLeaf) return;
+
+    const session = state.sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+
+    const ptyId = await invoke<string>("pty_spawn", {
+      cwd: session.cwd,
+      cols: 80,
+      rows: 24,
+      projectId: session.projectId,
+      worktreeId: session.worktreeId,
+      sessionType: session.type,
+    });
+
+    const newSessionId = crypto.randomUUID();
+    const newPaneId = crypto.randomUUID();
+    const newLeaf: LeafPane = {
+      type: "leaf",
+      id: newPaneId,
+      sessionId: newSessionId,
+    };
+
+    const splitId = crypto.randomUUID();
+    const split: SplitPane = {
+      type: "split",
+      id: splitId,
+      direction,
+      children: [existingLeaf, newLeaf],
+      sizes: [50, 50],
+    };
+
+    const newRoot = replacePane(tab.rootPane, existingLeaf.id, split);
+
+    set((state) => ({
+      sessions: [
+        ...state.sessions,
+        {
+          id: newSessionId,
+          ptyId,
+          cwd: session.cwd,
+          title: basename(session.cwd),
+          type: session.type,
+          projectId: session.projectId,
+          worktreeId: session.worktreeId,
+          isBusy: false,
+          needsInput: true,
+        },
+      ],
+      tabs: state.tabs.map((t) =>
+        t.id === tab.id
+          ? { ...t, rootPane: newRoot, focusedPaneId: newPaneId }
+          : t,
+      ),
+      activeSessionId: newSessionId,
+    }));
+  },
+
+  closePane: async (paneId) => {
+    const state = get();
+    const tab = state.tabs.find((t) => t.id === state.activeTabId);
+    if (!tab) return;
+
+    const leaf = findLeaf(tab.rootPane, paneId);
+    if (!leaf) return;
+
+    await get().removeSession(leaf.sessionId);
+  },
+
+  focusPane: (paneId) => {
+    set((state) => {
+      const tab = state.tabs.find((t) => t.id === state.activeTabId);
+      if (!tab) return state;
+
+      const leaf = findLeaf(tab.rootPane, paneId);
+      if (!leaf) return state;
+
+      return {
+        tabs: state.tabs.map((t) =>
+          t.id === tab.id ? { ...t, focusedPaneId: paneId } : t,
+        ),
+        activeSessionId: leaf.sessionId,
+      };
+    });
+  },
+
+  navigatePane: (direction) => {
+    set((state) => {
+      const tab = state.tabs.find((t) => t.id === state.activeTabId);
+      if (!tab) return state;
+
+      const nextPaneId = navigateFromLeaf(
+        tab.rootPane,
+        tab.focusedPaneId,
+        direction,
+      );
+      if (!nextPaneId) return state;
+
+      const leaf = findLeaf(tab.rootPane, nextPaneId);
+      if (!leaf) return state;
+
+      return {
+        tabs: state.tabs.map((t) =>
+          t.id === tab.id ? { ...t, focusedPaneId: nextPaneId } : t,
+        ),
+        activeSessionId: leaf.sessionId,
+      };
+    });
+  },
+
+  resizePane: (paneId, sizes) => {
+    set((state) => {
+      const tab = state.tabs.find((t) => t.id === state.activeTabId);
+      if (!tab) return state;
+
+      function updateSizes(root: Pane): Pane {
+        if (root.id === paneId && root.type === "split") {
+          return { ...root, sizes };
+        }
+        if (root.type === "split") {
+          const newLeft = updateSizes(root.children[0]);
+          const newRight = updateSizes(root.children[1]);
+          if (newLeft !== root.children[0] || newRight !== root.children[1]) {
+            return { ...root, children: [newLeft, newRight] };
+          }
+        }
+        return root;
+      }
+
+      return {
+        tabs: state.tabs.map((t) =>
+          t.id === tab.id ? { ...t, rootPane: updateSizes(t.rootPane) } : t,
+        ),
+      };
+    });
+  },
 }));
