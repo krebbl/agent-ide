@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronUp,
   Circle,
+  Loader2,
 } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -93,6 +94,13 @@ export default function TerminalZone({
                     size={7}
                     className="fill-[var(--color-green)] text-[var(--color-green)]"
                     aria-label="Needs input"
+                  />
+                )}
+                {session.isBusy && !session.needsInput && (
+                  <Loader2
+                    size={12}
+                    className="animate-spin text-[var(--color-yellow)]"
+                    aria-label="Busy"
                   />
                 )}
                 <span className="max-w-[120px] truncate">{session.title}</span>
