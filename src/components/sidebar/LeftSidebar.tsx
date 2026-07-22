@@ -160,6 +160,9 @@ function WorktreeItem({
   onRemove: (force: boolean, deleteBranch: boolean) => void;
 }) {
   const [showMenu, setShowMenu] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
+  const [infoPos, setInfoPos] = useState({ top: 0, left: 0 });
+  const itemRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const activity = useTerminalStore((s) => {
     return s.sessions.reduce<"idle" | "busy" | "input">((state, session) => {
@@ -198,14 +201,22 @@ function WorktreeItem({
   return (
     <div className="relative">
       <div
-        className={`group flex items-start gap-1.5 px-3 py-1 cursor-pointer transition-colors ${
+        ref={itemRef}
+        className={`group relative flex items-start gap-1.5 px-3 py-1 cursor-pointer transition-colors ${
           isActive
             ? "bg-[var(--color-surface0)] text-[var(--color-text)]"
             : "text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/50"
         }`}
         onClick={onActivate}
         onContextMenu={handleContextMenu}
-        title={worktree.path}
+        onMouseEnter={() => {
+          if (itemRef.current) {
+            const rect = itemRef.current.getBoundingClientRect();
+            setInfoPos({ top: rect.top, left: rect.right + 8 });
+          }
+          setShowInfo(true);
+        }}
+        onMouseLeave={() => setShowInfo(false)}
       >
         <div className="relative shrink-0 pt-0.5">
           {activity === "busy" ? (
@@ -257,7 +268,17 @@ function WorktreeItem({
             }`}
           />
         </div>
+
       </div>
+      {showInfo && (
+        <div
+          className="pointer-events-none fixed z-40 rounded-md border border-[var(--color-surface0)] bg-[var(--color-mantle)] px-2.5 py-1.5 shadow-lg whitespace-nowrap"
+          style={{ top: infoPos.top, left: infoPos.left }}
+        >
+          <span className="block text-xs font-medium text-[var(--color-text)]">{worktreeName}</span>
+          <span className="block text-[10px] text-[var(--color-overlay1)]">{worktree.branch}</span>
+        </div>
+      )}
       {showMenu && (
         <div ref={menuRef}>
           <WorktreeContextMenu
