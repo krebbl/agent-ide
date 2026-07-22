@@ -2550,28 +2550,6 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let state: Arc<AppState> = window.state::<Arc<AppState>>().inner().clone();
-                let _pty_client: Arc<pty_client::PtyClient> = window.state::<Arc<pty_client::PtyClient>>().inner().clone();
-                let handle = window.app_handle().clone();
-                let connections = state.ssh_connections.blocking_lock();
-                let project_ids: Vec<String> = connections.keys().cloned().collect();
-                drop(connections);
-
-                tauri::async_runtime::spawn(async move {
-                    for project_id in &project_ids {
-                        info!("shutdown: disconnecting {}", project_id);
-                        let connections = state.ssh_connections.lock().await;
-                        if let Some(conn) = connections.get(project_id) {
-                            let _ = tokio::time::timeout(
-                                Duration::from_secs(3),
-                                conn.session.disconnect(Disconnect::ByApplication, "", "en"),
-                            ).await;
-                        }
-                    }
-                    // daemon keeps PTYs alive
-                    let _ = handle.exit(0);
-                });
-
                 api.prevent_close();
             }
         })
