@@ -50,6 +50,10 @@ export default function TerminalView({
     if (!terminal) return;
     if (isFocused) {
       terminal.focus();
+      requestAnimationFrame(() => {
+        fitAndResize(false);
+        terminal.refresh(0, terminal.rows - 1);
+      });
     }
   }, [isFocused]);
 
@@ -160,6 +164,7 @@ export default function TerminalView({
 
     try {
       fitAddon.fit();
+      terminal.refresh(0, terminal.rows - 1);
     } catch {
       return;
     }

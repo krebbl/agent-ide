@@ -273,26 +273,21 @@ export default function TerminalZone({
             )}
           </div>
         )}
-        {activeTab && (
-          <SplitPaneContainer
-            pane={activeTab.rootPane}
-            focusedPaneId={activeTab.focusedPaneId}
-          />
-        )}
-        {visibleTabs.map((tab) => {
-          if (tab.id === effectiveActiveId) return null;
-          return (
-            <div
-              key={tab.id}
-              className="absolute inset-0 hidden"
-            >
-              <SplitPaneContainer
-                pane={tab.rootPane}
-                focusedPaneId={tab.focusedPaneId}
-              />
-            </div>
-          );
-        })}
+        {visibleTabs.map((tab) => (
+          <div
+            key={tab.id}
+            className={
+              tab.id === effectiveActiveId
+                ? "h-full w-full"
+                : "absolute inset-0 hidden"
+            }
+          >
+            <SplitPaneContainer
+              pane={tab.rootPane}
+              focusedPaneId={tab.focusedPaneId}
+            />
+          </div>
+        ))}
       </div>
     </div>
   );
