@@ -154,7 +154,8 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
             <input
               type="text"
               value={worktreeName}
-              onChange={(e) => setWorktreeName(e.target.value)}
+              onChange={(e) => setWorktreeName(e.target.value.replace(/\s/g, "-").replace(/[^a-zA-Z0-9_-]/g, ""))}
+              pattern="[a-zA-Z0-9_-]*"
               placeholder="auto-generated from branch"
               className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
             />
