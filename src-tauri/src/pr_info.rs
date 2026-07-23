@@ -294,27 +294,64 @@ fn parse_bkt_pr_single(json: &str, target_branch: &str) -> Result<Option<PrInfo>
 }
 
 fn parse_bkt_pr_list(json: &str) -> Result<Vec<PrInfo>, String> {
+    let json = json.trim();
+
+    // bkt may wrap the array in an object with a "values" or "pullrequests" key.
+    // Try to extract the array from a wrapper object first.
+    let array_json = if json.starts_with('{') {
+        if let Ok(wrapper) = serde_json::from_str::<serde_json::Value>(json) {
+            let arr = wrapper
+                .get("values")
+                .or_else(|| wrapper.get("pullrequests"))
+                .or_else(|| wrapper.get("items"));
+            match arr {
+                Some(serde_json::Value::Array(_)) => arr.cloned(),
+                _ => {
+                    return Err("bkt output is an object but no array found under 'values', 'pullrequests', or 'items'".to_string());
+                }
+            }
+        } else {
+            return Err("Failed to parse bkt output as JSON".to_string());
+        }
+    } else {
+        None
+    };
+
+    let json_str: &str;
+    let json_owned: String;
+    if let Some(ref arr) = array_json {
+        json_owned = arr.to_string();
+        json_str = &json_owned;
+    } else {
+        json_str = json;
+    };
     #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
     struct BktPr {
         id: serde_json::Value,
         title: String,
-        url: Option<String>,
         state: Option<String>,
+        draft: Option<bool>,
         author: Option<BktAuthor>,
-        source_branch: Option<BktBranch>,
+        source: Option<BktBranch>,
         destination: Option<BktBranch>,
-        #[serde(rename = "createdOn")]
         created_on: Option<String>,
-        #[serde(rename = "updatedOn")]
         updated_on: Option<String>,
+        links: Option<BktLinks>,
+    }
+
+    #[derive(Deserialize)]
+    struct BktLinks {
+        html: Option<BktHref>,
+    }
+
+    #[derive(Deserialize)]
+    struct BktHref {
+        href: String,
     }
 
     #[derive(Deserialize)]
     struct BktAuthor {
-        #[serde(rename = "displayName")]
         display_name: Option<String>,
-        nickname: Option<String>,
         username: Option<String>,
     }
 
@@ -328,31 +365,34 @@ fn parse_bkt_pr_list(json: &str) -> Result<Vec<PrInfo>, String> {
         name: String,
     }
 
-    let prs: Vec<BktPr> = serde_json::from_str(json)
+    let prs: Vec<BktPr> = serde_json::from_str(json_str)
         .map_err(|e| format!("Failed to parse bkt output: {}", e))?;
 
     prs.into_iter()
         .map(|pr| {
             let url = pr
-                .url
+                .links
+                .and_then(|l| l.html)
+                .map(|h| h.href)
                 .unwrap_or_else(|| format!("#{}", normalize_json_value(&pr.id)));
+
+            let state = if pr.draft == Some(true) {
+                PrState::Draft
+            } else {
+                parse_bkt_state(pr.state.as_deref())
+            };
 
             Ok(PrInfo {
                 number: normalize_json_value(&pr.id),
                 title: pr.title,
                 url,
-                state: parse_bkt_state(pr.state.as_deref()),
+                state,
                 author: pr
                     .author
-                    .map(|a| {
-                        a.display_name
-                            .or(a.nickname)
-                            .or(a.username)
-                            .unwrap_or_else(|| "unknown".to_string())
-                    })
+                    .and_then(|a| a.display_name.or(a.username))
                     .unwrap_or_else(|| "unknown".to_string()),
                 source_branch: pr
-                    .source_branch
+                    .source
                     .and_then(|b| b.branch)
                     .map(|b| b.name)
                     .unwrap_or_else(|| "unknown".to_string()),
@@ -463,7 +503,7 @@ pub async fn pr_for_branch(
                     }
                 }
                 "bitbucket" => {
-                    let output = run_cli_local(&repo_path, "bkt", &["pr", "list", "--branch", &branch, "--json"])?;
+                    let output = run_cli_local(&repo_path, "bkt", &["pr", "list", "--json"])?;
                     if output.trim().is_empty() {
                         return Ok(PrInfoResult {
                             pr: None,
@@ -551,7 +591,7 @@ pub async fn pr_for_branch(
                         &project_id,
                         &repo_path,
                         "bkt",
-                        &["pr", "list", "--branch", &branch, "--json"],
+                        &["pr", "list", "--json"],
                     )
                     .await?;
                     if output.trim().is_empty() {

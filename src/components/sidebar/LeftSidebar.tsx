@@ -164,7 +164,6 @@ function WorktreeItem({
   isActive,
   onActivate,
   onRemove,
-  prInfo,
 }: {
   worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
   projectId: string;
@@ -172,9 +171,8 @@ function WorktreeItem({
   isActive: boolean;
   onActivate: () => void;
   onRemove: (force: boolean, deleteBranch: boolean) => void;
-  prInfo: { pr: import("../../types").PrInfo | null; loading: boolean; error: string | null } | undefined;
 }) {
-  const prEntry = prInfo;
+  const prEntry = usePrStore((s) => s.cache[`${projectId}:${worktree.branch}`]);
   const [showMenu, setShowMenu] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [infoPos, setInfoPos] = useState({ top: 0, left: 0 });
@@ -247,14 +245,12 @@ function WorktreeItem({
           )}
           <div className="relative">
             {prEntry?.pr ? (
-              <>{(() => {
-                switch (prEntry.pr.state) {
-                  case "open": return <GitPullRequest size={10} className="text-[var(--color-green)]" />;
-                  case "merged": return <GitMerge size={10} className="text-[var(--color-mauve)]" />;
-                  case "closed": return <GitPullRequestClosed size={10} className="text-[var(--color-red)]" />;
-                  case "draft": return <GitPullRequestDraft size={10} className="text-[var(--color-overlay1)]" />;
-                }
-              })()}</>
+              <>
+                {prEntry.pr.state === "open" && <GitPullRequest size={10} className="text-[var(--color-green)]" />}
+                {prEntry.pr.state === "merged" && <GitMerge size={10} className="text-[var(--color-mauve)]" />}
+                {prEntry.pr.state === "closed" && <GitPullRequestClosed size={10} className="text-[var(--color-red)]" />}
+                {prEntry.pr.state === "draft" && <GitPullRequestDraft size={10} className="text-[var(--color-overlay1)]" />}
+              </>
             ) : (
               <>
                 <GitBranch size={10} className={worktree.isMain ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"} />
@@ -330,7 +326,7 @@ function ProjectItem({
     useSortable({ id: project.id });
   const connectionStatus = useConnectionStatusStore((s) => s.statuses[project.id]?.status);
   const { fetchWorktrees, setActiveWorktree, worktreeLoading, removeWorktree, refreshWorktrees, selectedWorktreeId, activeProjectId } = useProjectStore();
-  const { fetchPrsForWorktrees, getPr } = usePrStore();
+  const { fetchPrsForWorktrees } = usePrStore();
   const isWorktreeLoading = worktreeLoading[project.id] ?? false;
   const [showAddDialog, setShowAddDialog] = useState(false);
 
@@ -457,7 +453,6 @@ function ProjectItem({
               projectId={project.id}
               projectType={project.type}
               isActive={wt.id === selectedWorktreeId && project.id === activeProjectId}
-              prInfo={getPr(project.id, wt.branch)}
               onActivate={() => {
                 const tStore = useTerminalStore.getState();
                 tStore.sessions

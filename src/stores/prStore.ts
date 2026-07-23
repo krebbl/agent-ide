@@ -49,13 +49,19 @@ export const usePrStore = create<PrStore>((set, get) => ({
   },
 
   fetchPrsForWorktrees: async (projectId: string, branches: string[]) => {
+    console.log("[prStore] fetchPrsForWorktrees", { projectId, branches });
     const toFetch = branches.filter((b) => {
       const key = `${projectId}:${b}`;
       const entry = get().cache[key];
       return !entry || (!entry.loading && entry.pr === null && entry.error === null);
     });
 
-    if (toFetch.length === 0) return;
+    if (toFetch.length === 0) {
+      console.log("[prStore] nothing to fetch (all cached)");
+      return;
+    }
+
+    console.log("[prStore] fetching", toFetch);
 
     const entries: Record<string, PrCacheEntry> = {};
     for (const b of toFetch) {
@@ -87,6 +93,7 @@ export const usePrStore = create<PrStore>((set, get) => ({
     });
 
     set((s) => ({ cache: { ...s.cache, ...resolved } }));
+    console.log("[prStore] resolved", Object.keys(resolved).map(k => ({ key: k, hasPr: !!resolved[k].pr, error: resolved[k].error })));
   },
 
   getPr: (projectId: string, branch: string) => {
