@@ -252,6 +252,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
   focusSession: (sessionId) => {
     set({ isCollapsed: false });
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === sessionId && s.hasUnseenActivity
+          ? { ...s, hasUnseenActivity: false }
+          : s,
+      ),
+    }));
     const session = get().sessions.find((s) => s.id === sessionId);
     if (!session) return;
 
