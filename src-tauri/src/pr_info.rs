@@ -158,9 +158,10 @@ async fn detect_remote_host_ssh(
 
 // ── Local CLI runner ──────────────────────────────────────────────────────────
 
-fn run_cli_local(bin: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(bin)
-        .args(args)
+fn run_cli_local(repo_path: &str, bin: &str, args: &[&str]) -> Result<String, String> {
+    let mut cmd = Command::new(bin);
+    cmd.args(args).current_dir(repo_path);
+    let output = cmd
         .output()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -181,11 +182,13 @@ fn run_cli_local(bin: &str, args: &[&str]) -> Result<String, String> {
 async fn run_cli_remote(
     state: &AppState,
     project_id: &str,
+    repo_path: &str,
     bin: &str,
     args: &[&str],
 ) -> Result<String, String> {
     let args_quoted: Vec<String> = args.iter().map(|a| shell_escape(a)).collect();
-    let cmd = format!("{} {}", bin, args_quoted.join(" "));
+    let repo_quoted = shell_escape(repo_path);
+    let cmd = format!("cd {} && {} {}", repo_quoted, bin, args_quoted.join(" "));
     exec_remote(state, project_id, &cmd).await
 }
 
@@ -415,7 +418,8 @@ pub async fn pr_for_branch(
 
             match provider {
                 "github" => {
-                    let output = run_cli_local(
+                    let output = match run_cli_local(
+                        &repo_path,
                         "gh",
                         &[
                             "pr",
@@ -424,7 +428,20 @@ pub async fn pr_for_branch(
                             "--json",
                             "number,title,url,state,author,headRefName,baseRefName,createdAt,updatedAt",
                         ],
-                    )?;
+                    ) {
+                        Ok(out) => out,
+                        Err(e) => {
+                            let lower = e.to_lowercase();
+                            if lower.contains("no pull request") || lower.contains("no pr") {
+                                return Ok(PrInfoResult {
+                                    pr: None,
+                                    provider: Some("github".to_string()),
+                                    error: Some(format!("No PR found for branch '{}'", branch)),
+                                });
+                            }
+                            return Err(e);
+                        }
+                    };
                     if output.trim().is_empty() {
                         return Ok(PrInfoResult {
                             pr: None,
@@ -446,7 +463,7 @@ pub async fn pr_for_branch(
                     }
                 }
                 "bitbucket" => {
-                    let output = run_cli_local("bkt", &["pr", "list", "--branch", &branch, "--json"])?;
+                    let output = run_cli_local(&repo_path, "bkt", &["pr", "list", "--branch", &branch, "--json"])?;
                     if output.trim().is_empty() {
                         return Ok(PrInfoResult {
                             pr: None,
@@ -481,9 +498,10 @@ pub async fn pr_for_branch(
 
             match provider {
                 "github" => {
-                    let output = run_cli_remote(
+                    let output = match run_cli_remote(
                         &state,
                         &project_id,
+                        &repo_path,
                         "gh",
                         &[
                             "pr",
@@ -493,7 +511,20 @@ pub async fn pr_for_branch(
                             "number,title,url,state,author,headRefName,baseRefName,createdAt,updatedAt",
                         ],
                     )
-                    .await?;
+                    .await {
+                        Ok(out) => out,
+                        Err(e) => {
+                            let lower = e.to_lowercase();
+                            if lower.contains("no pull request") || lower.contains("no pr") {
+                                return Ok(PrInfoResult {
+                                    pr: None,
+                                    provider: Some("github".to_string()),
+                                    error: Some(format!("No PR found for branch '{}'", branch)),
+                                });
+                            }
+                            return Err(e);
+                        }
+                    };
                     if output.trim().is_empty() {
                         return Ok(PrInfoResult {
                             pr: None,
@@ -518,6 +549,7 @@ pub async fn pr_for_branch(
                     let output = run_cli_remote(
                         &state,
                         &project_id,
+                        &repo_path,
                         "bkt",
                         &["pr", "list", "--branch", &branch, "--json"],
                     )
@@ -572,6 +604,7 @@ pub async fn pr_list_for_repo(
             match provider {
                 "github" => {
                     let output = run_cli_local(
+                        &repo_path,
                         "gh",
                         &[
                             "pr",
@@ -586,7 +619,7 @@ pub async fn pr_list_for_repo(
                     parse_gh_pr_list(&output)
                 }
                 "bitbucket" => {
-                    let output = run_cli_local("bkt", &["pr", "list", "--json"])?;
+                    let output = run_cli_local(&repo_path, "bkt", &["pr", "list", "--json"])?;
                     if output.trim().is_empty() {
                         return Ok(vec![]);
                     }
@@ -604,6 +637,7 @@ pub async fn pr_list_for_repo(
                     let output = run_cli_remote(
                         &state,
                         &project_id,
+                        &repo_path,
                         "gh",
                         &[
                             "pr",
@@ -622,6 +656,7 @@ pub async fn pr_list_for_repo(
                     let output = run_cli_remote(
                         &state,
                         &project_id,
+                        &repo_path,
                         "bkt",
                         &["pr", "list", "--json"],
                     )

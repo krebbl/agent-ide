@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus } from "lucide-react";
+import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import { useTerminalStore } from "../../stores/terminalStore";
+import { usePrStore } from "../../stores/prStore";
 import AddProjectDialog from "../dialogs/AddProjectDialog";
 import AddWorktreeDialog from "../dialogs/AddWorktreeDialog";
 import { Project } from "../../types";
@@ -163,6 +164,7 @@ function WorktreeItem({
   isActive,
   onActivate,
   onRemove,
+  prInfo,
 }: {
   worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
   projectId: string;
@@ -170,7 +172,9 @@ function WorktreeItem({
   isActive: boolean;
   onActivate: () => void;
   onRemove: (force: boolean, deleteBranch: boolean) => void;
+  prInfo: { pr: import("../../types").PrInfo | null; loading: boolean; error: string | null } | undefined;
 }) {
+  const prEntry = prInfo;
   const [showMenu, setShowMenu] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [infoPos, setInfoPos] = useState({ top: 0, left: 0 });
@@ -242,9 +246,22 @@ function WorktreeItem({
             <span className="w-[10px]" />
           )}
           <div className="relative">
-            <GitBranch size={10} className={worktree.isMain ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"} />
-            {worktree.isMain && (
-              <CircleDot size={6} className="absolute -bottom-0.5 -right-0.5 text-[var(--color-blue)]" />
+            {prEntry?.pr ? (
+              <>{(() => {
+                switch (prEntry.pr.state) {
+                  case "open": return <GitPullRequest size={10} className="text-[var(--color-green)]" />;
+                  case "merged": return <GitMerge size={10} className="text-[var(--color-mauve)]" />;
+                  case "closed": return <GitPullRequestClosed size={10} className="text-[var(--color-red)]" />;
+                  case "draft": return <GitPullRequestDraft size={10} className="text-[var(--color-overlay1)]" />;
+                }
+              })()}</>
+            ) : (
+              <>
+                <GitBranch size={10} className={worktree.isMain ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"} />
+                {worktree.isMain && (
+                  <CircleDot size={6} className="absolute -bottom-0.5 -right-0.5 text-[var(--color-blue)]" />
+                )}
+              </>
             )}
           </div>
         </div>
@@ -313,6 +330,7 @@ function ProjectItem({
     useSortable({ id: project.id });
   const connectionStatus = useConnectionStatusStore((s) => s.statuses[project.id]?.status);
   const { fetchWorktrees, setActiveWorktree, worktreeLoading, removeWorktree, refreshWorktrees, selectedWorktreeId, activeProjectId } = useProjectStore();
+  const { fetchPrsForWorktrees, getPr } = usePrStore();
   const isWorktreeLoading = worktreeLoading[project.id] ?? false;
   const [showAddDialog, setShowAddDialog] = useState(false);
 
@@ -346,6 +364,12 @@ function ProjectItem({
     fetchedRef.current.delete(project.id);
     refreshWorktrees(project.id);
   };
+
+  useEffect(() => {
+    if (!isExpanded || isWorktreeLoading || project.worktrees.length === 0) return;
+    const branches = project.worktrees.map((w) => w.branch);
+    fetchPrsForWorktrees(project.id, branches);
+  }, [isExpanded, isWorktreeLoading, project.worktrees, project.id, fetchPrsForWorktrees]);
 
   const handleRemoveWorktree = async (worktreePath: string, force: boolean, deleteBranch: boolean) => {
     await removeWorktree(project.id, worktreePath, force, deleteBranch);
@@ -433,6 +457,7 @@ function ProjectItem({
               projectId={project.id}
               projectType={project.type}
               isActive={wt.id === selectedWorktreeId && project.id === activeProjectId}
+              prInfo={getPr(project.id, wt.branch)}
               onActivate={() => {
                 const tStore = useTerminalStore.getState();
                 tStore.sessions
