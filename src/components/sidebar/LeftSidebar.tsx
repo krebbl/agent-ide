@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { FolderPlus, Folder, Server, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus } from "lucide-react";
+import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import { useTerminalStore } from "../../stores/terminalStore";
@@ -231,7 +231,7 @@ function WorktreeItem({
         }}
         onMouseLeave={() => setShowInfo(false)}
       >
-        <div className="relative shrink-0 pt-0.5">
+        <div className="relative flex shrink-0 items-center gap-0.5 pt-0.5">
           {activity === "busy" ? (
             <Loader2 size={10} className="animate-spin text-[var(--color-blue)]" />
           ) : activity === "unseen" ? (
@@ -239,11 +239,14 @@ function WorktreeItem({
           ) : activity === "input" ? (
             <ChevronRight size={10} className="text-[var(--color-green)]" />
           ) : (
+            <span className="w-[10px]" />
+          )}
+          <div className="relative">
             <GitBranch size={10} className={worktree.isMain ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"} />
-          )}
-          {worktree.isMain && activity === "idle" && (
-            <CircleDot size={6} className="absolute -bottom-0.5 -right-0.5 text-[var(--color-blue)]" />
-          )}
+            {worktree.isMain && (
+              <CircleDot size={6} className="absolute -bottom-0.5 -right-0.5 text-[var(--color-blue)]" />
+            )}
+          </div>
         </div>
         <div className="flex flex-1 flex-col min-w-0">
           <span className="truncate text-xs font-medium">{worktreeName}</span>
@@ -370,19 +373,14 @@ function ProjectItem({
         >
           {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         </button>
-        <div className="relative shrink-0">
-          {project.type === "local" ? (
-            <Folder size={14} className="text-[var(--color-blue)]" />
-          ) : (
-            <Server size={14} className="text-[var(--color-mauve)]" />
-          )}
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-xs font-bold">
+          <span className="truncate">{project.name}</span>
           {project.type === "ssh" && (
             <span
-              className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border border-[var(--color-crust)] ${statusColor}`}
+              className={`h-2 w-2 shrink-0 rounded-full ${statusColor || "bg-[var(--color-overlay0)]"}`}
             />
           )}
-        </div>
-        <span className="flex-1 truncate">{project.name}</span>
+        </span>
         <div className="flex shrink-0 items-center gap-1">
           <button
             onClick={(e) => {
@@ -418,7 +416,7 @@ function ProjectItem({
         </div>
       </div>
       {isExpanded && (
-        <div className="ml-6 border-l border-[var(--color-surface0)] pl-2">
+        <div className="border-l border-[var(--color-surface0)]">
           {isWorktreeLoading && (
             <div className="flex items-center gap-1.5 px-3 py-1 text-xs text-[var(--color-overlay0)]">
               <Loader2 size={10} className="animate-spin" />
