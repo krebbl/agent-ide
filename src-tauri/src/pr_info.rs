@@ -23,6 +23,15 @@ pub enum PrProvider {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum CheckStatus {
+    Success,
+    Pending,
+    Failure,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PrInfo {
     pub number: String,
     pub title: String,
@@ -34,6 +43,7 @@ pub struct PrInfo {
     pub created_at: String,
     pub updated_at: String,
     pub provider: PrProvider,
+    pub check_status: CheckStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,6 +204,57 @@ async fn run_cli_remote(
 
 // ── GitHub JSON parsing ──────────────────────────────────────────────────────
 
+fn aggregate_gh_check_rollup(rollup: &[serde_json::Value]) -> CheckStatus {
+    if rollup.is_empty() {
+        return CheckStatus::Unknown;
+    }
+    let mut any_pending = false;
+    for item in rollup {
+        let typename = item
+            .get("__typename")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if typename == "CheckRun" {
+            let status = item
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_uppercase();
+            let conclusion = item
+                .get("conclusion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_uppercase();
+            if status != "COMPLETED" {
+                any_pending = true;
+            } else if matches!(
+                conclusion.as_str(),
+                "FAILURE" | "CANCELLED" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE"
+            ) {
+                return CheckStatus::Failure;
+            } else if conclusion.is_empty() {
+                any_pending = true;
+            }
+        } else {
+            let state = item
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_uppercase();
+            match state.as_str() {
+                "FAILURE" | "ERROR" => return CheckStatus::Failure,
+                "PENDING" | "EXPECTED" => any_pending = true,
+                _ => {}
+            }
+        }
+    }
+    if any_pending {
+        CheckStatus::Pending
+    } else {
+        CheckStatus::Success
+    }
+}
+
 fn parse_gh_pr(json: &str) -> Result<PrInfo, String> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -211,6 +272,8 @@ fn parse_gh_pr(json: &str) -> Result<PrInfo, String> {
         created_at: String,
         #[serde(rename = "updatedAt")]
         updated_at: String,
+        #[serde(rename = "statusCheckRollup")]
+        status_check_rollup: Option<Vec<serde_json::Value>>,
     }
 
     #[derive(Deserialize)]
@@ -220,6 +283,12 @@ fn parse_gh_pr(json: &str) -> Result<PrInfo, String> {
 
     let pr: GhPr =
         serde_json::from_str(json).map_err(|e| format!("Failed to parse gh output: {}", e))?;
+
+    let check_status = pr
+        .status_check_rollup
+        .as_deref()
+        .map(aggregate_gh_check_rollup)
+        .unwrap_or(CheckStatus::Unknown);
 
     Ok(PrInfo {
         number: normalize_json_value(&pr.number),
@@ -235,6 +304,7 @@ fn parse_gh_pr(json: &str) -> Result<PrInfo, String> {
         created_at: pr.created_at,
         updated_at: pr.updated_at,
         provider: PrProvider::Github,
+        check_status,
     })
 }
 
@@ -255,6 +325,8 @@ fn parse_gh_pr_list(json: &str) -> Result<Vec<PrInfo>, String> {
         created_at: String,
         #[serde(rename = "updatedAt")]
         updated_at: String,
+        #[serde(rename = "statusCheckRollup")]
+        status_check_rollup: Option<Vec<serde_json::Value>>,
     }
 
     #[derive(Deserialize)]
@@ -267,6 +339,11 @@ fn parse_gh_pr_list(json: &str) -> Result<Vec<PrInfo>, String> {
 
     prs.into_iter()
         .map(|pr| {
+            let check_status = pr
+                .status_check_rollup
+                .as_deref()
+                .map(aggregate_gh_check_rollup)
+                .unwrap_or(CheckStatus::Unknown);
             Ok(PrInfo {
                 number: normalize_json_value(&pr.number),
                 title: pr.title,
@@ -281,6 +358,7 @@ fn parse_gh_pr_list(json: &str) -> Result<Vec<PrInfo>, String> {
                 created_at: pr.created_at,
                 updated_at: pr.updated_at,
                 provider: PrProvider::Github,
+                check_status,
             })
         })
         .collect()
@@ -406,9 +484,68 @@ fn parse_bkt_pr_list(json: &str) -> Result<Vec<PrInfo>, String> {
                 created_at: pr.created_on.unwrap_or_default(),
                 updated_at: pr.updated_on.unwrap_or_default(),
                 provider: PrProvider::Bitbucket,
+                check_status: CheckStatus::Unknown,
             })
         })
         .collect()
+}
+
+fn aggregate_bkt_checks(json: &str) -> CheckStatus {
+    let v: serde_json::Value = match serde_json::from_str(json.trim()) {
+        Ok(v) => v,
+        Err(_) => return CheckStatus::Unknown,
+    };
+
+    if let Some(summary) = v.get("summary") {
+        let count = |keys: &[&str]| -> u64 {
+            keys.iter()
+                .filter_map(|k| summary.get(k).and_then(|x| x.as_u64()))
+                .sum()
+        };
+        let failed = count(&["failed", "failure", "error", "stopped"]);
+        let in_progress = count(&["in_progress", "inProgress", "pending", "running", "paused"]);
+        let succeeded = count(&["successful", "success", "passed"]);
+        let total = count(&["total", "count"]);
+        if failed > 0 {
+            return CheckStatus::Failure;
+        }
+        if in_progress > 0 {
+            return CheckStatus::Pending;
+        }
+        if succeeded > 0 || total > 0 {
+            return CheckStatus::Success;
+        }
+        return CheckStatus::Unknown;
+    }
+
+    let statuses = v
+        .get("statuses")
+        .and_then(|s| s.as_array())
+        .or_else(|| v.as_array());
+    let Some(statuses) = statuses else {
+        return CheckStatus::Unknown;
+    };
+    if statuses.is_empty() {
+        return CheckStatus::Unknown;
+    }
+    let mut any_pending = false;
+    for s in statuses {
+        let state = s
+            .get("state")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_uppercase();
+        match state.as_str() {
+            "FAILED" | "FAILURE" | "ERROR" | "STOPPED" => return CheckStatus::Failure,
+            "INPROGRESS" | "PENDING" | "RUNNING" | "PAUSED" => any_pending = true,
+            _ => {}
+        }
+    }
+    if any_pending {
+        CheckStatus::Pending
+    } else {
+        CheckStatus::Success
+    }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -468,7 +605,7 @@ pub async fn pr_for_branch(
                             "view",
                             &branch,
                             "--json",
-                            "number,title,url,state,author,headRefName,baseRefName,createdAt,updatedAt",
+                            "number,title,url,state,author,headRefName,baseRefName,createdAt,updatedAt,statusCheckRollup",
                         ],
                     ) {
                         Ok(out) => out,
@@ -514,11 +651,20 @@ pub async fn pr_for_branch(
                         });
                     }
                     match parse_bkt_pr_single(&output, &branch) {
-                        Ok(Some(pr)) => Ok(PrInfoResult {
-                            pr: Some(pr),
-                            provider: Some("bitbucket".to_string()),
-                            error: None,
-                        }),
+                        Ok(Some(mut pr)) => {
+                            if let Ok(checks) = run_cli_local(
+                                &repo_path,
+                                "bkt",
+                                &["pr", "checks", pr.number.as_str(), "--json"],
+                            ) {
+                                pr.check_status = aggregate_bkt_checks(&checks);
+                            }
+                            Ok(PrInfoResult {
+                                pr: Some(pr),
+                                provider: Some("bitbucket".to_string()),
+                                error: None,
+                            })
+                        }
                         Ok(None) => Ok(PrInfoResult {
                             pr: None,
                             provider: Some("bitbucket".to_string()),
@@ -550,7 +696,7 @@ pub async fn pr_for_branch(
                             "view",
                             &branch,
                             "--json",
-                            "number,title,url,state,author,headRefName,baseRefName,createdAt,updatedAt",
+                            "number,title,url,state,author,headRefName,baseRefName,createdAt,updatedAt,statusCheckRollup",
                         ],
                     )
                     .await {
@@ -604,11 +750,24 @@ pub async fn pr_for_branch(
                         });
                     }
                     match parse_bkt_pr_single(&output, &branch) {
-                        Ok(Some(pr)) => Ok(PrInfoResult {
-                            pr: Some(pr),
-                            provider: Some("bitbucket".to_string()),
-                            error: None,
-                        }),
+                        Ok(Some(mut pr)) => {
+                            if let Ok(checks) = run_cli_remote(
+                                &state,
+                                &project_id,
+                                &repo_path,
+                                "bkt",
+                                &["pr", "checks", pr.number.as_str(), "--json"],
+                            )
+                            .await
+                            {
+                                pr.check_status = aggregate_bkt_checks(&checks);
+                            }
+                            Ok(PrInfoResult {
+                                pr: Some(pr),
+                                provider: Some("bitbucket".to_string()),
+                                error: None,
+                            })
+                        }
                         Ok(None) => Ok(PrInfoResult {
                             pr: None,
                             provider: Some("bitbucket".to_string()),
@@ -652,7 +811,7 @@ pub async fn pr_list_for_repo(
                             "pr",
                             "list",
                             "--json",
-                            "number,title,url,state,author,headRefName,baseRefName,createdAt,updatedAt",
+                            "number,title,url,state,author,headRefName,baseRefName,createdAt,updatedAt,statusCheckRollup",
                         ],
                     )?;
                     if output.trim().is_empty() {
@@ -685,7 +844,7 @@ pub async fn pr_list_for_repo(
                             "pr",
                             "list",
                             "--json",
-                            "number,title,url,state,author,headRefName,baseRefName,createdAt,updatedAt",
+                            "number,title,url,state,author,headRefName,baseRefName,createdAt,updatedAt,statusCheckRollup",
                         ],
                     )
                     .await?;

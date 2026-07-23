@@ -175,6 +175,15 @@ function WorktreeItem({
 }) {
   const prEntry = usePrStore((s) => s.cache[`${projectId}:${worktree.branch}`]);
   const prText = prEntry?.pr ? `#${prEntry.pr.number}` : null;
+  const prColor = !prEntry?.pr
+    ? ""
+    : prEntry.pr.checkStatus === "success"
+      ? "text-[var(--color-green)]"
+      : prEntry.pr.checkStatus === "failure"
+        ? "text-[var(--color-red)]"
+        : prEntry.pr.checkStatus === "pending"
+          ? "text-[var(--color-yellow)]"
+          : "text-[var(--color-subtext1)]";
   const [showMenu, setShowMenu] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [infoPos, setInfoPos] = useState({ top: 0, left: 0 });
@@ -287,7 +296,7 @@ function WorktreeItem({
                 e.stopPropagation();
                 invoke("util_open_url", { url: prEntry.pr!.url }).catch(() => {});
               }}
-              className="text-[10px] text-[var(--color-subtext1)] hover:text-[var(--color-blue)] hover:underline"
+              className={`text-[10px] ${prColor} hover:text-[var(--color-blue)] hover:underline`}
               title={prEntry.pr.title}
             >
               {prText}

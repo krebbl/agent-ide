@@ -106,6 +106,8 @@ export type PrState = "open" | "merged" | "closed" | "draft";
 
 export type PrProvider = "github" | "bitbucket";
 
+export type CheckStatus = "success" | "pending" | "failure" | "unknown";
+
 export interface PrInfo {
   number: string;
   title: string;
@@ -117,6 +119,7 @@ export interface PrInfo {
   createdAt: string;
   updatedAt: string;
   provider: PrProvider;
+  checkStatus: CheckStatus;
 }
 
 export interface PrInfoResult {
