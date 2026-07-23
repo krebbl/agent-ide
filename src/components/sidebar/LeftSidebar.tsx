@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
@@ -388,6 +389,18 @@ function ProjectItem({
     fetchPrsForWorktrees(project.id, branches);
   }, [isExpanded, isConnected, isWorktreeLoading, project.worktrees, project.id, fetchPrsForWorktrees]);
 
+  useEffect(() => {
+    if (!isExpanded || !isConnected) return;
+    const intervalMs = project.type === "ssh" ? 180_000 : 60_000;
+    const id = setInterval(() => {
+      const worktrees =
+        useProjectStore.getState().projects.find((p) => p.id === project.id)?.worktrees ?? [];
+      if (worktrees.length === 0) return;
+      fetchPrsForWorktrees(project.id, worktrees.map((w) => w.branch), true);
+    }, intervalMs);
+    return () => clearInterval(id);
+  }, [isExpanded, isConnected, project.id, project.type, fetchPrsForWorktrees]);
+
   const handleRemoveWorktree = async (worktreePath: string, force: boolean, deleteBranch: boolean) => {
     await removeWorktree(project.id, worktreePath, force, deleteBranch);
   };
@@ -513,6 +526,27 @@ export default function LeftSidebar() {
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow()
+      .listen("tauri://focus", () => {
+        const { projects, expandedProjectIds } = useProjectStore.getState();
+        const statuses = useConnectionStatusStore.getState().statuses;
+        const { fetchPrsForWorktrees, lastFetchedAt } = usePrStore.getState();
+        for (const p of projects) {
+          if (!expandedProjectIds.has(p.id)) continue;
+          if (p.type === "ssh" && statuses[p.id]?.status !== "connected") continue;
+          if (p.worktrees.length === 0) continue;
+          if (Date.now() - (lastFetchedAt[p.id] ?? 0) < 15_000) continue;
+          fetchPrsForWorktrees(p.id, p.worktrees.map((w) => w.branch), true);
+        }
+      })
+      .then((u) => {
+        unlisten = u;
+      });
+    return () => unlisten?.();
+  }, []);
 
   const handleToggle = (id: string) => {
     toggleProjectExpanded(id);

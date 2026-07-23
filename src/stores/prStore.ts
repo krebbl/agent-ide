@@ -11,10 +11,12 @@ type PrCacheEntry = {
 interface PrStore {
   cache: Record<string, PrCacheEntry>;
   tick: number;
+  lastFetchedAt: Record<string, number>;
   fetchPrForBranch: (projectId: string, branch: string) => Promise<void>;
   fetchPrsForWorktrees: (
     projectId: string,
     branches: string[],
+    force?: boolean,
   ) => Promise<void>;
   getPr: (projectId: string, branch: string) => PrCacheEntry | undefined;
 }
@@ -22,6 +24,7 @@ interface PrStore {
 export const usePrStore = create<PrStore>((set, get) => ({
   cache: {},
   tick: 0,
+  lastFetchedAt: {},
 
   fetchPrForBranch: async (projectId: string, branch: string) => {
     const key = `${projectId}:${branch}`;
@@ -52,8 +55,9 @@ export const usePrStore = create<PrStore>((set, get) => ({
     }
   },
 
-  fetchPrsForWorktrees: async (projectId: string, branches: string[]) => {
+  fetchPrsForWorktrees: async (projectId: string, branches: string[], force = false) => {
     const toFetch = branches.filter((b) => {
+      if (force) return true;
       const key = `${projectId}:${b}`;
       const entry = get().cache[key];
       return !entry || entry.error !== null || (!entry.loading && entry.pr === null && entry.error === null);
@@ -66,7 +70,11 @@ export const usePrStore = create<PrStore>((set, get) => ({
       for (const b of toFetch) {
         entries[`${projectId}:${b}`] = { pr: null, loading: true, error: null };
       }
-      return { cache: { ...s.cache, ...entries }, tick: s.tick + 1 };
+      return {
+        cache: { ...s.cache, ...entries },
+        tick: s.tick + 1,
+        lastFetchedAt: { ...s.lastFetchedAt, [projectId]: Date.now() },
+      };
     });
 
     const results = await Promise.allSettled(
