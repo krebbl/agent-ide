@@ -31,9 +31,17 @@ export const usePrStore = create<PrStore>((set, get) => ({
     if (get().cache[key]?.loading) return;
     if (get().cache[key] && !get().cache[key].loading) return;
 
-    set((s) => ({
-      cache: { ...s.cache, [key]: { pr: null, loading: true, error: null } },
-    }));
+    set((s) => {
+      const existing = s.cache[key];
+      return {
+        cache: {
+          ...s.cache,
+          [key]: existing
+            ? { ...existing, loading: true }
+            : { pr: null, loading: true, error: null },
+        },
+      };
+    });
 
     try {
       const result = await prForBranch(projectId, branch);
@@ -68,7 +76,11 @@ export const usePrStore = create<PrStore>((set, get) => ({
     set((s) => {
       const entries: Record<string, PrCacheEntry> = {};
       for (const b of toFetch) {
-        entries[`${projectId}:${b}`] = { pr: null, loading: true, error: null };
+        const key = `${projectId}:${b}`;
+        const existing = s.cache[key];
+        entries[key] = existing
+          ? { ...existing, loading: true }
+          : { pr: null, loading: true, error: null };
       }
       return {
         cache: { ...s.cache, ...entries },
