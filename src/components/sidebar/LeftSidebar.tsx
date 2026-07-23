@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
@@ -280,7 +281,18 @@ function WorktreeItem({
               </span>
             )}
           </div>
-          {prText && <span className="text-[10px] text-[var(--color-subtext1)]">{prText}</span>}
+          {prText && prEntry?.pr && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                invoke("util_open_url", { url: prEntry.pr!.url }).catch(() => {});
+              }}
+              className="text-[10px] text-[var(--color-subtext1)] hover:text-[var(--color-blue)] hover:underline"
+              title={prEntry.pr.title}
+            >
+              {prText}
+            </button>
+          )}
         </div>
 
       </div>
