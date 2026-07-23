@@ -29,6 +29,7 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
   const [sshTestStatus, setSshTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [sshTestMessage, setSshTestMessage] = useState("");
   const [sshRemotePath, setSshRemotePath] = useState("/");
+  const [sshName, setSshName] = useState("");
   const [sshShowBrowser, setSshShowBrowser] = useState(false);
   const [sshAgentInfo, setSshAgentInfo] = useState<{
     authSock: string | null;
@@ -145,6 +146,8 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
 
   const handleSshSelectPath = (path: string) => {
     setSshRemotePath(path);
+    const derived = path.split("/").filter(Boolean).pop() || "";
+    if (!sshName) setSshName(derived);
     setSshShowBrowser(false);
   };
 
@@ -175,7 +178,7 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
       const projectId = crypto.randomUUID();
       const project: Project = {
         id: projectId,
-        name: sshRemotePath.split("/").filter(Boolean).pop() || sshHost,
+        name: sshName || sshRemotePath.split("/").filter(Boolean).pop() || sshHost,
         type: "ssh",
         connection,
         worktrees: [],
@@ -190,7 +193,7 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
   };
 
   const canAddLocal = localPath && localName && localIsGit;
-  const canAddSsh = sshHost && sshUsername && sshRemotePath && sshTestStatus === "success";
+  const canAddSsh = sshHost && sshUsername && sshRemotePath && sshName && sshTestStatus === "success";
 
   return (
     <Dialog
@@ -445,7 +448,7 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
           </button>
 
           {sshTestStatus === "success" && (
-            <div className="space-y-2">
+            <div className="space-y-3">
               <div className="flex items-center gap-2 text-sm text-[var(--color-green)]">
                 <CheckCircle size={14} />
                 {sshTestMessage}
@@ -456,7 +459,13 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
                   <input
                     type="text"
                     value={sshRemotePath}
-                    onChange={(e) => setSshRemotePath(e.target.value)}
+                    onChange={(e) => {
+                      setSshRemotePath(e.target.value);
+                      if (!sshName) {
+                        const derived = e.target.value.split("/").filter(Boolean).pop() || "";
+                        setSshName(derived);
+                      }
+                    }}
                     className="flex-1 rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] focus:border-[var(--color-blue)] focus:outline-none"
                   />
                   <button
@@ -466,6 +475,16 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
                     Browse
                   </button>
                 </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">Project Name</label>
+                <input
+                  type="text"
+                  value={sshName}
+                  onChange={(e) => setSshName(e.target.value)}
+                  placeholder="Project name"
+                  className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
+                />
               </div>
             </div>
           )}
