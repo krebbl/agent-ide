@@ -203,6 +203,13 @@ function WorktreeItem({
       return state;
     }, "idle");
   });
+  const terminalCount = useTerminalStore(
+    (s) =>
+      s.sessions.filter(
+        (session) =>
+          session.projectId === projectId && session.worktreeId === worktree.id,
+      ).length,
+  );
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -247,13 +254,22 @@ function WorktreeItem({
       >
         <div className="relative flex shrink-0 items-center gap-0.5 pt-0.5">
           {activity === "busy" ? (
-            <Loader2 size={10} className="animate-spin text-[var(--color-blue)]" />
-          ) : activity === "unseen" ? (
-            <ChevronRight size={10} className="animate-blink text-[var(--color-blue)]" />
-          ) : activity === "input" ? (
-            <ChevronRight size={10} className="text-[var(--color-green)]" />
+            <span className="flex w-[18px] justify-center">
+              <Loader2 size={10} className="animate-spin text-[var(--color-blue)]" />
+            </span>
+          ) : terminalCount > 0 ? (
+            <span
+              className={`w-[18px] py-px text-center text-[9px] leading-none ${
+                activity === "unseen"
+                  ? "animate-blink text-[var(--color-blue)]"
+                  : "text-[var(--color-overlay1)]"
+              }`}
+              title={`${terminalCount} terminal${terminalCount > 1 ? "s" : ""} open`}
+            >
+              {terminalCount}
+            </span>
           ) : (
-            <span className="w-[10px]" />
+            <span className="w-[18px]" />
           )}
           <div className="relative">
             <>
