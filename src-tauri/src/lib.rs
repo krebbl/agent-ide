@@ -1,5 +1,6 @@
 mod agents;
 mod notification;
+mod pr_info;
 mod pty;
 pub mod pty_client;
 pub mod pty_daemon;
@@ -2547,6 +2548,8 @@ pub fn run() {
             fs_exists,
             check_agent_ready,
             check_agents_ready,
+            pr_info::pr_for_branch,
+            pr_info::pr_list_for_repo,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

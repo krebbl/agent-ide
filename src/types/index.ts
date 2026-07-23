@@ -102,6 +102,29 @@ export type AgentId =
   | "copilot"
   | "cursor-agent";
 
+export type PrState = "open" | "merged" | "closed" | "draft";
+
+export type PrProvider = "github" | "bitbucket";
+
+export interface PrInfo {
+  number: string;
+  title: string;
+  url: string;
+  state: PrState;
+  author: string;
+  sourceBranch: string;
+  targetBranch: string;
+  createdAt: string;
+  updatedAt: string;
+  provider: PrProvider;
+}
+
+export interface PrInfoResult {
+  pr: PrInfo | null;
+  provider: string | null;
+  error: string | null;
+}
+
 export type PromptTransport = "argv" | "stdin";
 
 export interface AgentStatus {
