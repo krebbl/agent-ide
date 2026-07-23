@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
@@ -164,7 +164,6 @@ function WorktreeItem({
   isActive,
   onActivate,
   onRemove,
-  prInfo,
 }: {
   worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
   projectId: string;
@@ -172,9 +171,9 @@ function WorktreeItem({
   isActive: boolean;
   onActivate: () => void;
   onRemove: (force: boolean, deleteBranch: boolean) => void;
-  prInfo: { pr: import("../../types").PrInfo | null; loading: boolean; error: string | null } | undefined;
 }) {
-  const prEntry = prInfo;
+  const prEntry = usePrStore((s) => s.cache[`${projectId}:${worktree.branch}`]);
+  const prText = prEntry?.pr ? `#${prEntry.pr.number}` : null;
   const [showMenu, setShowMenu] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [infoPos, setInfoPos] = useState({ top: 0, left: 0 });
@@ -266,7 +265,7 @@ function WorktreeItem({
           <span className="truncate text-xs font-medium">{worktreeName}</span>
           <span className="truncate text-[10px] text-[var(--color-overlay1)]">{worktree.branch}</span>
         </div>
-        <div className="flex shrink-0 flex-col items-end gap-0.5">
+        <div className="flex shrink-0 flex-col items-end justify-between gap-0.5 self-stretch">
           <div className="flex items-center gap-1">
             {worktree.ahead > 0 && (
               <span className="flex items-center gap-0.5 text-[9px] text-[var(--color-green)]">
@@ -281,6 +280,7 @@ function WorktreeItem({
               </span>
             )}
           </div>
+          {prText && <span className="text-[10px] text-[var(--color-subtext1)]">{prText}</span>}
         </div>
 
       </div>
@@ -328,8 +328,6 @@ function ProjectItem({
   const connectionStatus = useConnectionStatusStore((s) => s.statuses[project.id]?.status);
   const { fetchWorktrees, setActiveWorktree, worktreeLoading, removeWorktree, refreshWorktrees, selectedWorktreeId, activeProjectId } = useProjectStore();
   const { fetchPrsForWorktrees } = usePrStore();
-  usePrStore((s) => s.tick);
-  const prCache = usePrStore((s) => s.cache);
   const isWorktreeLoading = worktreeLoading[project.id] ?? false;
   const [showAddDialog, setShowAddDialog] = useState(false);
 
@@ -345,19 +343,18 @@ function ProjectItem({
             : "bg-[var(--color-overlay0)]";
 
   const fetchedRef = useRef<Set<string>>(new Set());
+  const isConnected = project.type !== "ssh" || connectionStatus === "connected";
 
   useEffect(() => {
-    if (!isExpanded) {
+    if (!isExpanded || !isConnected) {
       fetchedRef.current.delete(project.id);
+      return;
     }
-  }, [isExpanded, project.id]);
-
-  useEffect(() => {
-    if (isExpanded && !fetchedRef.current.has(project.id) && !isWorktreeLoading) {
+    if (!fetchedRef.current.has(project.id) && !isWorktreeLoading) {
       fetchedRef.current.add(project.id);
       fetchWorktrees(project.id);
     }
-  }, [isExpanded, project.id, isWorktreeLoading, fetchWorktrees]);
+  }, [isExpanded, isConnected, project.id, isWorktreeLoading, fetchWorktrees]);
 
   const handleRefresh = () => {
     fetchedRef.current.delete(project.id);
@@ -365,10 +362,10 @@ function ProjectItem({
   };
 
   useEffect(() => {
-    if (!isExpanded || isWorktreeLoading || project.worktrees.length === 0) return;
+    if (!isExpanded || !isConnected || isWorktreeLoading || project.worktrees.length === 0) return;
     const branches = project.worktrees.map((w) => w.branch);
     fetchPrsForWorktrees(project.id, branches);
-  }, [isExpanded, isWorktreeLoading, project.worktrees, project.id, fetchPrsForWorktrees]);
+  }, [isExpanded, isConnected, isWorktreeLoading, project.worktrees, project.id, fetchPrsForWorktrees]);
 
   const handleRemoveWorktree = async (worktreePath: string, force: boolean, deleteBranch: boolean) => {
     await removeWorktree(project.id, worktreePath, force, deleteBranch);
@@ -456,7 +453,6 @@ function ProjectItem({
               projectId={project.id}
               projectType={project.type}
               isActive={wt.id === selectedWorktreeId && project.id === activeProjectId}
-              prInfo={prCache[`${project.id}:${wt.branch}`]}
               onActivate={() => {
                 const tStore = useTerminalStore.getState();
                 tStore.sessions
@@ -562,9 +558,9 @@ export default function LeftSidebar() {
                 dragOverId === project.id && activeIdx !== -1 && activeIdx < i;
 
               return (
-                <>
+                <Fragment key={project.id}>
                   {showAbove && (
-                    <div className="h-0.5 bg-[var(--color-blue)]" />
+                    <div className="h-0.5 bg-[var(--color-blue)]" key="above" />
                   )}
                   <ProjectItem
                     key={project.id}
@@ -576,9 +572,9 @@ export default function LeftSidebar() {
                     onRemove={() => removeProject(project.id)}
                   />
                   {showBelow && (
-                    <div className="h-0.5 bg-[var(--color-blue)]" />
+                    <div className="h-0.5 bg-[var(--color-blue)]" key="below" />
                   )}
-                </>
+                </Fragment>
               );
             })}
           </div>

@@ -61,6 +61,14 @@ export const usePrStore = create<PrStore>((set, get) => ({
 
     if (toFetch.length === 0) return;
 
+    set((s) => {
+      const entries: Record<string, PrCacheEntry> = {};
+      for (const b of toFetch) {
+        entries[`${projectId}:${b}`] = { pr: null, loading: true, error: null };
+      }
+      return { cache: { ...s.cache, ...entries }, tick: s.tick + 1 };
+    });
+
     const results = await Promise.allSettled(
       toFetch.map((b) => prForBranch(projectId, b)),
     );
