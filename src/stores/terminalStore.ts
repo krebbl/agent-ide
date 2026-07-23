@@ -37,6 +37,7 @@ export interface TerminalSession {
   isBusy?: boolean;
   needsInput?: boolean;
   processRunning?: boolean;
+  hasUnseenActivity?: boolean;
 }
 
 interface TerminalStore {
@@ -68,6 +69,8 @@ interface TerminalStore {
     activity: { isBusy: boolean; needsInput: boolean },
   ) => void;
   setProcessRunning: (id: string, running: boolean) => void;
+  setSessionUnseenActivity: (sessionId: string, value: boolean) => void;
+  markSessionSeen: (sessionId: string) => void;
 
   splitPane: (sessionId: string, direction: "horizontal" | "vertical") => Promise<void>;
   closePane: (paneId: string) => Promise<void>;
@@ -538,6 +541,22 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       ),
     })),
 
+  setSessionUnseenActivity: (sessionId, value) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === sessionId ? { ...s, hasUnseenActivity: value } : s,
+      ),
+    })),
+
+  markSessionSeen: (sessionId) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === sessionId && s.hasUnseenActivity
+          ? { ...s, hasUnseenActivity: false }
+          : s,
+      ),
+    })),
+
   splitPane: async (sessionId, direction) => {
     const state = get();
     const tab = state.tabs.find((t) => t.id === state.activeTabId);
@@ -684,5 +703,25 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 useTerminalStore.subscribe((state, prevState) => {
   if (state.worktreeTabMap !== prevState.worktreeTabMap) {
     persistWorktreeTabMap(state.worktreeTabMap);
+  }
+
+  const updates: Array<{ id: string; hasUnseenActivity: true }> = [];
+  for (const session of state.sessions) {
+    const prev = prevState.sessions.find((s) => s.id === session.id);
+    if (!prev) continue;
+    const wasBusy = prev.isBusy === true || prev.processRunning === true;
+    const isNowIdle = session.isBusy !== true && session.processRunning !== true;
+    if (wasBusy && isNowIdle && session.id !== state.activeSessionId && !session.hasUnseenActivity) {
+      updates.push({ id: session.id, hasUnseenActivity: true });
+    }
+  }
+
+  if (updates.length > 0) {
+    useTerminalStore.setState((s) => ({
+      sessions: s.sessions.map((session) => {
+        const update = updates.find((u) => u.id === session.id);
+        return update ? { ...session, ...update } : session;
+      }),
+    }));
   }
 });

@@ -24,6 +24,17 @@ function tabHasBusySession(
   });
 }
 
+function tabHasUnseenActivity(
+  tab: import("../../types").TerminalTab,
+  sessions: import("../../stores/terminalStore").TerminalSession[],
+): boolean {
+  const leaves = collectLeaves(tab.rootPane);
+  return leaves.some((leaf) => {
+    const session = sessions.find((s) => s.id === leaf.sessionId);
+    return session?.hasUnseenActivity === true;
+  });
+}
+
 function getFocusedSessionTitle(
   tab: import("../../types").TerminalTab,
   sessions: import("../../stores/terminalStore").TerminalSession[],
@@ -208,17 +219,24 @@ export default function TerminalZone({
           {visibleTabs.map((tab) => {
             const isActive = tab.id === effectiveActiveId;
             const isBusy = tabHasBusySession(tab, sessions);
+            const hasUnseen = tabHasUnseenActivity(tab, sessions);
             const title = getFocusedSessionTitle(tab, sessions);
             const leafCount = collectLeaves(tab.rootPane).length;
 
             return (
               <div
                 key={tab.id}
-                onClick={() =>
+                onClick={() => {
+                  if (hasUnseen && !isActive) {
+                    const leaves = collectLeaves(tab.rootPane);
+                    leaves.forEach((leaf) => {
+                      useTerminalStore.getState().markSessionSeen(leaf.sessionId);
+                    });
+                  }
                   useTerminalStore.getState().focusSession(
                     findLeaf(tab.rootPane, tab.focusedPaneId)?.sessionId ?? "",
-                  )
-                }
+                  );
+                }}
                 className={`group flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors ${
                   isActive
                     ? "bg-[var(--color-surface0)] text-[var(--color-text)]"
@@ -233,7 +251,14 @@ export default function TerminalZone({
                     aria-label="Busy"
                   />
                 )}
-                {!isBusy && (
+                {!isBusy && hasUnseen && !isActive && (
+                  <ChevronRight
+                    size={12}
+                    className="animate-blink text-[var(--color-blue)]"
+                    aria-label="Ready — unseen"
+                  />
+                )}
+                {!isBusy && !(hasUnseen && !isActive) && (
                   <ChevronRight
                     size={12}
                     className="text-[var(--color-green)]"

@@ -49,13 +49,14 @@ export default function TerminalView({
     const terminal = xtermRef.current;
     if (!terminal) return;
     if (isFocused) {
+      useTerminalStore.getState().markSessionSeen(sessionId);
       terminal.focus();
       requestAnimationFrame(() => {
         fitAndResize(false);
         terminal.refresh(0, terminal.rows - 1);
       });
     }
-  }, [isFocused]);
+  }, [isFocused, sessionId]);
 
   useEffect(() => {
     const handleFocus = () => {
@@ -89,6 +90,12 @@ export default function TerminalView({
     }
     if (notifiedForIdleRef.current) return;
     if (!wasBusyRef.current) return;
+
+    const { activeSessionId } = useTerminalStore.getState();
+    if (sessionId !== activeSessionId) {
+      useTerminalStore.getState().setSessionUnseenActivity(sessionId, true);
+    }
+
     if (shouldNotify()) {
       notify({
         title: "Terminal ready",
@@ -115,8 +122,8 @@ export default function TerminalView({
   };
 
   const handleIdle = (title: string) => {
-    endProcess();
     notifyIdle(title);
+    endProcess();
   };
 
   const handleBusy = () => {
@@ -142,7 +149,9 @@ export default function TerminalView({
   };
 
   const extendProcess = () => {
-    if (!processRunningRef.current) return;
+    if (!processRunningRef.current) {
+      processRunningRef.current = true;
+    }
     if (processTimeoutRef.current) {
       clearTimeout(processTimeoutRef.current);
     }

@@ -44,6 +44,7 @@ export interface TerminalSession {
   isBusy?: boolean;
   needsInput?: boolean;
   processRunning?: boolean;
+  hasUnseenActivity?: boolean;
 }
 
 export interface LeafPane {

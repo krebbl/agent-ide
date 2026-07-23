@@ -59,10 +59,15 @@ export async function initTerminalEventListeners() {
     }
   });
   await listen<PtyIdleEvent>("pty_idle", (event) => {
-    useTerminalStore.getState().updateSessionByPtyId(event.payload.sessionId, {
+    const store = useTerminalStore.getState();
+    const session = store.sessions.find((s) => s.ptyId === event.payload.sessionId);
+    const wasBusy = session?.isBusy === true || session?.processRunning === true;
+    const isNotActive = session?.id !== store.activeSessionId;
+    store.updateSessionByPtyId(event.payload.sessionId, {
       isBusy: false,
       needsInput: true,
       title: event.payload.title,
+      ...(wasBusy && isNotActive ? { hasUnseenActivity: true } : {}),
     });
     const handler = idleHandlers.get(event.payload.sessionId);
     if (handler) {

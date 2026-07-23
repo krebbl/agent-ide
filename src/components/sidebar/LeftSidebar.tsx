@@ -177,13 +177,14 @@ function WorktreeItem({
   const itemRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const activity = useTerminalStore((s) => {
-    return s.sessions.reduce<"idle" | "busy" | "input">((state, session) => {
+    return s.sessions.reduce<"idle" | "busy" | "input" | "unseen">((state, session) => {
       if (
         session.projectId === projectId &&
         session.worktreeId === worktree.id
       ) {
         if (session.processRunning || session.isBusy) return "busy";
-        if (session.needsInput && state !== "busy") return "input";
+        if (session.hasUnseenActivity) return "unseen";
+        if (session.needsInput && state !== "busy" && state !== "unseen") return "input";
       }
       return state;
     }, "idle");
@@ -233,6 +234,8 @@ function WorktreeItem({
         <div className="relative shrink-0 pt-0.5">
           {activity === "busy" ? (
             <Loader2 size={10} className="animate-spin text-[var(--color-blue)]" />
+          ) : activity === "unseen" ? (
+            <ChevronRight size={10} className="animate-blink text-[var(--color-blue)]" />
           ) : activity === "input" ? (
             <ChevronRight size={10} className="text-[var(--color-green)]" />
           ) : (
@@ -432,7 +435,13 @@ function ProjectItem({
               projectId={project.id}
               projectType={project.type}
               isActive={wt.id === selectedWorktreeId && project.id === activeProjectId}
-              onActivate={() => setActiveWorktree(project.id, wt.id)}
+              onActivate={() => {
+                const tStore = useTerminalStore.getState();
+                tStore.sessions
+                  .filter((s) => s.worktreeId === wt.id && s.hasUnseenActivity)
+                  .forEach((s) => tStore.markSessionSeen(s.id));
+                setActiveWorktree(project.id, wt.id);
+              }}
               onRemove={(force, deleteBranch) => handleRemoveWorktree(wt.path, force, deleteBranch)}
             />
           ))}
