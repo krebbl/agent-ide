@@ -303,11 +303,13 @@ fn parse_bkt_pr_list(json: &str) -> Result<Vec<PrInfo>, String> {
             let arr = wrapper
                 .get("values")
                 .or_else(|| wrapper.get("pullrequests"))
+                .or_else(|| wrapper.get("pull_requests"))
                 .or_else(|| wrapper.get("items"));
             match arr {
                 Some(serde_json::Value::Array(_)) => arr.cloned(),
                 _ => {
-                    return Err("bkt output is an object but no array found under 'values', 'pullrequests', or 'items'".to_string());
+                    let keys: Vec<&str> = wrapper.as_object().map(|o| o.keys().map(|k| k.as_str()).collect()).unwrap_or_default();
+                    return Err(format!("bkt output is an object but no array found. Available keys: {:?}. First 500 chars: {}", keys, &json[..json.len().min(500)]));
                 }
             }
         } else {

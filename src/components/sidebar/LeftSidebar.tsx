@@ -164,6 +164,7 @@ function WorktreeItem({
   isActive,
   onActivate,
   onRemove,
+  prInfo,
 }: {
   worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
   projectId: string;
@@ -171,8 +172,9 @@ function WorktreeItem({
   isActive: boolean;
   onActivate: () => void;
   onRemove: (force: boolean, deleteBranch: boolean) => void;
+  prInfo: { pr: import("../../types").PrInfo | null; loading: boolean; error: string | null } | undefined;
 }) {
-  const prEntry = usePrStore((s) => s.cache[`${projectId}:${worktree.branch}`]);
+  const prEntry = prInfo;
   const [showMenu, setShowMenu] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [infoPos, setInfoPos] = useState({ top: 0, left: 0 });
@@ -244,21 +246,20 @@ function WorktreeItem({
             <span className="w-[10px]" />
           )}
           <div className="relative">
-            {prEntry?.pr ? (
-              <>
-                {prEntry.pr.state === "open" && <GitPullRequest size={10} className="text-[var(--color-green)]" />}
-                {prEntry.pr.state === "merged" && <GitMerge size={10} className="text-[var(--color-mauve)]" />}
-                {prEntry.pr.state === "closed" && <GitPullRequestClosed size={10} className="text-[var(--color-red)]" />}
-                {prEntry.pr.state === "draft" && <GitPullRequestDraft size={10} className="text-[var(--color-overlay1)]" />}
-              </>
-            ) : (
-              <>
-                <GitBranch size={10} className={worktree.isMain ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"} />
-                {worktree.isMain && (
-                  <CircleDot size={6} className="absolute -bottom-0.5 -right-0.5 text-[var(--color-blue)]" />
-                )}
-              </>
-            )}
+            <>
+              {prEntry?.pr && prEntry.pr.state === "open" && <GitPullRequest size={10} className="text-[var(--color-green)]" />}
+              {prEntry?.pr && prEntry.pr.state === "merged" && <GitMerge size={10} className="text-[var(--color-mauve)]" />}
+              {prEntry?.pr && prEntry.pr.state === "closed" && <GitPullRequestClosed size={10} className="text-[var(--color-red)]" />}
+              {prEntry?.pr && prEntry.pr.state === "draft" && <GitPullRequestDraft size={10} className="text-[var(--color-overlay1)]" />}
+              {(!prEntry?.pr) && (
+                <>
+                  <GitBranch size={10} className={worktree.isMain ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"} />
+                  {worktree.isMain && (
+                    <CircleDot size={6} className="absolute -bottom-0.5 -right-0.5 text-[var(--color-blue)]" />
+                  )}
+                </>
+              )}
+            </>
           </div>
         </div>
         <div className="flex flex-1 flex-col min-w-0">
@@ -327,6 +328,8 @@ function ProjectItem({
   const connectionStatus = useConnectionStatusStore((s) => s.statuses[project.id]?.status);
   const { fetchWorktrees, setActiveWorktree, worktreeLoading, removeWorktree, refreshWorktrees, selectedWorktreeId, activeProjectId } = useProjectStore();
   const { fetchPrsForWorktrees } = usePrStore();
+  usePrStore((s) => s.tick);
+  const prCache = usePrStore((s) => s.cache);
   const isWorktreeLoading = worktreeLoading[project.id] ?? false;
   const [showAddDialog, setShowAddDialog] = useState(false);
 
@@ -453,6 +456,7 @@ function ProjectItem({
               projectId={project.id}
               projectType={project.type}
               isActive={wt.id === selectedWorktreeId && project.id === activeProjectId}
+              prInfo={prCache[`${project.id}:${wt.branch}`]}
               onActivate={() => {
                 const tStore = useTerminalStore.getState();
                 tStore.sessions

@@ -10,6 +10,7 @@ type PrCacheEntry = {
 
 interface PrStore {
   cache: Record<string, PrCacheEntry>;
+  tick: number;
   fetchPrForBranch: (projectId: string, branch: string) => Promise<void>;
   fetchPrsForWorktrees: (
     projectId: string,
@@ -20,6 +21,7 @@ interface PrStore {
 
 export const usePrStore = create<PrStore>((set, get) => ({
   cache: {},
+  tick: 0,
 
   fetchPrForBranch: async (projectId: string, branch: string) => {
     const key = `${projectId}:${branch}`;
@@ -37,6 +39,7 @@ export const usePrStore = create<PrStore>((set, get) => ({
           ...s.cache,
           [key]: { pr: result.pr, loading: false, error: result.error },
         },
+        tick: s.tick + 1,
       }));
     } catch (e) {
       set((s) => ({
@@ -44,30 +47,19 @@ export const usePrStore = create<PrStore>((set, get) => ({
           ...s.cache,
           [key]: { pr: null, loading: false, error: String(e) },
         },
+        tick: s.tick + 1,
       }));
     }
   },
 
   fetchPrsForWorktrees: async (projectId: string, branches: string[]) => {
-    console.log("[prStore] fetchPrsForWorktrees", { projectId, branches });
     const toFetch = branches.filter((b) => {
       const key = `${projectId}:${b}`;
       const entry = get().cache[key];
-      return !entry || (!entry.loading && entry.pr === null && entry.error === null);
+      return !entry || entry.error !== null || (!entry.loading && entry.pr === null && entry.error === null);
     });
 
-    if (toFetch.length === 0) {
-      console.log("[prStore] nothing to fetch (all cached)");
-      return;
-    }
-
-    console.log("[prStore] fetching", toFetch);
-
-    const entries: Record<string, PrCacheEntry> = {};
-    for (const b of toFetch) {
-      entries[`${projectId}:${b}`] = { pr: null, loading: true, error: null };
-    }
-    set((s) => ({ cache: { ...s.cache, ...entries } }));
+    if (toFetch.length === 0) return;
 
     const results = await Promise.allSettled(
       toFetch.map((b) => prForBranch(projectId, b)),
@@ -92,8 +84,7 @@ export const usePrStore = create<PrStore>((set, get) => ({
       }
     });
 
-    set((s) => ({ cache: { ...s.cache, ...resolved } }));
-    console.log("[prStore] resolved", Object.keys(resolved).map(k => ({ key: k, hasPr: !!resolved[k].pr, error: resolved[k].error })));
+    set((s) => ({ cache: { ...s.cache, ...resolved }, tick: s.tick + 1 }));
   },
 
   getPr: (projectId: string, branch: string) => {
