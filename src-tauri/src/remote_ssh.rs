@@ -11,7 +11,7 @@ use russh::keys::PrivateKeyWithHashAlg;
 use std::path::PathBuf;
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{info, warn};
+use tracing::info;
 
 use std::time::Duration;
 
@@ -172,7 +172,7 @@ impl RemotePtyEngine {
         event_tx: tokio::sync::mpsc::Sender<(String, crate::pty_engine::EngineEvent)>,
         attach: bool,
     ) -> Result<Self, String> {
-        let mut channel = ssh_session
+        let channel = ssh_session
             .lock()
             .await
             .channel_open_session()
@@ -199,9 +199,9 @@ impl RemotePtyEngine {
             let _ = channel.data(std::io::Cursor::new(cmd.into_bytes())).await;
         }
 
-        let (input_tx, mut input_rx) = mpsc::channel::<String>(64);
-        let (resize_tx, mut resize_rx) = mpsc::channel::<PtySize>(16);
-        let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+        let (input_tx, input_rx) = mpsc::channel::<String>(64);
+        let (resize_tx, resize_rx) = mpsc::channel::<PtySize>(16);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         let engine = RemotePtyEngine {
             input_tx,

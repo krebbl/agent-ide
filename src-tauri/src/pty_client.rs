@@ -369,10 +369,4 @@ pub fn daemon_persistence_path() -> PathBuf {
     daemon_config_dir().join("terminal_sessions.json")
 }
 
-fn basename(path: &str) -> String {
-    path.split('/')
-        .filter(|s| !s.is_empty())
-        .last()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| path.to_string())
-}
+

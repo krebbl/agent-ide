@@ -484,7 +484,7 @@ impl PtyDaemon {
             }
             DaemonRequest::Kill { session_id } => {
                 let mut map = sessions.lock().unwrap();
-                if let Some(mut session) = map.get_mut(&session_id) {
+                if let Some(session) = map.get_mut(&session_id) {
                     if let Some(engine) = session.engine.take() {
                         let _ = engine.kill();
                     }

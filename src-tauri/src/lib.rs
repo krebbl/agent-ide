@@ -2585,7 +2585,7 @@ pub fn run() {
             pr_info::pr_for_branch,
             pr_info::pr_list_for_repo,
         ])
-        .on_window_event(|window, event| {
+        .on_window_event(|_window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
             }
