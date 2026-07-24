@@ -29,15 +29,30 @@ function WorktreeContextMenu({
   onClose,
   onRemove,
 }: {
-  worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
+  worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number; locked: boolean };
   projectId: string;
   projectType: "local" | "ssh";
   onClose: () => void;
-  onRemove: (force: boolean, deleteBranch: boolean) => void;
+  onRemove: (force: boolean, deleteBranch: boolean) => Promise<void>;
 }) {
   const [copied, setCopied] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [deleteBranch, setDeleteBranch] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
+
+  const handleRemove = async (force: boolean) => {
+    setRemoving(true);
+    setRemoveError(null);
+    try {
+      await onRemove(force, deleteBranch);
+      onClose();
+    } catch (e) {
+      setRemoveError(String(e));
+    } finally {
+      setRemoving(false);
+    }
+  };
 
   const handleCopyPath = async () => {
     try {
@@ -78,6 +93,11 @@ function WorktreeContextMenu({
               This worktree has uncommitted changes.
             </p>
           )}
+          {worktree.locked && (
+            <p className="mb-2 text-xs text-[var(--color-yellow)]">
+              This worktree is locked. Removing it will override the lock.
+            </p>
+          )}
           <label className="mb-3 flex items-start gap-2 cursor-pointer">
             <input
               type="checkbox"
@@ -89,18 +109,22 @@ function WorktreeContextMenu({
               Also delete branch <span className="font-mono">{worktree.branch}</span>
             </span>
           </label>
+          {removeError && (
+            <p className="mb-2 max-w-xs text-xs text-[var(--color-red)]">{removeError}</p>
+          )}
           <div className="flex gap-2">
             <button
-              onClick={() => { onRemove(false, deleteBranch); onClose(); }}
-              disabled={worktree.status === "dirty"}
+              onClick={() => handleRemove(false)}
+              disabled={worktree.status === "dirty" || worktree.locked || removing}
               className="rounded-md bg-[var(--color-red)]/20 px-3 py-1 text-xs text-[var(--color-red)] hover:bg-[var(--color-red)]/30 disabled:opacity-50"
             >
               Remove
             </button>
-            {worktree.status === "dirty" && (
+            {(worktree.status === "dirty" || worktree.locked || removeError) && (
               <button
-                onClick={() => { onRemove(true, deleteBranch); onClose(); }}
-                className="rounded-md bg-[var(--color-peach)]/20 px-3 py-1 text-xs text-[var(--color-peach)] hover:bg-[var(--color-peach)]/30"
+                onClick={() => handleRemove(true)}
+                disabled={removing}
+                className="rounded-md bg-[var(--color-peach)]/20 px-3 py-1 text-xs text-[var(--color-peach)] hover:bg-[var(--color-peach)]/30 disabled:opacity-50"
               >
                 Force Remove
               </button>
@@ -167,12 +191,12 @@ function WorktreeItem({
   onActivate,
   onRemove,
 }: {
-  worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number };
+  worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number; locked: boolean };
   projectId: string;
   projectType: "local" | "ssh";
   isActive: boolean;
   onActivate: () => void;
-  onRemove: (force: boolean, deleteBranch: boolean) => void;
+  onRemove: (force: boolean, deleteBranch: boolean) => Promise<void>;
 }) {
   const prEntry = usePrStore((s) => s.cache[`${projectId}:${worktree.branch}`]);
   const prText = prEntry?.pr ? `#${prEntry.pr.number}` : null;

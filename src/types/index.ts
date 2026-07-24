@@ -32,6 +32,7 @@ export interface Worktree {
   status: "clean" | "dirty" | "unknown";
   ahead: number;
   behind: number;
+  locked: boolean;
 }
 
 export interface TerminalSession {

@@ -228,6 +228,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         status: wt.status as "clean" | "dirty" | "unknown",
         ahead: wt.ahead,
         behind: wt.behind,
+        locked: wt.locked,
       }));
       set((s) => {
         const selectedWorktreeId = s.selectedWorktreeId;

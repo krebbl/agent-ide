@@ -89,6 +89,7 @@ pub struct WorktreeInfo {
     pub status: String,
     pub ahead: i32,
     pub behind: i32,
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -876,6 +877,7 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
         status,
         ahead,
         behind,
+        locked: false,
     });
 
     let worktrees = repo.worktrees().map_err(|e| format!("Failed to list worktrees: {}", e))?;
@@ -887,8 +889,8 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
 
         let wt_path = wt.path().to_str().unwrap_or("").to_string();
 
-        let branch = if let Ok(wt_repo) = Repository::open(&wt_path) {
-            if let Ok(head) = wt_repo.head() {
+        let (branch, status) = if let Ok(wt_repo) = Repository::open(&wt_path) {
+            let branch = if let Ok(head) = wt_repo.head() {
                 if head.is_branch() {
                     head.shorthand().unwrap_or(wt_name).to_string()
                 } else {
@@ -896,18 +898,18 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
                 }
             } else {
                 wt_name.to_string()
-            }
+            };
+            let status = if is_worktree_dirty(&wt_repo) {
+                "dirty".to_string()
+            } else {
+                "clean".to_string()
+            };
+            (branch, status)
         } else {
-            wt_name.to_string()
+            (wt_name.to_string(), "clean".to_string())
         };
 
         let (ahead, behind) = compute_ahead_behind(&repo, &branch);
-
-        let status = if is_worktree_dirty(&repo) {
-            "dirty".to_string()
-        } else {
-            "clean".to_string()
-        };
 
         result.push(WorktreeInfo {
             id: wt_name.to_string(),
@@ -917,6 +919,7 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
             status,
             ahead,
             behind,
+            locked: matches!(wt.is_locked(), Ok(git2::WorktreeLockStatus::Locked(_))),
         });
     }
 
@@ -995,18 +998,28 @@ fn resolve_worktree_branch_local(repo_path: &str, worktree_path: &str) -> Result
 }
 
 fn remove_worktree_local(repo_path: &str, worktree_path: &str, force: bool, delete_branch: bool) -> Result<(), String> {
+    let branch_to_delete = if delete_branch {
+        resolve_worktree_branch_local(repo_path, worktree_path)?
+    } else {
+        None
+    };
+
     let mut args = vec!["worktree", "remove"];
     if force {
         args.push("--force");
     }
     args.push(worktree_path);
 
-    run_git_command(repo_path, &args)?;
-
-    if delete_branch {
-        if let Some(branch_name) = resolve_worktree_branch_local(repo_path, worktree_path)? {
-            run_git_command(repo_path, &["branch", "-D", &branch_name])?;
+    if let Err(e) = run_git_command(repo_path, &args) {
+        if force && e.contains("locked") {
+            run_git_command(repo_path, &["worktree", "remove", "--force", "--force", worktree_path])?;
+        } else {
+            return Err(e);
         }
+    }
+
+    if let Some(branch_name) = branch_to_delete {
+        run_git_command(repo_path, &["branch", "-D", &branch_name])?;
     }
 
     Ok(())
@@ -1241,6 +1254,7 @@ echo 'WT_STATES_END'"#,
                     status: "unknown".to_string(),
                     ahead: 0,
                     behind: 0,
+                    locked: false,
                 });
             } else if line.starts_with("branch ") {
                 if let Some(ref mut wt) = current {
@@ -1253,6 +1267,10 @@ echo 'WT_STATES_END'"#,
             } else if line == "bare" {
                 if let Some(ref mut wt) = current {
                     wt.is_main = true;
+                }
+            } else if line.starts_with("locked") {
+                if let Some(ref mut wt) = current {
+                    wt.locked = true;
                 }
             } else if line.starts_with("HEAD ") {
                 if let Some(ref mut wt) = current {
@@ -1364,18 +1382,34 @@ async fn remove_worktree_ssh(
     state: &Arc<AppState>,
     delete_branch: bool,
 ) -> Result<(), String> {
+    let branch_to_delete = if delete_branch {
+        resolve_worktree_branch_ssh(project_id, repo_path, worktree_path, state).await?
+    } else {
+        None
+    };
+
     let mut args = vec!["worktree", "remove"];
     if force {
         args.push("--force");
     }
     args.push(worktree_path);
 
-    run_git_command_ssh(project_id, repo_path, &args, state).await?;
-
-    if delete_branch {
-        if let Some(branch_name) = resolve_worktree_branch_ssh(project_id, repo_path, worktree_path, state).await? {
-            run_git_command_ssh(project_id, repo_path, &["branch", "-D", &branch_name], state).await?;
+    if let Err(e) = run_git_command_ssh(project_id, repo_path, &args, state).await {
+        if force && e.contains("locked") {
+            run_git_command_ssh(
+                project_id,
+                repo_path,
+                &["worktree", "remove", "--force", "--force", worktree_path],
+                state,
+            )
+            .await?;
+        } else {
+            return Err(e);
         }
+    }
+
+    if let Some(branch_name) = branch_to_delete {
+        run_git_command_ssh(project_id, repo_path, &["branch", "-D", &branch_name], state).await?;
     }
 
     Ok(())
