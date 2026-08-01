@@ -387,6 +387,23 @@ impl PtyDaemon {
                     rows,
                 };
 
+                // Insert the session immediately (without an engine) so Resize,
+                // Write, and Kill requests arriving while the SSH channel is being
+                // established are not silently dropped. A Resize lands in
+                // meta.cols/rows and is applied to the engine once spawn completes.
+                {
+                    let mut map = sessions.lock().unwrap();
+                    map.insert(
+                        session_id.clone(),
+                        DaemonSession {
+                            meta: meta.clone(),
+                            engine: None,
+                        },
+                    );
+                    drop(map);
+                    Self::persist(sessions, persistence_path);
+                }
+
                 let ssh_manager = Arc::clone(ssh_manager);
                 let event_tx = event_tx.clone();
                 let sessions = Arc::clone(sessions);
@@ -397,6 +414,10 @@ impl PtyDaemon {
                     let ssh_session = match ssh_manager.ensure_connection(&project_id).await {
                         Ok(s) => s,
                         Err(e) => {
+                            let mut map = sessions.lock().unwrap();
+                            map.remove(&session_id);
+                            drop(map);
+                            PtyDaemon::persist(&sessions, &persistence_path);
                             if let Some(tx) = client_tx {
                                 let _ = tx.send(DaemonEvent::Error { message: e });
                             }
@@ -417,6 +438,10 @@ impl PtyDaemon {
                     {
                         Ok(e) => e,
                         Err(e) => {
+                            let mut map = sessions.lock().unwrap();
+                            map.remove(&session_id);
+                            drop(map);
+                            PtyDaemon::persist(&sessions, &persistence_path);
                             if let Some(tx) = client_tx {
                                 let _ = tx.send(DaemonEvent::Error { message: e });
                             }
@@ -425,13 +450,20 @@ impl PtyDaemon {
                     };
 
                     let mut map = sessions.lock().unwrap();
-                    map.insert(
-                        session_id.clone(),
-                        DaemonSession {
-                            meta: meta.clone(),
-                            engine: Some(Box::new(engine)),
-                        },
-                    );
+                    if let Some(session) = map.get_mut(&session_id) {
+                        if session.engine.is_none() {
+                            let (latest_cols, latest_rows) =
+                                (session.meta.cols, session.meta.rows);
+                            if (latest_cols, latest_rows) != (cols, rows) {
+                                let _ = engine.resize(latest_cols, latest_rows);
+                            }
+                            session.engine = Some(Box::new(engine));
+                        }
+                        // If an engine is already attached (concurrent respawn),
+                        // drop the redundant one; dropping it closes the channel.
+                    }
+                    // If the session is gone it was killed while connecting;
+                    // dropping the engine closes the SSH channel.
                     drop(map);
                     PtyDaemon::persist(&sessions, &persistence_path);
 
@@ -614,7 +646,15 @@ impl PtyDaemon {
 
                 let mut map = sessions.lock().unwrap();
                 if let Some(session) = map.get_mut(&session_id) {
-                    session.engine = Some(Box::new(engine));
+                    if session.engine.is_none() {
+                        let (latest_cols, latest_rows) = (session.meta.cols, session.meta.rows);
+                        if (latest_cols, latest_rows) != (meta.cols, meta.rows) {
+                            let _ = engine.resize(latest_cols, latest_rows);
+                        }
+                        session.engine = Some(Box::new(engine));
+                    }
+                    // If an engine is already attached, drop the redundant one;
+                    // dropping it closes the channel.
                 } else {
                     map.insert(
                         session_id,
