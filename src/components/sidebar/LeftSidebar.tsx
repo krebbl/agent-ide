@@ -505,7 +505,7 @@ function ProjectItem({
       </div>
       {isExpanded && (
         <div className="border-l border-[var(--color-surface0)]">
-          {isWorktreeLoading && (
+          {isWorktreeLoading && project.worktrees.length === 0 && (
             <div className="flex items-center gap-1.5 px-3 py-1 text-xs text-[var(--color-overlay0)]">
               <Loader2 size={10} className="animate-spin" />
               Loading worktrees...
@@ -514,7 +514,7 @@ function ProjectItem({
           {!isWorktreeLoading && project.worktrees.length === 0 && (
             <div className="px-3 py-1 text-xs text-[var(--color-overlay0)]">No worktrees</div>
           )}
-          {!isWorktreeLoading && project.worktrees.map((wt) => (
+          {project.worktrees.map((wt) => (
             <WorktreeItem
               key={wt.id}
               worktree={wt}
