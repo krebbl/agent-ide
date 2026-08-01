@@ -4,6 +4,73 @@ import { DaemonSessionMeta, Pane, LeafPane, SplitPane, TerminalTab } from "../ty
 import { useProjectStore } from "./projectStore";
 
 const WORKTREE_TAB_MAP_KEY = "agent-ide:worktree-tab-map";
+const LAYOUT_KEY = "agent-ide:terminal-layout";
+
+// In the persisted layout, leaf sessionId holds the daemon ptyId (stable
+// across restarts), not the ephemeral frontend session id.
+interface PersistedLayout {
+  tabs: TerminalTab[];
+  activeTabId: string | null;
+}
+
+function loadPersistedLayout(): PersistedLayout | null {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.tabs)) return null;
+    return parsed as PersistedLayout;
+  } catch {
+    return null;
+  }
+}
+
+function toPersistedPane(root: Pane, sessions: TerminalSession[]): Pane {
+  if (root.type === "leaf") {
+    const session = sessions.find((s) => s.id === root.sessionId);
+    return { ...root, sessionId: session?.ptyId ?? root.sessionId };
+  }
+  return {
+    ...root,
+    children: [
+      toPersistedPane(root.children[0], sessions),
+      toPersistedPane(root.children[1], sessions),
+    ],
+  };
+}
+
+function persistLayout(state: {
+  tabs: TerminalTab[];
+  sessions: TerminalSession[];
+  activeTabId: string | null;
+}) {
+  try {
+    const layout: PersistedLayout = {
+      tabs: state.tabs.map((t) => ({
+        ...t,
+        rootPane: toPersistedPane(t.rootPane, state.sessions),
+      })),
+      activeTabId: state.activeTabId,
+    };
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+  } catch {
+    // ignore quota errors
+  }
+}
+
+function rebuildPane(
+  root: Pane,
+  sessionIdByPtyId: Map<string, string>,
+): Pane | null {
+  if (root.type === "leaf") {
+    const sessionId = sessionIdByPtyId.get(root.sessionId);
+    return sessionId ? { ...root, sessionId } : null;
+  }
+  const left = rebuildPane(root.children[0], sessionIdByPtyId);
+  const right = rebuildPane(root.children[1], sessionIdByPtyId);
+  if (left && right) return { ...root, children: [left, right] };
+  return left ?? right;
+}
 
 function worktreeKey(projectId: string, worktreeId: string): string {
   return `${projectId}:${worktreeId}`;
@@ -489,25 +556,61 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
       if (toAdd.length === 0) return state;
 
-      const newTabs: TerminalTab[] = toAdd.map((s) => {
-        const paneId = crypto.randomUUID();
-        const leaf: LeafPane = { type: "leaf", id: paneId, sessionId: s.id };
-        return {
-          id: crypto.randomUUID(),
-          rootPane: leaf,
-          focusedPaneId: paneId,
-          projectId: s.projectId,
-          worktreeId: s.worktreeId,
-        };
-      });
+      const allSessions = [...state.sessions, ...toAdd];
+      const sessionIdByPtyId = new Map(
+        allSessions.map((s) => [s.ptyId, s.id] as const),
+      );
 
-      return {
-        sessions: [...state.sessions, ...toAdd],
-        tabs: [...state.tabs, ...newTabs],
-        activeTabId: state.activeTabId ?? newTabs[newTabs.length - 1]?.id ?? null,
-        activeSessionId:
-          state.activeSessionId ?? toAdd[toAdd.length - 1]?.id ?? null,
-      };
+      const layout = loadPersistedLayout();
+      const usedPtyIds = new Set<string>();
+      const restoredTabs: TerminalTab[] = [];
+
+      if (layout) {
+        for (const tab of layout.tabs) {
+          if (state.tabs.some((t) => t.id === tab.id)) continue;
+          const rootPane = rebuildPane(tab.rootPane, sessionIdByPtyId);
+          if (!rootPane) continue;
+          for (const leaf of collectLeaves(rootPane)) {
+            const session = allSessions.find((s) => s.id === leaf.sessionId);
+            if (session) usedPtyIds.add(session.ptyId);
+          }
+          const focusedPaneId = findLeaf(rootPane, tab.focusedPaneId)
+            ? tab.focusedPaneId
+            : getFirstLeaf(rootPane).id;
+          restoredTabs.push({ ...tab, rootPane, focusedPaneId });
+        }
+      }
+
+      const extraTabs: TerminalTab[] = toAdd
+        .filter((s) => !usedPtyIds.has(s.ptyId))
+        .map((s) => {
+          const paneId = crypto.randomUUID();
+          const leaf: LeafPane = { type: "leaf", id: paneId, sessionId: s.id };
+          return {
+            id: crypto.randomUUID(),
+            rootPane: leaf,
+            focusedPaneId: paneId,
+            projectId: s.projectId,
+            worktreeId: s.worktreeId,
+          };
+        });
+
+      const tabs = [...state.tabs, ...restoredTabs, ...extraTabs];
+      const savedActiveTabId =
+        layout?.activeTabId && tabs.some((t) => t.id === layout.activeTabId)
+          ? layout.activeTabId
+          : null;
+      const activeTabId =
+        state.activeTabId ?? savedActiveTabId ?? tabs[tabs.length - 1]?.id ?? null;
+      const activeTab = tabs.find((t) => t.id === activeTabId);
+      const activeSessionId =
+        state.activeSessionId ??
+        (activeTab
+          ? findLeaf(activeTab.rootPane, activeTab.focusedPaneId)?.sessionId ??
+            getFirstLeaf(activeTab.rootPane).sessionId
+          : null);
+
+      return { sessions: allSessions, tabs, activeTabId, activeSessionId };
     });
   },
 
@@ -710,6 +813,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 useTerminalStore.subscribe((state, prevState) => {
   if (state.worktreeTabMap !== prevState.worktreeTabMap) {
     persistWorktreeTabMap(state.worktreeTabMap);
+  }
+
+  if (state.tabs !== prevState.tabs || state.activeTabId !== prevState.activeTabId) {
+    persistLayout(state);
   }
 
   const updates: Array<{ id: string; hasUnseenActivity: true }> = [];
