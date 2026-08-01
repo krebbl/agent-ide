@@ -404,22 +404,16 @@ function ProjectItem({
             ? "bg-[var(--color-red)]"
             : "bg-[var(--color-overlay0)]";
 
-  const fetchedRef = useRef<Set<string>>(new Set());
   const isConnected = project.type !== "ssh" || connectionStatus === "connected";
 
   useEffect(() => {
-    if (!isExpanded || !isConnected) {
-      fetchedRef.current.delete(project.id);
-      return;
-    }
-    if (!fetchedRef.current.has(project.id) && !isWorktreeLoading) {
-      fetchedRef.current.add(project.id);
+    if (!isExpanded || !isConnected) return;
+    if (project.worktrees.length === 0 && !isWorktreeLoading) {
       fetchWorktrees(project.id);
     }
-  }, [isExpanded, isConnected, project.id, isWorktreeLoading, fetchWorktrees]);
+  }, [isExpanded, isConnected, project.id, project.worktrees.length, isWorktreeLoading, fetchWorktrees]);
 
   const handleRefresh = () => {
-    fetchedRef.current.delete(project.id);
     refreshWorktrees(project.id);
   };
 
