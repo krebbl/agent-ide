@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useFileTreeStore } from "../../stores/fileTreeStore";
+import { useEditorStore } from "../../stores/editorStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import FileTree from "./FileTree";
@@ -28,6 +29,9 @@ export default function RightSidebar() {
     const statusSuffix = activeProject.type === "ssh" ? `:${connectionStatus ?? ""}` : "";
     const key = `${activeProject.id}:${activeProject.type}:${worktree.path}${statusSuffix}`;
     if (key === lastKey.current) return;
+    if (lastKey.current) {
+      useEditorStore.getState().closeAll();
+    }
     lastKey.current = key;
 
     setRoot(worktree.path, activeProject.id, activeProject.type);

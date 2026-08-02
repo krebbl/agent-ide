@@ -1,9 +1,11 @@
 import { useProjectStore } from "../../stores/projectStore";
-import { Folder, Server } from "lucide-react";
+import { useUiStore } from "../../stores/uiStore";
+import { Folder, PanelRight, Server } from "lucide-react";
 
 export default function TitleBar() {
   const { getActiveProject } = useProjectStore();
   const activeProject = getActiveProject();
+  const { rightSidebarVisible, toggleRightSidebar } = useUiStore();
 
   return (
     <div
@@ -26,6 +28,17 @@ export default function TitleBar() {
           </span>
         </>
       )}
+      <button
+        className={`ml-auto transition-colors ${
+          rightSidebarVisible
+            ? "text-[var(--color-blue)]"
+            : "text-[var(--color-overlay1)]"
+        } hover:text-[var(--color-blue)]`}
+        onClick={toggleRightSidebar}
+        title="Toggle file tree"
+      >
+        <PanelRight size={14} />
+      </button>
     </div>
   );
 }
