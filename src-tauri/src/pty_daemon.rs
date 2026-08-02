@@ -335,7 +335,10 @@ impl PtyDaemon {
                     Ok(e) => e,
                     Err(e) => {
                         if let Some(tx) = client_tx {
-                            let _ = tx.send(DaemonEvent::Error { message: e });
+                            let _ = tx.send(DaemonEvent::Error {
+                                session_id: Some(session_id.clone()),
+                                message: e,
+                            });
                         }
                         return;
                     }
@@ -419,7 +422,10 @@ impl PtyDaemon {
                             drop(map);
                             PtyDaemon::persist(&sessions, &persistence_path);
                             if let Some(tx) = client_tx {
-                                let _ = tx.send(DaemonEvent::Error { message: e });
+                                let _ = tx.send(DaemonEvent::Error {
+                                    session_id: Some(session_id.clone()),
+                                    message: e,
+                                });
                             }
                             return;
                         }
@@ -443,7 +449,10 @@ impl PtyDaemon {
                             drop(map);
                             PtyDaemon::persist(&sessions, &persistence_path);
                             if let Some(tx) = client_tx {
-                                let _ = tx.send(DaemonEvent::Error { message: e });
+                                let _ = tx.send(DaemonEvent::Error {
+                                    session_id: Some(session_id.clone()),
+                                    message: e,
+                                });
                             }
                             return;
                         }

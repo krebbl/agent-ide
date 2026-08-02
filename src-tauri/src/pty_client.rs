@@ -110,8 +110,15 @@ impl PtyClient {
             DaemonEvent::SessionList { sessions } => {
                 let _ = app_handle.emit("pty_session_list", PtySessionListEvent { sessions });
             }
-            DaemonEvent::Error { message } => {
+            DaemonEvent::Error { session_id, message } => {
                 warn!("pty daemon error: {}", message);
+                let _ = app_handle.emit(
+                    "pty_error",
+                    PtyErrorEvent {
+                        session_id,
+                        message,
+                    },
+                );
             }
             DaemonEvent::Version { .. } => {}
         }
@@ -335,6 +342,13 @@ async fn connect_with_retry(socket_path: &PathBuf) -> Result<UnixStream, String>
         }
     }
     Err("Failed to connect to pty daemon".to_string())
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyErrorEvent {
+    pub session_id: Option<String>,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

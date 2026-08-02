@@ -90,6 +90,7 @@ pub enum DaemonEvent {
         title: String,
     },
     Error {
+        session_id: Option<String>,
         message: String,
     },
     Version {

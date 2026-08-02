@@ -27,10 +27,16 @@ interface PtyStateSnapshotEvent {
   title: string;
 }
 
+interface PtyErrorEvent {
+  sessionId: string | null;
+  message: string;
+}
+
 const outputHandlers = new Map<string, (data: Uint8Array) => void>();
 const exitHandlers = new Map<string, () => void>();
 const idleHandlers = new Map<string, (title: string) => void>();
 const busyHandlers = new Map<string, (title: string) => void>();
+const errorHandlers = new Map<string, (message: string) => void>();
 
 function base64ToUint8Array(base64: string): Uint8Array {
   const binary = atob(base64);
@@ -85,6 +91,14 @@ export async function initTerminalEventListeners() {
       handler(event.payload.title);
     }
   });
+  await listen<PtyErrorEvent>("pty_error", (event) => {
+    const { sessionId, message } = event.payload;
+    if (!sessionId) return;
+    const handler = errorHandlers.get(sessionId);
+    if (handler) {
+      handler(message);
+    }
+  });
   await listen<PtyStateSnapshotEvent>("pty_state_snapshot", (event) => {
     useTerminalStore.getState().updateSessionByPtyId(event.payload.sessionId, {
       isBusy: event.payload.isBusy,
@@ -110,6 +124,14 @@ export function unregisterTerminal(ptyId: string) {
   exitHandlers.delete(ptyId);
   idleHandlers.delete(ptyId);
   busyHandlers.delete(ptyId);
+  errorHandlers.delete(ptyId);
+}
+
+export function registerTerminalError(
+  ptyId: string,
+  handler: (message: string) => void,
+) {
+  errorHandlers.set(ptyId, handler);
 }
 
 export function registerTerminalIdle(

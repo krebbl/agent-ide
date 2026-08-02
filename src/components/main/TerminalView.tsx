@@ -7,6 +7,7 @@ import {
   registerTerminal,
   registerTerminalIdle,
   registerTerminalBusy,
+  registerTerminalError,
   unregisterTerminal,
 } from "../../services/terminalEvents";
 import { useTerminalStore } from "../../stores/terminalStore";
@@ -264,6 +265,11 @@ export default function TerminalView({
     });
     registerTerminalBusy(ptyId, () => {
       handleBusy();
+    });
+    registerTerminalError(ptyId, (message) => {
+      endProcess();
+      const sanitized = message.replace(/\x1b/g, "");
+      terminal.write(`\r\n\x1b[31m✗ ${sanitized}\x1b[0m\r\n`);
     });
 
     const handleInput = (data: string) => {
