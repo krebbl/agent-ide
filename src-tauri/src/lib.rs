@@ -1,4 +1,5 @@
 mod agents;
+pub mod lsp;
 mod notification;
 mod pr_info;
 mod pty;
@@ -632,6 +633,7 @@ pub struct SshConnection {
 
 pub struct AppState {
     pub ssh_connections: Mutex<HashMap<String, SshConnection>>,
+    pub lsp_manager: lsp::LspManager,
     pub app_handle: StdMutex<Option<tauri::AppHandle>>,
     pub active_pty_id: StdMutex<Option<String>>,
     pub pty_titles: StdMutex<HashMap<String, String>>,
@@ -2537,6 +2539,7 @@ pub fn run() {
         })
         .manage(Arc::new(AppState {
             ssh_connections: Mutex::new(HashMap::new()),
+            lsp_manager: lsp::LspManager::default(),
             app_handle: StdMutex::new(None),
             active_pty_id: StdMutex::new(None),
             pty_titles: StdMutex::new(HashMap::new()),
@@ -2584,6 +2587,12 @@ pub fn run() {
             check_agents_ready,
             pr_info::pr_for_branch,
             pr_info::pr_list_for_repo,
+            lsp::lsp_start,
+            lsp::lsp_request,
+            lsp::lsp_notify,
+            lsp::lsp_stop,
+            lsp::lsp_list,
+            lsp::lsp_server_available,
         ])
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
