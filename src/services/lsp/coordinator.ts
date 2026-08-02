@@ -75,7 +75,7 @@ export function ensureServer(projectId: string, serverKey: string): Promise<bool
   let promise = serverPromises.get(key);
   if (!promise) {
     promise = (async () => {
-      const available = await client.lspServerAvailable(serverKey);
+      const available = await client.lspServerAvailable(serverKey, projectId);
       if (!available) {
         useLspStore.getState().setStatus(key, "unavailable");
         return false;

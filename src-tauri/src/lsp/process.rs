@@ -97,6 +97,58 @@ where
     Ok(())
 }
 
+pub fn frame_bytes(value: &Value) -> Result<Vec<u8>, String> {
+    let body = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+    let header = format!("Content-Length: {}\r\n\r\n", body.len());
+    let mut out = header.into_bytes();
+    out.extend_from_slice(&body);
+    Ok(out)
+}
+
+/// Incremental JSON-RPC frame parser for byte-stream transports (SSH channels).
+#[derive(Default)]
+pub struct FrameParser {
+    buf: Vec<u8>,
+}
+
+impl FrameParser {
+    pub fn new() -> Self {
+        Self { buf: Vec::new() }
+    }
+
+    pub fn feed(&mut self, data: &[u8]) {
+        self.buf.extend_from_slice(data);
+    }
+
+    pub fn next_message(&mut self) -> Result<Option<Value>, String> {
+        let header_end = self.buf.windows(4).position(|w| w == b"\r\n\r\n");
+        let Some(pos) = header_end else {
+            if self.buf.len() > 1024 * 1024 {
+                return Err("LSP header exceeded 1MB without terminator".to_string());
+            }
+            return Ok(None);
+        };
+        let header = std::str::from_utf8(&self.buf[..pos])
+            .map_err(|_| "Invalid LSP header encoding".to_string())?;
+        let mut content_length: Option<usize> = None;
+        for line in header.split("\r\n") {
+            if let Some(value) = line.strip_prefix("Content-Length:") {
+                content_length = value.trim().parse::<usize>().ok();
+            }
+        }
+        let len = content_length.ok_or("Missing Content-Length header")?;
+        let body_start = pos + 4;
+        if self.buf.len() < body_start + len {
+            return Ok(None);
+        }
+        let body: Vec<u8> = self.buf[body_start..body_start + len].to_vec();
+        self.buf.drain(..body_start + len);
+        let value = serde_json::from_slice(&body)
+            .map_err(|e| format!("Invalid JSON from language server: {}", e))?;
+        Ok(Some(value))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,6 +170,21 @@ mod tests {
         let bytes: &[u8] = b"";
         let mut reader = BufReader::new(bytes);
         assert!(read_message(&mut reader).await.unwrap().is_none());
+    }
+
+    #[test]
+    fn frame_parser_handles_split_and_batched_frames() {
+        let mut parser = FrameParser::new();
+        let first = frame_bytes(&json!({"id": 1})).unwrap();
+        let second = frame_bytes(&json!({"id": 2})).unwrap();
+        let (head, rest) = first.split_at(10);
+        parser.feed(head);
+        assert!(parser.next_message().unwrap().is_none());
+        parser.feed(rest);
+        parser.feed(&second);
+        assert_eq!(parser.next_message().unwrap().unwrap()["id"], json!(1));
+        assert_eq!(parser.next_message().unwrap().unwrap()["id"], json!(2));
+        assert!(parser.next_message().unwrap().is_none());
     }
 
     #[tokio::test]

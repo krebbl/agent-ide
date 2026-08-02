@@ -55,8 +55,11 @@ export function lspStop(projectId: string, languageId: string): Promise<void> {
   return invoke<void>("lsp_stop", { projectId, languageId });
 }
 
-export function lspServerAvailable(languageId: string): Promise<boolean> {
-  return invoke<boolean>("lsp_server_available", { languageId });
+export function lspServerAvailable(
+  languageId: string,
+  projectId: string,
+): Promise<boolean> {
+  return invoke<boolean>("lsp_server_available", { languageId, projectId });
 }
 
 export function onLspMessage(handler: (event: LspMessageEvent) => void) {
