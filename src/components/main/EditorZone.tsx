@@ -7,6 +7,7 @@ import { monaco } from "../../utils/monacoSetup";
 import { installLsp, contentChanged } from "../../services/lsp/coordinator";
 import { registerProviders } from "../../services/lsp/providers";
 import { installEditorOpener } from "../../services/navigation";
+import { installPathLinkProviders } from "../../services/pathLinks";
 import TabStrip from "../ui/TabStrip";
 
 export default function EditorZone() {
@@ -62,6 +63,7 @@ export default function EditorZone() {
     installLsp();
     registerProviders();
     installEditorOpener();
+    installPathLinkProviders();
     editor.onDidFocusEditorText(() => {
       useUiStore.getState().setFocusedZone("editor");
     });
