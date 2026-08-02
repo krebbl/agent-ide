@@ -61,6 +61,15 @@ monaco.editor.defineTheme("catppuccin-mocha", {
   },
 });
 
+monaco.typescript.typescriptDefaults.setDiagnosticsOptions({
+  noSemanticValidation: true,
+  noSyntaxValidation: true,
+});
+monaco.typescript.javascriptDefaults.setDiagnosticsOptions({
+  noSemanticValidation: true,
+  noSyntaxValidation: true,
+});
+
 loader.config({ monaco });
 
 export { monaco };
