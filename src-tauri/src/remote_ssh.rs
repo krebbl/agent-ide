@@ -53,6 +53,7 @@ pub async fn connect_ssh(
     .map_err(|_| "Connection timed out".to_string())?
     .map_err(|e| format!("Failed to connect: {}", e))?;
 
+    let auth = tokio::time::timeout(Duration::from_secs(60), async {
     match auth_method {
         "key" => {
             let kp = key_path.ok_or("Key path is required for key authentication")?;
@@ -117,6 +118,11 @@ pub async fn connect_ssh(
         }
         _ => return Err(format!("Unsupported auth method: {}", auth_method)),
     }
+    Ok(())
+    })
+    .await
+    .map_err(|_| "SSH authentication timed out".to_string())?;
+    auth?;
 
     Ok(session)
 }
@@ -172,20 +178,24 @@ impl RemotePtyEngine {
         event_tx: tokio::sync::mpsc::Sender<(String, crate::pty_engine::EngineEvent)>,
         attach: bool,
     ) -> Result<Self, String> {
-        let channel = ssh_session
-            .lock()
-            .await
-            .channel_open_session()
-            .await
-            .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
+        let channel = {
+            let handle = ssh_session.lock().await;
+            tokio::time::timeout(Duration::from_secs(30), handle.channel_open_session())
+                .await
+                .map_err(|_| "Timed out opening SSH channel".to_string())?
+                .map_err(|e| format!("Failed to open SSH channel: {}", e))?
+        };
 
-        channel
-            .request_pty(false, "xterm-256color", cols as u32, rows as u32, 0, 0, &[])
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            channel.request_pty(false, "xterm-256color", cols as u32, rows as u32, 0, 0, &[]),
+        )
+        .await
+        .map_err(|_| "request_pty timed out".to_string())?
+        .map_err(|e| format!("request_pty failed: {}", e))?;
+        tokio::time::timeout(Duration::from_secs(15), channel.request_shell(true))
             .await
-            .map_err(|e| format!("request_pty failed: {}", e))?;
-        channel
-            .request_shell(true)
-            .await
+            .map_err(|_| "request_shell timed out".to_string())?
             .map_err(|e| format!("request_shell failed: {}", e))?;
 
         if attach {
