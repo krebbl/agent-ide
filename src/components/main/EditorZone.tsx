@@ -1,11 +1,13 @@
 import { useEffect, useRef } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
-import { FileCode, X } from "lucide-react";
+import { FileCode } from "lucide-react";
 import { useEditorStore, languageFromPath } from "../../stores/editorStore";
+import { useUiStore } from "../../stores/uiStore";
 import { monaco } from "../../utils/monacoSetup";
 import { installLsp, contentChanged } from "../../services/lsp/coordinator";
 import { registerProviders } from "../../services/lsp/providers";
 import { installEditorOpener } from "../../services/navigation";
+import TabStrip from "../ui/TabStrip";
 
 export default function EditorZone() {
   const { openFiles, activePath, setActive, closeFile, updateContent, saveActive } =
@@ -42,6 +44,14 @@ export default function EditorZone() {
         e.preventDefault();
         void saveActive();
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === "w") {
+        if (useUiStore.getState().focusedZone !== "editor") return;
+        const { activePath, closeFile } = useEditorStore.getState();
+        if (activePath) {
+          e.preventDefault();
+          closeFile(activePath);
+        }
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -52,56 +62,44 @@ export default function EditorZone() {
     installLsp();
     registerProviders();
     installEditorOpener();
+    editor.onDidFocusEditorText(() => {
+      useUiStore.getState().setFocusedZone("editor");
+    });
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void saveActive();
+    });
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW, () => {
+      const { activePath, closeFile } = useEditorStore.getState();
+      if (activePath) closeFile(activePath);
     });
   };
 
   const fileName = (path: string) => path.split("/").pop() ?? path;
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--color-surface0)] px-3">
+    <div
+      className="flex h-full flex-col"
+      onPointerDown={() => useUiStore.getState().setFocusedZone("editor")}
+    >
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--color-surface0)] px-2">
         <FileCode size={14} className="text-[var(--color-blue)]" />
         <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-subtext1)]">
           Editor
         </span>
+        <TabStrip
+          tabs={openFiles.map((file) => ({
+            id: file.path,
+            title: fileName(file.path),
+            tooltip: file.path,
+            badge: file.dirty ? (
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-peach)]" />
+            ) : undefined,
+          }))}
+          activeId={activePath}
+          onSelect={setActive}
+          onClose={closeFile}
+        />
       </div>
-      {openFiles.length > 0 && (
-        <div className="no-scrollbar flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-[var(--color-surface0)] bg-[var(--color-mantle)]">
-          {openFiles.map((file) => {
-            const isActive = file.path === activePath;
-            return (
-              <div
-                key={file.path}
-                className={`group flex cursor-pointer items-center gap-1.5 border-r border-[var(--color-surface0)] px-3 text-xs ${
-                  isActive
-                    ? "bg-[var(--color-base)] text-[var(--color-text)]"
-                    : "text-[var(--color-overlay1)] hover:bg-[var(--color-surface0)]"
-                }`}
-                onClick={() => setActive(file.path)}
-                title={file.path}
-              >
-                <span className="select-none whitespace-nowrap">
-                  {fileName(file.path)}
-                </span>
-                {file.dirty && (
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-peach)]" />
-                )}
-                <button
-                  className="ml-1 shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-[var(--color-surface1)] group-hover:opacity-100"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    closeFile(file.path);
-                  }}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
       <div className="flex flex-1 overflow-hidden">
         {activeFile ? (
           <Editor

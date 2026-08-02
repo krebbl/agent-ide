@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { nextActiveAfterClose } from "../utils/tabActivation";
 
 export interface OpenFile {
   path: string;
@@ -116,16 +117,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   closeFile: (path) => {
-    set((s) => {
-      const idx = s.openFiles.findIndex((f) => f.path === path);
-      const openFiles = s.openFiles.filter((f) => f.path !== path);
-      let activePath = s.activePath;
-      if (activePath === path) {
-        const neighbor = openFiles[idx] ?? openFiles[idx - 1] ?? null;
-        activePath = neighbor?.path ?? null;
-      }
-      return { openFiles, activePath };
-    });
+    set((s) => ({
+      openFiles: s.openFiles.filter((f) => f.path !== path),
+      activePath: nextActiveAfterClose(
+        s.openFiles.map((f) => f.path),
+        path,
+        s.activePath,
+      ),
+    }));
   },
 
   closeAll: () => set({ openFiles: [], activePath: null }),
