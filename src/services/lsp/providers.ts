@@ -20,6 +20,7 @@ const MONACO_LANGUAGES = [
   "rust",
   "python",
   "go",
+  "ruby",
   "c",
   "cpp",
 ];

@@ -719,4 +719,51 @@ mod tests {
         client.shutdown().await;
         manager.remove("test-project", "typescript").await;
     }
+
+    #[tokio::test]
+    #[ignore]
+    async fn smoke_ruby_lsp() {
+        let manager = Arc::new(LspManager::default());
+        let cwd = std::env::current_dir().unwrap();
+        let root = cwd.parent().unwrap().to_string_lossy().to_string();
+        let info = start_server(
+            None,
+            manager.clone(),
+            "test-project",
+            "ruby",
+            &root,
+            SpawnTarget::Local,
+        )
+        .await
+        .unwrap();
+        assert!(info.capabilities.is_object());
+        let client = manager.get("test-project", "ruby").await.unwrap();
+        client
+            .transport
+            .notify(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": "file:///tmp/agent-ide-lsp-smoke.rb",
+                        "languageId": "ruby",
+                        "version": 1,
+                        "text": "def greet(name)\n  puts name\nend\ngreet(\"hi\")\n"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        let symbols = client
+            .transport
+            .request(
+                "textDocument/documentSymbol",
+                json!({
+                    "textDocument": { "uri": "file:///tmp/agent-ide-lsp-smoke.rb" }
+                }),
+            )
+            .await;
+        assert!(symbols.is_ok(), "documentSymbol failed: {:?}", symbols.err());
+        client.shutdown().await;
+        manager.remove("test-project", "ruby").await;
+    }
 }

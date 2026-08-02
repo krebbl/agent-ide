@@ -14,6 +14,7 @@ const SERVER_KEY_BY_LSP_LANGUAGE: Record<string, string> = {
   rust: "rust",
   python: "python",
   go: "go",
+  ruby: "ruby",
   c: "c",
   cpp: "cpp",
 };
@@ -39,6 +40,10 @@ export function lspLanguageFromPath(path: string): string | null {
       return "python";
     case "go":
       return "go";
+    case "rb":
+    case "rake":
+    case "gemspec":
+      return "ruby";
     case "c":
     case "h":
       return "c";

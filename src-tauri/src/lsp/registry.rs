@@ -25,6 +25,10 @@ pub fn server_for_language(language_id: &str) -> Option<ServerSpec> {
             command: "gopls",
             args: &[],
         }),
+        "ruby" => Some(ServerSpec {
+            command: "ruby-lsp",
+            args: &[],
+        }),
         "c" | "cpp" => Some(ServerSpec {
             command: "clangd",
             args: &[],
