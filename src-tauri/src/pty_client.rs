@@ -352,6 +352,11 @@ pub struct PtySessionListEvent {
 }
 
 pub fn daemon_config_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("AGENT_IDE_CONFIG_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
     dirs::config_dir()
         .expect("config directory is available")
         .join("agent-ide")
