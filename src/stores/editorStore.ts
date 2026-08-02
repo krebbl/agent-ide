@@ -74,9 +74,16 @@ export function languageFromPath(path: string): string {
   }
 }
 
+export interface PendingReveal {
+  path: string;
+  line: number;
+  column: number;
+}
+
 interface EditorState {
   openFiles: OpenFile[];
   activePath: string | null;
+  pendingReveal: PendingReveal | null;
 
   openFile: (projectId: string, path: string) => Promise<void>;
   closeFile: (path: string) => void;
@@ -85,11 +92,15 @@ interface EditorState {
   updateContent: (path: string, content: string) => void;
   saveFile: (path: string) => Promise<void>;
   saveActive: () => Promise<void>;
+  setPendingReveal: (reveal: PendingReveal | null) => void;
 }
 
 export const useEditorStore = create<EditorState>((set, get) => ({
   openFiles: [],
   activePath: null,
+  pendingReveal: null,
+
+  setPendingReveal: (reveal) => set({ pendingReveal: reveal }),
 
   openFile: async (projectId, path) => {
     const existing = get().openFiles.find((f) => f.path === path);

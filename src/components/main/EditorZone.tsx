@@ -1,13 +1,40 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { FileCode, X } from "lucide-react";
 import { useEditorStore, languageFromPath } from "../../stores/editorStore";
 import { monaco } from "../../utils/monacoSetup";
+import { installLsp, contentChanged } from "../../services/lsp/coordinator";
+import { registerProviders } from "../../services/lsp/providers";
+import { installEditorOpener } from "../../services/navigation";
 
 export default function EditorZone() {
   const { openFiles, activePath, setActive, closeFile, updateContent, saveActive } =
     useEditorStore();
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
+  const pendingReveal = useEditorStore((s) => s.pendingReveal);
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+
+  useEffect(() => {
+    if (!pendingReveal || pendingReveal.path !== activePath) return;
+    const editor = editorRef.current;
+    if (!editor) return;
+    let attempts = 0;
+    const tryReveal = () => {
+      if (editor.getModel()?.uri.path !== pendingReveal.path) {
+        if (attempts++ < 20) setTimeout(tryReveal, 50);
+        return;
+      }
+      const position = {
+        lineNumber: pendingReveal.line,
+        column: pendingReveal.column,
+      };
+      editor.setPosition(position);
+      editor.revealPositionInCenterIfOutsideViewport(position);
+      editor.focus();
+      useEditorStore.getState().setPendingReveal(null);
+    };
+    tryReveal();
+  }, [pendingReveal, activePath]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -21,6 +48,10 @@ export default function EditorZone() {
   }, [saveActive]);
 
   const handleMount: OnMount = (editor) => {
+    editorRef.current = editor;
+    installLsp();
+    registerProviders();
+    installEditorOpener();
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void saveActive();
     });
@@ -79,7 +110,10 @@ export default function EditorZone() {
             value={activeFile.content}
             theme="catppuccin-mocha"
             onMount={handleMount}
-            onChange={(value) => updateContent(activeFile.path, value ?? "")}
+            onChange={(value, event) => {
+              updateContent(activeFile.path, value ?? "");
+              contentChanged(activeFile.projectId, activeFile.path, event.changes);
+            }}
             options={{
               fontSize: 13,
               fontFamily: "'SF Mono', Menlo, Monaco, 'Courier New', monospace",
