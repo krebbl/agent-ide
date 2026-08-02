@@ -69,6 +69,17 @@ monaco.typescript.javascriptDefaults.setDiagnosticsOptions({
   noSemanticValidation: true,
   noSyntaxValidation: true,
 });
+const lspOwnedModes = {
+  completionItems: false,
+  hovers: false,
+  definitions: false,
+  references: false,
+  documentSymbols: false,
+  documentHighlights: false,
+  rename: false,
+};
+monaco.typescript.typescriptDefaults.setModeConfiguration(lspOwnedModes);
+monaco.typescript.javascriptDefaults.setModeConfiguration(lspOwnedModes);
 
 loader.config({ monaco });
 

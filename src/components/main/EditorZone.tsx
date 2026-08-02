@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { FileCode } from "lucide-react";
 import { useEditorStore, languageFromPath } from "../../stores/editorStore";
@@ -9,12 +9,16 @@ import { registerProviders } from "../../services/lsp/providers";
 import { installEditorOpener } from "../../services/navigation";
 import { installPathLinkProviders } from "../../services/pathLinks";
 import TabStrip from "../ui/TabStrip";
+import ConfirmCloseDialog from "../dialogs/ConfirmCloseDialog";
+import SymbolSearchDialog from "../dialogs/SymbolSearchDialog";
 
 export default function EditorZone() {
-  const { openFiles, activePath, setActive, closeFile, updateContent, saveActive } =
+  const { openFiles, activePath, setActive, requestClose, confirmClose, cancelClose, updateContent, saveActive } =
     useEditorStore();
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
   const pendingReveal = useEditorStore((s) => s.pendingReveal);
+  const pendingClose = useEditorStore((s) => s.pendingClose);
+  const [symbolSearchOpen, setSymbolSearchOpen] = useState(false);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
 
   useEffect(() => {
@@ -47,10 +51,17 @@ export default function EditorZone() {
       }
       if ((e.metaKey || e.ctrlKey) && e.key === "w") {
         if (useUiStore.getState().focusedZone !== "editor") return;
-        const { activePath, closeFile } = useEditorStore.getState();
+        const { activePath, requestClose } = useEditorStore.getState();
         if (activePath) {
           e.preventDefault();
-          closeFile(activePath);
+          requestClose(activePath);
+        }
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "t") {
+        if (useUiStore.getState().focusedZone !== "editor") return;
+        if (useEditorStore.getState().activePath) {
+          e.preventDefault();
+          setSymbolSearchOpen(true);
         }
       }
     };
@@ -71,8 +82,11 @@ export default function EditorZone() {
       void saveActive();
     });
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW, () => {
-      const { activePath, closeFile } = useEditorStore.getState();
-      if (activePath) closeFile(activePath);
+      const { activePath, requestClose } = useEditorStore.getState();
+      if (activePath) requestClose(activePath);
+    });
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyT, () => {
+      if (useEditorStore.getState().activePath) setSymbolSearchOpen(true);
     });
   };
 
@@ -99,7 +113,7 @@ export default function EditorZone() {
           }))}
           activeId={activePath}
           onSelect={setActive}
-          onClose={closeFile}
+          onClose={requestClose}
         />
       </div>
       <div className="flex flex-1 overflow-hidden">
@@ -132,6 +146,20 @@ export default function EditorZone() {
           </div>
         )}
       </div>
+      {pendingClose && (
+        <ConfirmCloseDialog
+          name={fileName(pendingClose)}
+          onSave={() => void confirmClose(true)}
+          onDiscard={() => void confirmClose(false)}
+          onCancel={cancelClose}
+        />
+      )}
+      {symbolSearchOpen && activeFile && (
+        <SymbolSearchDialog
+          file={activeFile}
+          onClose={() => setSymbolSearchOpen(false)}
+        />
+      )}
     </div>
   );
 }

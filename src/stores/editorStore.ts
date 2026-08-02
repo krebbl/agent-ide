@@ -85,9 +85,15 @@ interface EditorState {
   openFiles: OpenFile[];
   activePath: string | null;
   pendingReveal: PendingReveal | null;
+  pendingClose: string | null;
 
   openFile: (projectId: string, path: string) => Promise<void>;
+  requestClose: (path: string) => void;
+  confirmClose: (save: boolean) => Promise<void>;
+  cancelClose: () => void;
   closeFile: (path: string) => void;
+  closeUnderPath: (path: string) => void;
+  remapPath: (oldPath: string, newPath: string) => void;
   closeAll: () => void;
   setActive: (path: string) => void;
   updateContent: (path: string, content: string) => void;
@@ -100,9 +106,59 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   openFiles: [],
   activePath: null,
   pendingReveal: null,
+  pendingClose: null,
 
   setPendingReveal: (reveal) => set({ pendingReveal: reveal }),
 
+  requestClose: (path) => {
+    const file = get().openFiles.find((f) => f.path === path);
+    if (file?.dirty) {
+      set({ pendingClose: path });
+    } else {
+      get().closeFile(path);
+    }
+  },
+
+  confirmClose: async (save) => {
+    const path = get().pendingClose;
+    if (!path) return;
+    set({ pendingClose: null });
+    if (save) {
+      try {
+        await get().saveFile(path);
+      } catch {
+        return;
+      }
+    }
+    get().closeFile(path);
+  },
+
+  cancelClose: () => set({ pendingClose: null }),
+
+  closeUnderPath: (path) => {
+    set((s) => {
+      const isUnder = (p: string) => p === path || p.startsWith(path + "/");
+      const openFiles = s.openFiles.filter((f) => !isUnder(f.path));
+      const activePath =
+        s.activePath && isUnder(s.activePath)
+          ? (openFiles[openFiles.length - 1]?.path ?? null)
+          : s.activePath;
+      return { openFiles, activePath };
+    });
+  },
+
+  remapPath: (oldPath, newPath) => {
+    const remap = (p: string) =>
+      p === oldPath || p.startsWith(oldPath + "/")
+        ? newPath + p.slice(oldPath.length)
+        : p;
+    set((s) => ({
+      openFiles: s.openFiles.map((f) =>
+        f.path === remap(f.path) ? f : { ...f, path: remap(f.path) },
+      ),
+      activePath: s.activePath ? remap(s.activePath) : s.activePath,
+    }));
+  },
   openFile: async (projectId, path) => {
     const existing = get().openFiles.find((f) => f.path === path);
     if (existing) {

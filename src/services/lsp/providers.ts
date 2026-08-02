@@ -135,6 +135,46 @@ export function registerProviders() {
       },
     });
 
+    monaco.languages.registerSignatureHelpProvider(language, {
+      signatureHelpTriggerCharacters: ["(", ","],
+      signatureHelpRetriggerCharacters: [")"],
+      provideSignatureHelp: async (model, position) => {
+        const file = fileForModel(model);
+        if (!file) return null;
+        const result = await lspDocumentRequest<any>(
+          file,
+          "textDocument/signatureHelp",
+          textDocumentPosition(file, position),
+        );
+        if (!result?.signatures?.length) return null;
+        const toDoc = (doc: any) =>
+          doc
+            ? {
+                value:
+                  typeof doc === "string" ? doc : (doc.value ?? ""),
+              }
+            : undefined;
+        return {
+          value: {
+            signatures: result.signatures.map((sig: any) => ({
+              label: sig.label,
+              documentation: toDoc(sig.documentation),
+              parameters: (sig.parameters ?? []).map((p: any) => ({
+                label:
+                  typeof p.label === "string"
+                    ? p.label
+                    : sig.label.slice(p.label[0], p.label[1]),
+                documentation: toDoc(p.documentation),
+              })),
+            })),
+            activeSignature: result.activeSignature ?? 0,
+            activeParameter: result.activeParameter ?? 0,
+          },
+          dispose: () => {},
+        };
+      },
+    });
+
     monaco.languages.registerDocumentSymbolProvider(language, {
       provideDocumentSymbols: async (model) => {
         const file = fileForModel(model);

@@ -61,7 +61,14 @@ function serverKeyForPath(path: string): string | null {
   return lspLanguage ? (SERVER_KEY_BY_LSP_LANGUAGE[lspLanguage] ?? null) : null;
 }
 
+export const FileChangeType = {
+  Created: 1,
+  Changed: 2,
+  Deleted: 3,
+} as const;
+
 const serverPromises = new Map<string, Promise<boolean>>();
+const startedServers = new Set<string>();
 
 export function ensureServer(projectId: string, serverKey: string): Promise<boolean> {
   const key = `${projectId}:${serverKey}`;
@@ -77,6 +84,7 @@ export function ensureServer(projectId: string, serverKey: string): Promise<bool
       if (!rootPath) return false;
       try {
         await client.lspStart(projectId, serverKey, rootPath);
+        startedServers.add(key);
         return true;
       } catch (e) {
         useLspStore.getState().setStatus(key, "crashed", String(e));
@@ -85,10 +93,39 @@ export function ensureServer(projectId: string, serverKey: string): Promise<bool
     })();
     serverPromises.set(key, promise);
     promise.then((ok) => {
-      if (!ok) serverPromises.delete(key);
+      if (!ok) {
+        serverPromises.delete(key);
+        startedServers.delete(key);
+      }
     });
   }
   return promise;
+}
+
+export async function restartServer(
+  projectId: string,
+  serverKey: string,
+): Promise<void> {
+  const key = `${projectId}:${serverKey}`;
+  serverPromises.delete(key);
+  startedServers.delete(key);
+  await client.lspStop(projectId, serverKey).catch(() => undefined);
+  await ensureServer(projectId, serverKey);
+}
+
+export function notifyWatchedFiles(
+  projectId: string,
+  changes: { path: string; type: number }[],
+) {
+  for (const key of startedServers) {
+    if (!key.startsWith(projectId + ":")) continue;
+    const serverKey = key.slice(projectId.length + 1);
+    void client
+      .lspNotify(projectId, serverKey, "workspace/didChangeWatchedFiles", {
+        changes: changes.map((c) => ({ uri: pathToUri(c.path), type: c.type })),
+      })
+      .catch(() => undefined);
+  }
 }
 
 const queues = new Map<string, Promise<unknown>>();
@@ -211,13 +248,14 @@ export function installLsp() {
   });
 
   client.onLspStatus((event) => {
+    const key = `${event.project_id}:${event.language_id}`;
     useLspStore
       .getState()
-      .setStatus(
-        `${event.project_id}:${event.language_id}`,
-        event.status as LspServerStatus,
-        event.error,
-      );
+      .setStatus(key, event.status as LspServerStatus, event.error);
+    if (event.status === "crashed" || event.status === "stopped") {
+      serverPromises.delete(key);
+      startedServers.delete(key);
+    }
   });
 
   useEditorStore.subscribe((state, prev) => {
