@@ -502,9 +502,18 @@ async fn spawn_and_initialize(
             ServerHandle::Local(Mutex::new(child))
         }
         SpawnTarget::Remote(session) => {
+            let shell = remote::remote_resolve_shell(session, spec.command)
+                .await
+                .ok_or_else(|| {
+                    format!(
+                        "Language server '{}' not found on the remote host's PATH",
+                        spec.command
+                    )
+                })?;
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
             remote::spawn_remote(
                 session.clone(),
+                shell,
                 &spec,
                 root_path,
                 outgoing_rx,

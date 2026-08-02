@@ -1,6 +1,7 @@
 import { PanelBottom } from "lucide-react";
 import { useLspStore, type LspServerStatus } from "../../stores/lspStore";
 import { useTerminalStore } from "../../stores/terminalStore";
+import { useProjectStore } from "../../stores/projectStore";
 import { restartServer } from "../../services/lsp/coordinator";
 
 const STATUS_COLORS: Record<LspServerStatus, string> = {
@@ -13,7 +14,10 @@ const STATUS_COLORS: Record<LspServerStatus, string> = {
 
 export default function StatusBar() {
   const servers = useLspStore((s) => s.servers);
-  const entries = Object.entries(servers);
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
+  const entries = Object.entries(servers).filter(([key]) =>
+    activeProjectId ? key.startsWith(activeProjectId + ":") : true,
+  );
   const isCollapsed = useTerminalStore((s) => s.isCollapsed);
   const setCollapsed = useTerminalStore((s) => s.setCollapsed);
 
