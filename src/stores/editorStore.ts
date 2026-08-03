@@ -81,12 +81,41 @@ export interface PendingReveal {
   column: number;
 }
 
+interface StoredTabs {
+  openPaths: string[];
+  activePath: string | null;
+}
+
+let tabsByWorktree: Record<string, StoredTabs> = {};
+let tabsLoadedPromise: Promise<void> | null = null;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function ensureTabsLoaded(): Promise<void> {
+  if (!tabsLoadedPromise) {
+    tabsLoadedPromise = invoke<Record<string, StoredTabs>>("load_editor_tabs")
+      .then((tabs) => {
+        tabsByWorktree = tabs ?? {};
+      })
+      .catch(() => {});
+  }
+  return tabsLoadedPromise;
+}
+
+function schedulePersist() {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    invoke("save_editor_tabs", { tabs: tabsByWorktree }).catch(() => {});
+  }, 300);
+}
+
 interface EditorState {
   openFiles: OpenFile[];
   activePath: string | null;
+  worktreeKey: string | null;
   pendingReveal: PendingReveal | null;
   pendingClose: string | null;
 
+  setWorktree: (key: string, projectId: string) => Promise<void>;
   openFile: (projectId: string, path: string) => Promise<void>;
   requestClose: (path: string) => void;
   confirmClose: (save: boolean) => Promise<void>;
@@ -105,8 +134,33 @@ interface EditorState {
 export const useEditorStore = create<EditorState>((set, get) => ({
   openFiles: [],
   activePath: null,
+  worktreeKey: null,
   pendingReveal: null,
   pendingClose: null,
+
+  setWorktree: async (key, projectId) => {
+    if (get().worktreeKey === key) return;
+    await ensureTabsLoaded();
+    const stored = tabsByWorktree[key];
+    if (!stored || stored.openPaths.length === 0) {
+      set({ worktreeKey: key, openFiles: [], activePath: null });
+      return;
+    }
+    const files: OpenFile[] = [];
+    for (const path of stored.openPaths) {
+      try {
+        const content = await invoke<string>("fs_read_file", { projectId, path });
+        files.push({ path, projectId, content, dirty: false });
+      } catch {
+        // file no longer exists or is unreadable, skip
+      }
+    }
+    const activePath =
+      stored.activePath && files.some((f) => f.path === stored.activePath)
+        ? stored.activePath
+        : (files[files.length - 1]?.path ?? null);
+    set({ worktreeKey: key, openFiles: files, activePath });
+  },
 
   setPendingReveal: (reveal) => set({ pendingReveal: reveal }),
 
@@ -215,3 +269,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (activePath) await saveFile(activePath);
   },
 }));
+
+useEditorStore.subscribe((state, prev) => {
+  if (state.openFiles === prev.openFiles && state.activePath === prev.activePath)
+    return;
+  if (!state.worktreeKey) return;
+  tabsByWorktree[state.worktreeKey] = {
+    openPaths: state.openFiles.map((f) => f.path),
+    activePath: state.activePath,
+  };
+  schedulePersist();
+});

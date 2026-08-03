@@ -775,6 +775,44 @@ fn load_projects(app_handle: tauri::AppHandle) -> Result<Vec<Project>, String> {
     Ok(projects)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeTabs {
+    pub open_paths: Vec<String>,
+    pub active_path: Option<String>,
+}
+
+#[tauri::command]
+fn save_editor_tabs(
+    tabs: HashMap<String, WorktreeTabs>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let config_path = app_config_path(&app_handle)?;
+    std::fs::create_dir_all(&config_path)
+        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    let file_path = config_path.join("editor_tabs.json");
+    let json = serde_json::to_string_pretty(&tabs)
+        .map_err(|e| format!("Failed to serialize editor tabs: {}", e))?;
+    std::fs::write(&file_path, json)
+        .map_err(|e| format!("Failed to write editor tabs file: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn load_editor_tabs(
+    app_handle: tauri::AppHandle,
+) -> Result<HashMap<String, WorktreeTabs>, String> {
+    let config_path = app_config_path(&app_handle)?;
+    let file_path = config_path.join("editor_tabs.json");
+    if !file_path.exists() {
+        return Ok(HashMap::new());
+    }
+    let content = std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read editor tabs file: {}", e))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse editor tabs file: {}", e))
+}
+
 #[tauri::command]
 fn check_is_git_repo(path: String) -> Result<bool, String> {
     let git_path = Path::new(&path).join(".git");
@@ -2543,6 +2581,8 @@ pub fn run() {
             load_projects,
             save_expanded_projects,
             load_expanded_projects,
+            save_editor_tabs,
+            load_editor_tabs,
             check_is_git_repo,
             git_init,
             git_worktree_list,

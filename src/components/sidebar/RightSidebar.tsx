@@ -29,11 +29,11 @@ export default function RightSidebar() {
     const statusSuffix = activeProject.type === "ssh" ? `:${connectionStatus ?? ""}` : "";
     const key = `${activeProject.id}:${activeProject.type}:${worktree.path}${statusSuffix}`;
     if (key === lastKey.current) return;
-    if (lastKey.current) {
-      useEditorStore.getState().closeAll();
-    }
     lastKey.current = key;
 
+    void useEditorStore
+      .getState()
+      .setWorktree(`${activeProject.id}:${worktree.path}`, activeProject.id);
     setRoot(worktree.path, activeProject.id, activeProject.type);
   }, [activeProjectId, projects, setRoot, connectionStatus]);
 
