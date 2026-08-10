@@ -200,6 +200,8 @@ pub struct SftpFileSystem {
 
 impl SftpFileSystem {
     async fn ensure_connection(&self) -> Result<Arc<SftpSession>, String> {
+        ensure_ssh_connection(&self.project_id, &self.state).await?;
+
         let maybe_stale = {
             let connections = self.state.ssh_connections.lock().await;
             if let Some(conn) = connections.get(&self.project_id) {
@@ -1052,6 +1054,7 @@ async fn run_git_command_ssh(
     args: &[&str],
     state: &Arc<AppState>,
 ) -> Result<String, String> {
+    ensure_ssh_connection(project_id, state).await?;
     let connections = state.ssh_connections.lock().await;
     let conn = connections
         .get(project_id)
@@ -1125,6 +1128,7 @@ async fn list_worktrees_ssh(
     repo_path: &str,
     state: &Arc<AppState>,
 ) -> Result<Vec<WorktreeInfo>, String> {
+    ensure_ssh_connection(project_id, state).await?;
     let connections = state.ssh_connections.lock().await;
     let conn = connections
         .get(project_id)
@@ -1642,6 +1646,7 @@ async fn list_branches_and_worktree_branch_names_ssh(
     repo_path: &str,
     state: &Arc<AppState>,
 ) -> Result<(Vec<BranchInfo>, Vec<String>), String> {
+    ensure_ssh_connection(project_id, state).await?;
     let connections = state.ssh_connections.lock().await;
     let conn = connections
         .get(project_id)
@@ -2335,6 +2340,99 @@ async fn start_health_check(state: Arc<AppState>) {
 
         for project_id in project_ids {
             check_and_reconnect(&project_id, &state).await;
+        }
+    }
+}
+
+/// Guarantees `state.ssh_connections` has a live, connected session for `project_id`
+/// before an SSH-backed operation (git-over-ssh, sftp) runs. Unlike the periodic
+/// health check, this also covers the case where no entry exists yet at all - e.g.
+/// the initial `ssh_connect` call made at app/project load never completed or was
+/// silently dropped, while the terminal (which owns its own independent SSH
+/// connection in the pty daemon) is still connected.
+async fn ensure_ssh_connection(project_id: &str, state: &AppState) -> Result<(), String> {
+    {
+        let connections = state.ssh_connections.lock().await;
+        if let Some(conn) = connections.get(project_id) {
+            if conn.status == ConnectionStatus::Connected {
+                return Ok(());
+            }
+        }
+    }
+
+    let existing_credentials = {
+        let connections = state.ssh_connections.lock().await;
+        connections.get(project_id).map(|c| c.credentials.clone())
+    };
+
+    let credentials = match existing_credentials {
+        Some(creds) => creds,
+        None => {
+            let app_handle = state
+                .app_handle
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or("App handle not available")?;
+            let projects = load_projects(app_handle)?;
+            let project = projects
+                .iter()
+                .find(|p| p.id == project_id)
+                .ok_or("Project not found")?;
+            match &project.connection {
+                Connection::Ssh { host, port, username, auth_method, key_path, .. } => {
+                    let password = keyring::Entry::new("agent-ide-ssh", project_id)
+                        .ok()
+                        .and_then(|e| e.get_password().ok());
+                    SshCredentials {
+                        host: host.clone(),
+                        port: *port,
+                        username: username.clone(),
+                        auth_method: auth_method.clone(),
+                        key_path: key_path.clone(),
+                        password,
+                    }
+                }
+                Connection::Local { .. } => {
+                    return Err("Project is not an SSH project".to_string());
+                }
+            }
+        }
+    };
+
+    info!("ensure_ssh_connection: (re)connecting {}", project_id);
+    state.emit_status(project_id, ConnectionStatus::Reconnecting, None);
+
+    match connect_ssh(
+        &credentials.host,
+        credentials.port,
+        &credentials.username,
+        &credentials.auth_method,
+        credentials.key_path.as_deref(),
+        credentials.password.as_deref(),
+    )
+    .await
+    {
+        Ok((session, sftp)) => {
+            let mut connections = state.ssh_connections.lock().await;
+            connections.insert(
+                project_id.to_string(),
+                SshConnection {
+                    session,
+                    sftp: sftp.map(Arc::new),
+                    credentials,
+                    status: ConnectionStatus::Connected,
+                    reconnect_attempts: 0,
+                },
+            );
+            drop(connections);
+            state.emit_status(project_id, ConnectionStatus::Connected, None);
+            Ok(())
+        }
+        Err(e) => {
+            warn!("ensure_ssh_connection: failed to connect {}: {}", project_id, e);
+            state.emit_status(project_id, ConnectionStatus::Error, Some(e.clone()));
+            Err(format!("Failed to establish SSH connection: {}", e))
         }
     }
 }
