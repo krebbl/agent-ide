@@ -1633,9 +1633,16 @@ fn list_worktree_branch_names_local(repo_path: &str) -> Result<Vec<String>, Stri
     Ok(parse_worktree_branch_names(&output))
 }
 
+fn fetch_remotes_local(repo_path: &str) -> Result<(), String> {
+    run_git_command(repo_path, &["fetch", "--all", "--prune"]).map(|_| ())
+}
+
 fn list_branches_available_for_worktrees_local(
     repo_path: &str,
 ) -> Result<Vec<BranchInfo>, String> {
+    if let Err(e) = fetch_remotes_local(repo_path) {
+        warn!("list_branches_available_for_worktrees_local: fetch failed: {}", e);
+    }
     let branches = list_branches_local(repo_path)?;
     let assigned = list_worktree_branch_names_local(repo_path)?;
     Ok(filter_available_branches(branches, &assigned))
@@ -1743,11 +1750,24 @@ async fn list_branches_and_worktree_branch_names_ssh(
     Ok((branches, assigned))
 }
 
+async fn fetch_remotes_ssh(
+    project_id: &str,
+    repo_path: &str,
+    state: &Arc<AppState>,
+) -> Result<(), String> {
+    run_git_command_ssh(project_id, repo_path, &["fetch", "--all", "--prune"], state)
+        .await
+        .map(|_| ())
+}
+
 async fn list_branches_available_for_worktrees_ssh(
     project_id: &str,
     repo_path: &str,
     state: &Arc<AppState>,
 ) -> Result<Vec<BranchInfo>, String> {
+    if let Err(e) = fetch_remotes_ssh(project_id, repo_path, state).await {
+        warn!("list_branches_available_for_worktrees_ssh: fetch failed: {}", e);
+    }
     let (branches, assigned) =
         list_branches_and_worktree_branch_names_ssh(project_id, repo_path, state).await?;
     Ok(filter_available_branches(branches, &assigned))
