@@ -281,11 +281,18 @@ function WorktreeItem({
             <span className="flex w-[18px] justify-center">
               <Loader2 size={10} className="animate-spin text-[var(--color-blue)]" />
             </span>
+          ) : activity === "unseen" ? (
+            <span
+              className="animate-blink flex w-[18px] justify-center text-[10px] font-bold text-[var(--color-green)]"
+              title="Terminal ready — unseen output"
+            >
+              !
+            </span>
           ) : terminalCount > 0 ? (
             <span
               className={`w-[18px] py-px text-center text-[9px] leading-none ${
-                activity === "unseen"
-                  ? "animate-blink text-[var(--color-blue)]"
+                activity === "input"
+                  ? "text-[var(--color-blue)]"
                   : "text-[var(--color-overlay1)]"
               }`}
               title={`${terminalCount} terminal${terminalCount > 1 ? "s" : ""} open`}
