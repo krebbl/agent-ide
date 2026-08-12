@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { ChevronRight, ChevronDown, File } from "lucide-react";
 import { useFileTreeStore, type DirEntry } from "../../stores/fileTreeStore";
+import { useEditorStore } from "../../stores/editorStore";
 
 interface FileTreeNodeProps {
   entry: DirEntry;
@@ -10,7 +11,7 @@ interface FileTreeNodeProps {
 }
 
 export default function FileTreeNode({ entry, dirPath, depth, onContextMenu }: FileTreeNodeProps) {
-  const { toggleDir, nodeState } = useFileTreeStore();
+  const { toggleDir, nodeState, projectId } = useFileTreeStore();
   const fullPath = `${dirPath}/${entry.name}`;
   const node = nodeState[fullPath];
   const isExpanded = node?.expanded ?? false;
@@ -39,6 +40,8 @@ export default function FileTreeNode({ entry, dirPath, depth, onContextMenu }: F
   const handleClick = () => {
     if (entry.isDir) {
       toggleDir(fullPath);
+    } else if (projectId) {
+      void useEditorStore.getState().openFile(projectId, fullPath);
     }
   };
 

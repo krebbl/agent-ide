@@ -108,6 +108,8 @@ async fn exec_remote(
 
     let mut channel = conn
         .session
+        .lock()
+        .await
         .channel_open_session()
         .await
         .map_err(|e| format!("Failed to open SSH channel: {}", e))?;

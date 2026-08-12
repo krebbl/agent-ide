@@ -1,7 +1,6 @@
 import {
   Terminal,
   Plus,
-  X,
   ChevronDown,
   ChevronUp,
   ChevronRight,
@@ -11,7 +10,10 @@ import { useEffect, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTerminalStore, collectLeaves, findLeaf } from "../../stores/terminalStore";
 import { useProjectStore } from "../../stores/projectStore";
+import { useUiStore } from "../../stores/uiStore";
 import SplitPaneContainer from "./SplitPaneContainer";
+import TabStrip from "../ui/TabStrip";
+import LoadingOverlay from "../ui/LoadingOverlay";
 
 function tabHasBusySession(
   tab: import("../../types").TerminalTab,
@@ -65,6 +67,7 @@ export default function TerminalZone({
 
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const selectedWorktreeId = useProjectStore((s) => s.selectedWorktreeId);
+  const worktreeLoading = useUiStore((s) => s.worktreeLoading);
 
   const visibleTabs = useMemo(
     () =>
@@ -157,6 +160,7 @@ export default function TerminalZone({
     const handler = (e: KeyboardEvent) => {
       const isMod = e.metaKey || e.ctrlKey;
       if (!isMod) return;
+      if (useUiStore.getState().focusedZone !== "terminal") return;
 
       if (e.key.toLowerCase() === "t") {
         e.preventDefault();
@@ -208,82 +212,70 @@ export default function TerminalZone({
   }, [handleNewTerminal, handleCloseActivePane, activeSessionId, splitPane, navigatePane]);
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="flex h-full flex-col"
+      onPointerDown={() => useUiStore.getState().setFocusedZone("terminal")}
+    >
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--color-surface0)] px-2">
         <Terminal size={14} className="text-[var(--color-green)]" />
         <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-subtext1)]">
           Terminal
         </span>
 
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-1 no-scrollbar">
-          {visibleTabs.map((tab) => {
+        <TabStrip
+          tabs={visibleTabs.map((tab) => {
             const isActive = tab.id === effectiveActiveId;
             const isBusy = tabHasBusySession(tab, sessions);
             const hasUnseen = tabHasUnseenActivity(tab, sessions);
             const title = getFocusedSessionTitle(tab, sessions);
             const leafCount = collectLeaves(tab.rootPane).length;
-
-            return (
-              <div
-                key={tab.id}
-                onClick={() => {
-                  if (hasUnseen && !isActive) {
-                    const leaves = collectLeaves(tab.rootPane);
-                    leaves.forEach((leaf) => {
-                      useTerminalStore.getState().markSessionSeen(leaf.sessionId);
-                    });
-                  }
-                  useTerminalStore.getState().focusSession(
-                    findLeaf(tab.rootPane, tab.focusedPaneId)?.sessionId ?? "",
-                  );
-                }}
-                className={`group flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors ${
-                  isActive
-                    ? "bg-[var(--color-surface0)] text-[var(--color-text)]"
-                    : "text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/50 hover:text-[var(--color-text)]"
-                }`}
-                title={title}
-              >
-                {isBusy && (
-                  <Loader2
-                    size={12}
-                    className="animate-spin text-[var(--color-blue)]"
-                    aria-label="Busy"
-                  />
-                )}
-                {!isBusy && hasUnseen && !isActive && (
-                  <ChevronRight
-                    size={12}
-                    className="animate-blink text-[var(--color-blue)]"
-                    aria-label="Ready — unseen"
-                  />
-                )}
-                {!isBusy && !(hasUnseen && !isActive) && (
-                  <ChevronRight
-                    size={12}
-                    className="text-[var(--color-green)]"
-                    aria-label="Ready"
-                  />
-                )}
-                <span className="max-w-[120px] truncate">{title}</span>
-                {leafCount > 1 && (
+            return {
+              id: tab.id,
+              title,
+              tooltip: title,
+              icon: isBusy ? (
+                <Loader2
+                  size={12}
+                  className="animate-spin text-[var(--color-blue)]"
+                  aria-label="Busy"
+                />
+              ) : hasUnseen && !isActive ? (
+                <ChevronRight
+                  size={12}
+                  className="animate-blink text-[var(--color-blue)]"
+                  aria-label="Ready — unseen"
+                />
+              ) : (
+                <ChevronRight
+                  size={12}
+                  className="text-[var(--color-green)]"
+                  aria-label="Ready"
+                />
+              ),
+              badge:
+                leafCount > 1 ? (
                   <span className="text-[10px] text-[var(--color-overlay0)]">
                     {leafCount}
                   </span>
-                )}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleCloseTab(tab.id);
-                  }}
-                  className="rounded-sm text-[var(--color-overlay0)] opacity-60 transition-colors hover:bg-[var(--color-surface1)] hover:text-[var(--color-text)] group-hover:opacity-100"
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            );
+                ) : undefined,
+            };
           })}
-        </div>
+          activeId={effectiveActiveId}
+          onSelect={(tabId) => {
+            const tab = visibleTabs.find((t) => t.id === tabId);
+            if (!tab) return;
+            if (tabHasUnseenActivity(tab, sessions) && tabId !== effectiveActiveId) {
+              const leaves = collectLeaves(tab.rootPane);
+              leaves.forEach((leaf) => {
+                useTerminalStore.getState().markSessionSeen(leaf.sessionId);
+              });
+            }
+            useTerminalStore.getState().focusSession(
+              findLeaf(tab.rootPane, tab.focusedPaneId)?.sessionId ?? "",
+            );
+          }}
+          onClose={handleCloseTab}
+        />
 
         <button
           onClick={handleNewTerminal}
@@ -304,6 +296,7 @@ export default function TerminalZone({
       </div>
 
       <div className="relative flex-1 overflow-hidden bg-[var(--color-base)]">
+        {worktreeLoading && <LoadingOverlay label="Connecting to remote…" />}
         {visibleTabs.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-2 p-4">
             <span className="text-sm text-[var(--color-overlay0)]">

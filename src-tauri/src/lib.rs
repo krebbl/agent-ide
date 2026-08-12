@@ -1,4 +1,5 @@
 mod agents;
+pub mod lsp;
 mod notification;
 mod pr_info;
 mod pty;
@@ -250,7 +251,7 @@ impl SftpFileSystem {
             let conn = connections
                 .get(&self.project_id)
                 .ok_or("No SSH connection found for this project")?;
-            let mut channel = conn.session
+            let mut channel = conn.session.lock().await
                 .channel_open_session()
                 .await
                 .map_err(|e| format!("Failed to open channel: {}", e))?;
@@ -278,7 +279,7 @@ impl SftpFileSystem {
         let conn = connections
             .get(&self.project_id)
             .ok_or("No SSH connection found for this project")?;
-        let mut channel = conn.session
+        let mut channel = conn.session.lock().await
             .channel_open_session()
             .await
             .map_err(|e| format!("Failed to open channel: {}", e))?;
@@ -586,18 +587,7 @@ fn check_agents_ready() -> Result<Vec<agents::AgentStatus>, String> {
     Ok(agents::check_all_agents_ready())
 }
 
-pub struct ClientHandler;
-
-impl client::Handler for ClientHandler {
-    type Error = russh::Error;
-
-    async fn check_server_key(
-        &mut self,
-        _server_public_key: &russh_keys::PublicKey,
-    ) -> Result<bool, Self::Error> {
-        Ok(true)
-    }
-}
+use remote_ssh::ClientHandler;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConnectionStatus {
@@ -625,7 +615,7 @@ pub struct SshCredentials {
 }
 
 pub struct SshConnection {
-    pub session: client::Handle<ClientHandler>,
+    pub session: remote_ssh::SessionHandle,
     pub sftp: Option<Arc<SftpSession>>,
     pub credentials: SshCredentials,
     pub status: ConnectionStatus,
@@ -634,6 +624,7 @@ pub struct SshConnection {
 
 pub struct AppState {
     pub ssh_connections: Mutex<HashMap<String, SshConnection>>,
+    pub lsp_manager: Arc<lsp::LspManager>,
     pub app_handle: StdMutex<Option<tauri::AppHandle>>,
     pub active_pty_id: StdMutex<Option<String>>,
     pub pty_titles: StdMutex<HashMap<String, String>>,
@@ -784,6 +775,44 @@ fn load_projects(app_handle: tauri::AppHandle) -> Result<Vec<Project>, String> {
         .map_err(|e| format!("Failed to parse projects file: {}", e))?;
 
     Ok(projects)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeTabs {
+    pub open_paths: Vec<String>,
+    pub active_path: Option<String>,
+}
+
+#[tauri::command]
+fn save_editor_tabs(
+    tabs: HashMap<String, WorktreeTabs>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let config_path = app_config_path(&app_handle)?;
+    std::fs::create_dir_all(&config_path)
+        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    let file_path = config_path.join("editor_tabs.json");
+    let json = serde_json::to_string_pretty(&tabs)
+        .map_err(|e| format!("Failed to serialize editor tabs: {}", e))?;
+    std::fs::write(&file_path, json)
+        .map_err(|e| format!("Failed to write editor tabs file: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn load_editor_tabs(
+    app_handle: tauri::AppHandle,
+) -> Result<HashMap<String, WorktreeTabs>, String> {
+    let config_path = app_config_path(&app_handle)?;
+    let file_path = config_path.join("editor_tabs.json");
+    if !file_path.exists() {
+        return Ok(HashMap::new());
+    }
+    let content = std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read editor tabs file: {}", e))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse editor tabs file: {}", e))
 }
 
 #[tauri::command]
@@ -1076,7 +1105,7 @@ async fn run_git_command_ssh(
 
     info!("run_git_command_ssh: executing '{}'", cmd);
 
-    let mut channel = conn.session
+    let mut channel = conn.session.lock().await
         .channel_open_session()
         .await
         .map_err(|e| format!("Failed to open channel: {}", e))?;
@@ -1173,6 +1202,8 @@ echo 'WT_STATES_END'"#,
 
     let mut channel = conn
         .session
+        .lock()
+        .await
         .channel_open_session()
         .await
         .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
@@ -1681,6 +1712,8 @@ async fn list_branches_and_worktree_branch_names_ssh(
 
     let mut channel = conn
         .session
+        .lock()
+        .await
         .channel_open_session()
         .await
         .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
@@ -2231,7 +2264,7 @@ async fn ssh_connect(
     info!("ssh_connect: connect succeeded, storing connection (sftp={})", sftp.is_some());
     let mut connections = state.ssh_connections.lock().await;
     connections.insert(project_id.clone(), SshConnection {
-        session,
+        session: Arc::new(Mutex::new(session)),
         sftp: sftp.map(Arc::new),
         credentials,
         status: ConnectionStatus::Connected,
@@ -2248,10 +2281,11 @@ async fn ssh_disconnect(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     info!("ssh_disconnect: project_id={}", project_id);
+    state.lsp_manager.stop_project(&project_id).await;
     let mut connections = state.ssh_connections.lock().await;
     if let Some(conn) = connections.remove(&project_id) {
         info!("ssh_disconnect: disconnecting session");
-        let _ = conn.session.disconnect(Disconnect::ByApplication, "", "en").await;
+        let _ = conn.session.lock().await.disconnect(Disconnect::ByApplication, "", "en").await;
         info!("ssh_disconnect: session disconnected");
     }
     Ok(())
@@ -2511,7 +2545,7 @@ async fn check_and_reconnect(project_id: &str, state: &Arc<AppState>) {
             Ok((session, sftp)) => {
                 let mut connections = state.ssh_connections.lock().await;
                 if let Some(conn) = connections.get_mut(project_id) {
-                    conn.session = session;
+                    conn.session = Arc::new(Mutex::new(session));
                     conn.sftp = sftp.map(Arc::new);
                     conn.status = ConnectionStatus::Connected;
                     conn.reconnect_attempts = 0;
@@ -2556,7 +2590,7 @@ async fn check_and_reconnect(project_id: &str, state: &Arc<AppState>) {
                                         Ok((session, sftp)) => {
                                             let mut connections = state_clone.ssh_connections.lock().await;
                                             if let Some(conn) = connections.get_mut(&project_id_clone) {
-                                                conn.session = session;
+                                                conn.session = Arc::new(Mutex::new(session));
                                                 conn.sftp = sftp.map(Arc::new);
                                                 conn.status = ConnectionStatus::Connected;
                                                 conn.reconnect_attempts = 0;
@@ -2680,6 +2714,7 @@ pub fn run() {
         })
         .manage(Arc::new(AppState {
             ssh_connections: Mutex::new(HashMap::new()),
+            lsp_manager: Arc::new(lsp::LspManager::default()),
             app_handle: StdMutex::new(None),
             active_pty_id: StdMutex::new(None),
             pty_titles: StdMutex::new(HashMap::new()),
@@ -2689,6 +2724,8 @@ pub fn run() {
             load_projects,
             save_expanded_projects,
             load_expanded_projects,
+            save_editor_tabs,
+            load_editor_tabs,
             check_is_git_repo,
             git_init,
             git_worktree_list,
@@ -2727,12 +2764,27 @@ pub fn run() {
             check_agents_ready,
             pr_info::pr_for_branch,
             pr_info::pr_list_for_repo,
+            lsp::lsp_start,
+            lsp::lsp_request,
+            lsp::lsp_notify,
+            lsp::lsp_stop,
+            lsp::lsp_list,
+            lsp::lsp_server_available,
         ])
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
             }
         })
-        .run(context)
-        .expect("error while running tauri application");
+        .build(context)
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let state: tauri::State<Arc<AppState>> = app_handle.state();
+                let manager = state.lsp_manager.clone();
+                let _ = tauri::async_runtime::block_on(async move {
+                    manager.shutdown_all().await;
+                });
+            }
+        });
 }

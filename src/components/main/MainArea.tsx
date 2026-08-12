@@ -2,8 +2,10 @@ import { useEffect } from "react";
 import {
   Group,
   Panel,
+  Separator,
   usePanelRef,
 } from "react-resizable-panels";
+import EditorZone from "./EditorZone";
 import TerminalZone from "./TerminalZone";
 import { useTerminalStore } from "../../stores/terminalStore";
 
@@ -34,9 +36,13 @@ export default function MainArea() {
 
   return (
     <Group orientation="vertical" className="flex h-full w-full">
+      <Panel defaultSize="60%" minSize="10%" className="bg-[var(--color-base)]">
+        <EditorZone />
+      </Panel>
+      <Separator className="h-px bg-[var(--color-surface0)] transition-colors hover:bg-[var(--color-blue)]" />
       <Panel
         panelRef={terminalPanelRef}
-        defaultSize="100%"
+        defaultSize="40%"
         minSize="10%"
         collapsedSize={0}
         collapsible
@@ -50,12 +56,6 @@ export default function MainArea() {
           onToggleCollapse={handleToggleCollapse}
         />
       </Panel>
-      {/* Editor hidden for now
-      <Separator className="h-px bg-[var(--color-surface0)] transition-colors hover:bg-[var(--color-blue)]" />
-      <Panel defaultSize="60%" minSize="10%" className="bg-[var(--color-base)]">
-        <EditorZone />
-      </Panel>
-      */}
     </Group>
   );
 }
