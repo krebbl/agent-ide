@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="headGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a6e3a1"/>
+      <stop offset="100%" stop-color="#8fd78f"/>
+    </linearGradient>
+    <linearGradient id="antennaGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#8fd78f"/>
+      <stop offset="100%" stop-color="#a6e3a1"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224" fill="#1e1e2e"/>
+
+  <!-- Robot head -->
+  <rect x="212" y="232" width="600" height="560" rx="140" ry="140" fill="url(#headGrad)"/>
+
+  <!-- Antenna -->
+  <rect x="472" y="112" width="80" height="120" rx="20" fill="url(#antennaGrad)"/>
+  <circle cx="512" cy="112" r="56" fill="#a6e3a1"/>
+
+  <!-- Visor / face screen -->
+  <rect x="292" y="372" width="440" height="280" rx="80" ry="80" fill="#1e1e2e"/>
+
+  <!-- Eyes -->
+  <circle cx="402" cy="512" r="64" fill="#a6e3a1"/>
+  <circle cx="622" cy="512" r="64" fill="#a6e3a1"/>
+
+  <!-- Mouth / LED line -->
+  <rect x="432" y="704" width="160" height="28" rx="14" fill="#a6e3a1"/>
+</svg>
