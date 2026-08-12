@@ -9,6 +9,7 @@ import { registerProviders } from "../../services/lsp/providers";
 import { installEditorOpener } from "../../services/navigation";
 import { installPathLinkProviders } from "../../services/pathLinks";
 import TabStrip from "../ui/TabStrip";
+import LoadingOverlay from "../ui/LoadingOverlay";
 import ConfirmCloseDialog from "../dialogs/ConfirmCloseDialog";
 import SymbolSearchDialog from "../dialogs/SymbolSearchDialog";
 
@@ -19,6 +20,7 @@ export default function EditorZone() {
   const pendingReveal = useEditorStore((s) => s.pendingReveal);
   const pendingClose = useEditorStore((s) => s.pendingClose);
   const [symbolSearchOpen, setSymbolSearchOpen] = useState(false);
+  const worktreeLoading = useUiStore((s) => s.worktreeLoading);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
 
   useEffect(() => {
@@ -116,7 +118,8 @@ export default function EditorZone() {
           onClose={requestClose}
         />
       </div>
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
+        {worktreeLoading && <LoadingOverlay label="Loading files…" />}
         {activeFile ? (
           <Editor
             path={activeFile.path}

@@ -7,6 +7,8 @@ interface UiState {
   toggleRightSidebar: () => void;
   focusedZone: FocusedZone;
   setFocusedZone: (zone: FocusedZone) => void;
+  worktreeLoading: boolean;
+  setWorktreeLoading: (loading: boolean) => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -15,4 +17,6 @@ export const useUiStore = create<UiState>((set) => ({
     set((s) => ({ rightSidebarVisible: !s.rightSidebarVisible })),
   focusedZone: null,
   setFocusedZone: (zone) => set({ focusedZone: zone }),
+  worktreeLoading: false,
+  setWorktreeLoading: (loading) => set({ worktreeLoading: loading }),
 }));

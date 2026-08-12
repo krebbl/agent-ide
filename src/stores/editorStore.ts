@@ -155,6 +155,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         // file no longer exists or is unreadable, skip
       }
     }
+    if (files.length === 0) {
+      // Every read failed — likely a transient failure (e.g. SSH not connected
+      // yet), not genuinely missing files. Leave state and persisted tabs
+      // untouched so a later setWorktree call can restore them.
+      return;
+    }
     const activePath =
       stored.activePath && files.some((f) => f.path === stored.activePath)
         ? stored.activePath
