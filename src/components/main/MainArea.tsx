@@ -8,11 +8,14 @@ import {
 import EditorZone from "./EditorZone";
 import TerminalZone from "./TerminalZone";
 import { useTerminalStore } from "../../stores/terminalStore";
+import { useEditorStore } from "../../stores/editorStore";
 
 export default function MainArea() {
   const terminalPanelRef = usePanelRef();
+  const editorPanelRef = usePanelRef();
   const isTerminalCollapsed = useTerminalStore((s) => s.isCollapsed);
   const setIsTerminalCollapsed = useTerminalStore((s) => s.setCollapsed);
+  const hasOpenFiles = useEditorStore((s) => s.openFiles.length > 0);
 
   useEffect(() => {
     const panel = terminalPanelRef.current;
@@ -23,6 +26,16 @@ export default function MainArea() {
       panel.expand();
     }
   }, [isTerminalCollapsed]);
+
+  useEffect(() => {
+    const panel = editorPanelRef.current;
+    if (!panel) return;
+    if (hasOpenFiles && panel.isCollapsed()) {
+      panel.expand();
+    } else if (!hasOpenFiles && !panel.isCollapsed()) {
+      panel.collapse();
+    }
+  }, [hasOpenFiles]);
 
   const handleToggleCollapse = () => {
     const panel = terminalPanelRef.current;
@@ -36,10 +49,6 @@ export default function MainArea() {
 
   return (
     <Group orientation="vertical" className="flex h-full w-full">
-      <Panel defaultSize="60%" minSize="10%" className="bg-[var(--color-base)]">
-        <EditorZone />
-      </Panel>
-      <Separator className="h-px bg-[var(--color-surface0)] transition-colors hover:bg-[var(--color-blue)]" />
       <Panel
         panelRef={terminalPanelRef}
         defaultSize="40%"
@@ -55,6 +64,17 @@ export default function MainArea() {
           isCollapsed={isTerminalCollapsed}
           onToggleCollapse={handleToggleCollapse}
         />
+      </Panel>
+      <Separator className="h-px bg-[var(--color-surface0)] transition-colors hover:bg-[var(--color-blue)]" />
+      <Panel
+        panelRef={editorPanelRef}
+        defaultSize="60%"
+        minSize="10%"
+        collapsedSize={0}
+        collapsible
+        className="bg-[var(--color-base)]"
+      >
+        <EditorZone />
       </Panel>
     </Group>
   );
