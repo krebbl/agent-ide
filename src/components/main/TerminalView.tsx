@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { invoke } from "@tauri-apps/api/core";
 import {
   registerTerminal,
@@ -230,6 +231,7 @@ export default function TerminalView({
 
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
+    terminal.loadAddon(new ClipboardAddon());
     terminal.loadAddon(
       new WebLinksAddon(async (_event, uri) => {
         await invoke("util_open_url", { url: uri });
@@ -286,6 +288,18 @@ export default function TerminalView({
     };
     const dataDisposable = terminal.onData(handleInput);
     const binaryDisposable = terminal.onBinary(handleInput);
+
+    terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+      if (event.type !== "keydown") return true;
+      if (event.key.toLowerCase() !== "c") return true;
+      if (!event.ctrlKey && !event.metaKey) return true;
+      if (!terminal.hasSelection()) return true;
+      event.preventDefault();
+      const selected = terminal.getSelection();
+      navigator.clipboard.writeText(selected).catch(() => {});
+      terminal.clearSelection();
+      return false;
+    });
 
     const resizeObserver = new ResizeObserver(() => fitAndResize(true));
     resizeObserver.observe(container);

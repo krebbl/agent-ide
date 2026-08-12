@@ -22,8 +22,8 @@ src-tauri/target/
 src-tauri/gen/schemas/*.json
 
 # Editor directories and files
-.vscode/*
-!.vscode/extensions.json
+.vscode/
+.opencode/
 .idea
 .DS_Store
 *.suo

@@ -201,6 +201,8 @@ pub struct SftpFileSystem {
 
 impl SftpFileSystem {
     async fn ensure_connection(&self) -> Result<Arc<SftpSession>, String> {
+        ensure_ssh_connection(&self.project_id, &self.state).await?;
+
         let maybe_stale = {
             let connections = self.state.ssh_connections.lock().await;
             if let Some(conn) = connections.get(&self.project_id) {
@@ -1081,6 +1083,7 @@ async fn run_git_command_ssh(
     args: &[&str],
     state: &Arc<AppState>,
 ) -> Result<String, String> {
+    ensure_ssh_connection(project_id, state).await?;
     let connections = state.ssh_connections.lock().await;
     let conn = connections
         .get(project_id)
@@ -1154,6 +1157,7 @@ async fn list_worktrees_ssh(
     repo_path: &str,
     state: &Arc<AppState>,
 ) -> Result<Vec<WorktreeInfo>, String> {
+    ensure_ssh_connection(project_id, state).await?;
     let connections = state.ssh_connections.lock().await;
     let conn = connections
         .get(project_id)
@@ -1624,6 +1628,12 @@ fn filter_available_branches(
     assigned: &[String],
 ) -> Vec<BranchInfo> {
     let assigned_set: HashSet<&str> = assigned.iter().map(|s| s.as_str()).collect();
+    let local_names: HashSet<String> = branches
+        .iter()
+        .filter(|b| !b.is_remote)
+        .map(|b| b.name.clone())
+        .collect();
+
     branches
         .into_iter()
         .filter(|b| {
@@ -1632,7 +1642,7 @@ fn filter_available_branches(
             }
             if b.is_remote {
                 if let Some(base) = b.name.splitn(2, '/').nth(1) {
-                    if assigned_set.contains(base) {
+                    if assigned_set.contains(base) || local_names.iter().any(|n| n == base) {
                         return false;
                     }
                 }
@@ -1660,9 +1670,16 @@ fn list_worktree_branch_names_local(repo_path: &str) -> Result<Vec<String>, Stri
     Ok(parse_worktree_branch_names(&output))
 }
 
+fn fetch_remotes_local(repo_path: &str) -> Result<(), String> {
+    run_git_command(repo_path, &["fetch", "--all", "--prune"]).map(|_| ())
+}
+
 fn list_branches_available_for_worktrees_local(
     repo_path: &str,
 ) -> Result<Vec<BranchInfo>, String> {
+    if let Err(e) = fetch_remotes_local(repo_path) {
+        warn!("list_branches_available_for_worktrees_local: fetch failed: {}", e);
+    }
     let branches = list_branches_local(repo_path)?;
     let assigned = list_worktree_branch_names_local(repo_path)?;
     Ok(filter_available_branches(branches, &assigned))
@@ -1673,6 +1690,7 @@ async fn list_branches_and_worktree_branch_names_ssh(
     repo_path: &str,
     state: &Arc<AppState>,
 ) -> Result<(Vec<BranchInfo>, Vec<String>), String> {
+    ensure_ssh_connection(project_id, state).await?;
     let connections = state.ssh_connections.lock().await;
     let conn = connections
         .get(project_id)
@@ -1771,11 +1789,24 @@ async fn list_branches_and_worktree_branch_names_ssh(
     Ok((branches, assigned))
 }
 
+async fn fetch_remotes_ssh(
+    project_id: &str,
+    repo_path: &str,
+    state: &Arc<AppState>,
+) -> Result<(), String> {
+    run_git_command_ssh(project_id, repo_path, &["fetch", "--all", "--prune"], state)
+        .await
+        .map(|_| ())
+}
+
 async fn list_branches_available_for_worktrees_ssh(
     project_id: &str,
     repo_path: &str,
     state: &Arc<AppState>,
 ) -> Result<Vec<BranchInfo>, String> {
+    if let Err(e) = fetch_remotes_ssh(project_id, repo_path, state).await {
+        warn!("list_branches_available_for_worktrees_ssh: fetch failed: {}", e);
+    }
     let (branches, assigned) =
         list_branches_and_worktree_branch_names_ssh(project_id, repo_path, state).await?;
     Ok(filter_available_branches(branches, &assigned))
@@ -2373,6 +2404,99 @@ async fn start_health_check(state: Arc<AppState>) {
     }
 }
 
+/// Guarantees `state.ssh_connections` has a live, connected session for `project_id`
+/// before an SSH-backed operation (git-over-ssh, sftp) runs. Unlike the periodic
+/// health check, this also covers the case where no entry exists yet at all - e.g.
+/// the initial `ssh_connect` call made at app/project load never completed or was
+/// silently dropped, while the terminal (which owns its own independent SSH
+/// connection in the pty daemon) is still connected.
+async fn ensure_ssh_connection(project_id: &str, state: &AppState) -> Result<(), String> {
+    {
+        let connections = state.ssh_connections.lock().await;
+        if let Some(conn) = connections.get(project_id) {
+            if conn.status == ConnectionStatus::Connected {
+                return Ok(());
+            }
+        }
+    }
+
+    let existing_credentials = {
+        let connections = state.ssh_connections.lock().await;
+        connections.get(project_id).map(|c| c.credentials.clone())
+    };
+
+    let credentials = match existing_credentials {
+        Some(creds) => creds,
+        None => {
+            let app_handle = state
+                .app_handle
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or("App handle not available")?;
+            let projects = load_projects(app_handle)?;
+            let project = projects
+                .iter()
+                .find(|p| p.id == project_id)
+                .ok_or("Project not found")?;
+            match &project.connection {
+                Connection::Ssh { host, port, username, auth_method, key_path, .. } => {
+                    let password = keyring::Entry::new("agent-ide-ssh", project_id)
+                        .ok()
+                        .and_then(|e| e.get_password().ok());
+                    SshCredentials {
+                        host: host.clone(),
+                        port: *port,
+                        username: username.clone(),
+                        auth_method: auth_method.clone(),
+                        key_path: key_path.clone(),
+                        password,
+                    }
+                }
+                Connection::Local { .. } => {
+                    return Err("Project is not an SSH project".to_string());
+                }
+            }
+        }
+    };
+
+    info!("ensure_ssh_connection: (re)connecting {}", project_id);
+    state.emit_status(project_id, ConnectionStatus::Reconnecting, None);
+
+    match connect_ssh(
+        &credentials.host,
+        credentials.port,
+        &credentials.username,
+        &credentials.auth_method,
+        credentials.key_path.as_deref(),
+        credentials.password.as_deref(),
+    )
+    .await
+    {
+        Ok((session, sftp)) => {
+            let mut connections = state.ssh_connections.lock().await;
+            connections.insert(
+                project_id.to_string(),
+                SshConnection {
+                    session,
+                    sftp: sftp.map(Arc::new),
+                    credentials,
+                    status: ConnectionStatus::Connected,
+                    reconnect_attempts: 0,
+                },
+            );
+            drop(connections);
+            state.emit_status(project_id, ConnectionStatus::Connected, None);
+            Ok(())
+        }
+        Err(e) => {
+            warn!("ensure_ssh_connection: failed to connect {}: {}", project_id, e);
+            state.emit_status(project_id, ConnectionStatus::Error, Some(e.clone()));
+            Err(format!("Failed to establish SSH connection: {}", e))
+        }
+    }
+}
+
 async fn check_and_reconnect(project_id: &str, state: &Arc<AppState>) {
     let needs_reconnect = {
         let connections = state.ssh_connections.lock().await;
@@ -2540,6 +2664,25 @@ pub fn run() {
         )
         .init();
 
+    let context = tauri::generate_context!();
+    if std::env::var("AGENT_IDE_CONFIG_DIR").is_err() {
+        if let Some(dir) = dirs::config_dir() {
+            let base = dir.join("agent-ide");
+            let instance = context
+                .config()
+                .identifier
+                .rsplit('.')
+                .next()
+                .unwrap_or("agent-ide");
+            let config_dir = if instance == "agent-ide" {
+                base
+            } else {
+                base.join(instance)
+            };
+            std::env::set_var("AGENT_IDE_CONFIG_DIR", config_dir);
+        }
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -2633,7 +2776,7 @@ pub fn run() {
                 api.prevent_close();
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {

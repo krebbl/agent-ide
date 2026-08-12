@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, Fragment } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge } from "lucide-react";
@@ -8,7 +8,7 @@ import { useTerminalStore } from "../../stores/terminalStore";
 import { usePrStore } from "../../stores/prStore";
 import AddProjectDialog from "../dialogs/AddProjectDialog";
 import AddWorktreeDialog from "../dialogs/AddWorktreeDialog";
-import { Project } from "../../types";
+import { Project, PrInfo } from "../../types";
 import { useSortable } from "@dnd-kit/sortable";
 import {
   DndContext,
@@ -183,6 +183,28 @@ function WorktreeContextMenu({
   );
 }
 
+function getPrStatusRank(pr: PrInfo | null | undefined): number {
+  if (!pr) return 0;
+  if (pr.state === "merged") return 2;
+  if (pr.state === "closed") return 3;
+  return 1;
+}
+
+function getWorktreeActivity(
+  sessions: import("../../stores/terminalStore").TerminalSession[],
+  projectId: string,
+  worktreeId: string,
+): "idle" | "busy" | "input" | "unseen" {
+  return sessions.reduce<"idle" | "busy" | "input" | "unseen">((state, session) => {
+    if (session.projectId === projectId && session.worktreeId === worktreeId) {
+      if (session.processRunning || session.isBusy) return "busy";
+      if (session.hasUnseenActivity) return "unseen";
+      if (session.needsInput && state !== "busy" && state !== "unseen") return "input";
+    }
+    return state;
+  }, "idle");
+}
+
 function WorktreeItem({
   worktree,
   projectId,
@@ -214,19 +236,9 @@ function WorktreeItem({
   const [infoPos, setInfoPos] = useState({ top: 0, left: 0 });
   const itemRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const activity = useTerminalStore((s) => {
-    return s.sessions.reduce<"idle" | "busy" | "input" | "unseen">((state, session) => {
-      if (
-        session.projectId === projectId &&
-        session.worktreeId === worktree.id
-      ) {
-        if (session.processRunning || session.isBusy) return "busy";
-        if (session.hasUnseenActivity) return "unseen";
-        if (session.needsInput && state !== "busy" && state !== "unseen") return "input";
-      }
-      return state;
-    }, "idle");
-  });
+  const activity = useTerminalStore((s) =>
+    getWorktreeActivity(s.sessions, projectId, worktree.id),
+  );
   const terminalCount = useTerminalStore(
     (s) =>
       s.sessions.filter(
@@ -281,11 +293,18 @@ function WorktreeItem({
             <span className="flex w-[18px] justify-center">
               <Loader2 size={10} className="animate-spin text-[var(--color-blue)]" />
             </span>
+          ) : activity === "unseen" ? (
+            <span
+              className="animate-blink flex w-[18px] justify-center text-[10px] font-bold text-[var(--color-green)]"
+              title="Terminal ready — unseen output"
+            >
+              !
+            </span>
           ) : terminalCount > 0 ? (
             <span
               className={`w-[18px] py-px text-center text-[9px] leading-none ${
-                activity === "unseen"
-                  ? "animate-blink text-[var(--color-blue)]"
+                activity === "input"
+                  ? "text-[var(--color-blue)]"
                   : "text-[var(--color-overlay1)]"
               }`}
               title={`${terminalCount} terminal${terminalCount > 1 ? "s" : ""} open`}
@@ -390,6 +409,7 @@ function ProjectItem({
   const connectionStatus = useConnectionStatusStore((s) => s.statuses[project.id]?.status);
   const { fetchWorktrees, setActiveWorktree, worktreeLoading, removeWorktree, refreshWorktrees, selectedWorktreeId, activeProjectId } = useProjectStore();
   const { fetchPrsForWorktrees } = usePrStore();
+  const prCache = usePrStore((s) => s.cache);
   const isWorktreeLoading = worktreeLoading[project.id] ?? false;
   const [showAddDialog, setShowAddDialog] = useState(false);
 
@@ -435,6 +455,18 @@ function ProjectItem({
     return () => clearInterval(id);
   }, [isExpanded, isConnected, project.id, project.type, fetchPrsForWorktrees]);
 
+  const sortedWorktrees = useMemo(() => {
+    return [...project.worktrees].sort((a, b) => {
+      if (a.isMain !== b.isMain) return a.isMain ? -1 : 1;
+      const aPr = prCache[`${project.id}:${a.branch}`]?.pr;
+      const bPr = prCache[`${project.id}:${b.branch}`]?.pr;
+      return (
+        getPrStatusRank(aPr) - getPrStatusRank(bPr) ||
+        a.branch.localeCompare(b.branch)
+      );
+    });
+  }, [project.worktrees, project.id, prCache]);
+
   const handleRemoveWorktree = async (worktreePath: string, force: boolean, deleteBranch: boolean) => {
     await removeWorktree(project.id, worktreePath, force, deleteBranch);
   };
@@ -445,7 +477,7 @@ function ProjectItem({
         ref={setNodeRef}
         {...attributes}
         {...listeners}
-        className={`group relative flex items-center gap-1.5 px-3 py-1.5 text-sm cursor-pointer transition-colors select-none ${
+        className={`group relative sticky top-0 z-10 flex items-center gap-1.5 bg-[var(--color-base)] px-3 py-1.5 text-sm cursor-pointer transition-colors select-none ${
           isActive
             ? "bg-[var(--color-surface0)] text-[var(--color-text)]"
             : "text-[var(--color-subtext1)] hover:bg-[var(--color-surface0)]/50"
@@ -514,7 +546,7 @@ function ProjectItem({
           {!isWorktreeLoading && project.worktrees.length === 0 && (
             <div className="px-3 py-1 text-xs text-[var(--color-overlay0)]">No worktrees</div>
           )}
-          {project.worktrees.map((wt) => (
+          {sortedWorktrees.map((wt) => (
             <WorktreeItem
               key={wt.id}
               worktree={wt}
@@ -544,6 +576,7 @@ export default function LeftSidebar() {
     activeProjectId,
     expandedProjectIds,
     setActiveProject,
+    setActiveWorktree,
     loadProjects,
     removeProject,
     toggleProjectExpanded,
@@ -606,6 +639,35 @@ export default function LeftSidebar() {
     }
   };
 
+  const [sessionTick, setSessionTick] = useState(0);
+  useEffect(() => {
+    return useTerminalStore.subscribe(() => {
+      setSessionTick((t) => t + 1);
+    });
+  }, []);
+
+  const prCache = usePrStore((s) => s.cache);
+  const sessions = useTerminalStore.getState().sessions;
+  const activeWorktrees = projects
+    .flatMap((project) =>
+      project.worktrees
+        .filter((wt) => {
+          const activity = getWorktreeActivity(sessions, project.id, wt.id);
+          return activity === "unseen" || activity === "busy";
+        })
+        .map((wt) => ({ project, worktree: wt })),
+    )
+    .sort((a, b) => {
+      if (a.worktree.isMain !== b.worktree.isMain) return a.worktree.isMain ? -1 : 1;
+      const aPr = prCache[`${a.project.id}:${a.worktree.branch}`]?.pr;
+      const bPr = prCache[`${b.project.id}:${b.worktree.branch}`]?.pr;
+      return (
+        getPrStatusRank(aPr) - getPrStatusRank(bPr) ||
+        a.worktree.branch.localeCompare(b.worktree.branch)
+      );
+    });
+  void sessionTick;
+
   return (
     <DndContext
       sensors={sensors}
@@ -615,6 +677,47 @@ export default function LeftSidebar() {
       onDragEnd={handleDragEnd}
     >
       <div className="flex h-full flex-col">
+        {activeWorktrees.length > 0 && (
+          <div className="border-b border-[var(--color-surface0)] py-1">
+            <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-subtext1)]">
+              Active
+            </div>
+            {activeWorktrees.map(({ project, worktree }) => {
+              const activity = getWorktreeActivity(
+                useTerminalStore.getState().sessions,
+                project.id,
+                worktree.id,
+              );
+              return (
+                <button
+                  key={`${project.id}:${worktree.id}`}
+                  onClick={() => {
+                    const tStore = useTerminalStore.getState();
+                    tStore.sessions
+                      .filter((s) => s.worktreeId === worktree.id && s.hasUnseenActivity)
+                      .forEach((s) => tStore.markSessionSeen(s.id));
+                    setActiveProject(project.id);
+                    setActiveWorktree(project.id, worktree.id);
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1 text-left text-xs text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/50"
+                >
+                  {activity === "busy" ? (
+                    <Loader2 size={10} className="animate-spin text-[var(--color-blue)]" />
+                  ) : activity === "unseen" ? (
+                    <span className="animate-blink text-[10px] font-bold text-[var(--color-green)]">!</span>
+                  ) : (
+                    <span className="text-[10px] font-bold text-[var(--color-blue)]">
+                      {useTerminalStore.getState().sessions.filter(
+                        (s) => s.projectId === project.id && s.worktreeId === worktree.id,
+                      ).length}
+                    </span>
+                  )}
+                  <span className="truncate">{project.name} — {worktree.branch}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-[var(--color-surface0)] px-3 min-w-0">
           <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-subtext1)] truncate">
             Projects
@@ -651,15 +754,16 @@ export default function LeftSidebar() {
                   {showAbove && (
                     <div className="h-0.5 bg-[var(--color-blue)]" key="above" />
                   )}
-                  <ProjectItem
-                    key={project.id}
-                    project={project}
-                    isActive={project.id === activeProjectId}
-                    isExpanded={expandedProjectIds.has(project.id)}
-                    onToggle={() => handleToggle(project.id)}
-                    onSelect={() => setActiveProject(project.id)}
-                    onRemove={() => removeProject(project.id)}
-                  />
+                  <div key={project.id}>
+                    <ProjectItem
+                      project={project}
+                      isActive={project.id === activeProjectId}
+                      isExpanded={expandedProjectIds.has(project.id)}
+                      onToggle={() => handleToggle(project.id)}
+                      onSelect={() => setActiveProject(project.id)}
+                      onRemove={() => removeProject(project.id)}
+                    />
+                  </div>
                   {showBelow && (
                     <div className="h-0.5 bg-[var(--color-blue)]" key="below" />
                   )}
