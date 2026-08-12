@@ -2630,6 +2630,25 @@ pub fn run() {
         )
         .init();
 
+    let context = tauri::generate_context!();
+    if std::env::var("AGENT_IDE_CONFIG_DIR").is_err() {
+        if let Some(dir) = dirs::config_dir() {
+            let base = dir.join("agent-ide");
+            let instance = context
+                .config()
+                .identifier
+                .rsplit('.')
+                .next()
+                .unwrap_or("agent-ide");
+            let config_dir = if instance == "agent-ide" {
+                base
+            } else {
+                base.join(instance)
+            };
+            std::env::set_var("AGENT_IDE_CONFIG_DIR", config_dir);
+        }
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -2714,6 +2733,6 @@ pub fn run() {
                 api.prevent_close();
             }
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }

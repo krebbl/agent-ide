@@ -59,6 +59,7 @@ The app window (1280x800) will open with the 3-panel IDE layout.
 | `npm run dev` | Start Vite dev server (frontend only, no Tauri window) |
 | `npm run build` | Build frontend for production (`tsc && vite build`) |
 | `npm run tauri dev` | Run full app in dev mode (frontend + Rust backend) |
+| `npm run tauri:dev:worktree` | Run a dev instance isolated for the current git worktree |
 | `npm run tauri build` | Build production desktop app (creates installable bundle) |
 
 ## Tech Stack
@@ -96,6 +97,17 @@ agent-ide/
 ├── ARCHITECTURE.md         # Architecture document and task breakdown
 └── package.json
 ```
+
+## Multi-Worktree Development
+
+The repo supports running separate Agent IDE dev instances from multiple git worktrees simultaneously. Each instance gets its own app identifier, Vite dev ports, and config directory so they do not collide.
+
+```bash
+# From any git worktree
+npm run tauri:dev:worktree
+```
+
+The script derives a stable identifier and ports from the worktree path and branch, and sets `AGENT_IDE_CONFIG_DIR` so PTY daemon state is isolated.
 
 ## Architecture
 
