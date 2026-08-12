@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, Fragment } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge } from "lucide-react";
@@ -8,7 +8,7 @@ import { useTerminalStore } from "../../stores/terminalStore";
 import { usePrStore } from "../../stores/prStore";
 import AddProjectDialog from "../dialogs/AddProjectDialog";
 import AddWorktreeDialog from "../dialogs/AddWorktreeDialog";
-import { Project } from "../../types";
+import { Project, PrInfo } from "../../types";
 import { useSortable } from "@dnd-kit/sortable";
 import {
   DndContext,
@@ -181,6 +181,13 @@ function WorktreeContextMenu({
       </div>
     </div>
   );
+}
+
+function getPrStatusRank(pr: PrInfo | null | undefined): number {
+  if (!pr) return 0;
+  if (pr.state === "merged") return 2;
+  if (pr.state === "closed") return 3;
+  return 1;
 }
 
 function getWorktreeActivity(
@@ -402,6 +409,7 @@ function ProjectItem({
   const connectionStatus = useConnectionStatusStore((s) => s.statuses[project.id]?.status);
   const { fetchWorktrees, setActiveWorktree, worktreeLoading, removeWorktree, refreshWorktrees, selectedWorktreeId, activeProjectId } = useProjectStore();
   const { fetchPrsForWorktrees } = usePrStore();
+  const prCache = usePrStore((s) => s.cache);
   const isWorktreeLoading = worktreeLoading[project.id] ?? false;
   const [showAddDialog, setShowAddDialog] = useState(false);
 
@@ -446,6 +454,18 @@ function ProjectItem({
     }, intervalMs);
     return () => clearInterval(id);
   }, [isExpanded, isConnected, project.id, project.type, fetchPrsForWorktrees]);
+
+  const sortedWorktrees = useMemo(() => {
+    return [...project.worktrees].sort((a, b) => {
+      if (a.isMain !== b.isMain) return a.isMain ? -1 : 1;
+      const aPr = prCache[`${project.id}:${a.branch}`]?.pr;
+      const bPr = prCache[`${project.id}:${b.branch}`]?.pr;
+      return (
+        getPrStatusRank(aPr) - getPrStatusRank(bPr) ||
+        a.branch.localeCompare(b.branch)
+      );
+    });
+  }, [project.worktrees, project.id, prCache]);
 
   const handleRemoveWorktree = async (worktreePath: string, force: boolean, deleteBranch: boolean) => {
     await removeWorktree(project.id, worktreePath, force, deleteBranch);
@@ -526,7 +546,7 @@ function ProjectItem({
           {!isWorktreeLoading && project.worktrees.length === 0 && (
             <div className="px-3 py-1 text-xs text-[var(--color-overlay0)]">No worktrees</div>
           )}
-          {project.worktrees.map((wt) => (
+          {sortedWorktrees.map((wt) => (
             <WorktreeItem
               key={wt.id}
               worktree={wt}
@@ -626,15 +646,26 @@ export default function LeftSidebar() {
     });
   }, []);
 
+  const prCache = usePrStore((s) => s.cache);
   const sessions = useTerminalStore.getState().sessions;
-  const activeWorktrees = projects.flatMap((project) =>
-    project.worktrees
-      .filter((wt) => {
-        const activity = getWorktreeActivity(sessions, project.id, wt.id);
-        return activity === "unseen" || activity === "busy";
-      })
-      .map((wt) => ({ project, worktree: wt })),
-  );
+  const activeWorktrees = projects
+    .flatMap((project) =>
+      project.worktrees
+        .filter((wt) => {
+          const activity = getWorktreeActivity(sessions, project.id, wt.id);
+          return activity === "unseen" || activity === "busy";
+        })
+        .map((wt) => ({ project, worktree: wt })),
+    )
+    .sort((a, b) => {
+      if (a.worktree.isMain !== b.worktree.isMain) return a.worktree.isMain ? -1 : 1;
+      const aPr = prCache[`${a.project.id}:${a.worktree.branch}`]?.pr;
+      const bPr = prCache[`${b.project.id}:${b.worktree.branch}`]?.pr;
+      return (
+        getPrStatusRank(aPr) - getPrStatusRank(bPr) ||
+        a.worktree.branch.localeCompare(b.worktree.branch)
+      );
+    });
   void sessionTick;
 
   return (
