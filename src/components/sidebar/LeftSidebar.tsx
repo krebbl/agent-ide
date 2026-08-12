@@ -183,6 +183,21 @@ function WorktreeContextMenu({
   );
 }
 
+function getWorktreeActivity(
+  sessions: import("../../stores/terminalStore").TerminalSession[],
+  projectId: string,
+  worktreeId: string,
+): "idle" | "busy" | "input" | "unseen" {
+  return sessions.reduce<"idle" | "busy" | "input" | "unseen">((state, session) => {
+    if (session.projectId === projectId && session.worktreeId === worktreeId) {
+      if (session.processRunning || session.isBusy) return "busy";
+      if (session.hasUnseenActivity) return "unseen";
+      if (session.needsInput && state !== "busy" && state !== "unseen") return "input";
+    }
+    return state;
+  }, "idle");
+}
+
 function WorktreeItem({
   worktree,
   projectId,
@@ -214,19 +229,9 @@ function WorktreeItem({
   const [infoPos, setInfoPos] = useState({ top: 0, left: 0 });
   const itemRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const activity = useTerminalStore((s) => {
-    return s.sessions.reduce<"idle" | "busy" | "input" | "unseen">((state, session) => {
-      if (
-        session.projectId === projectId &&
-        session.worktreeId === worktree.id
-      ) {
-        if (session.processRunning || session.isBusy) return "busy";
-        if (session.hasUnseenActivity) return "unseen";
-        if (session.needsInput && state !== "busy" && state !== "unseen") return "input";
-      }
-      return state;
-    }, "idle");
-  });
+  const activity = useTerminalStore((s) =>
+    getWorktreeActivity(s.sessions, projectId, worktree.id),
+  );
   const terminalCount = useTerminalStore(
     (s) =>
       s.sessions.filter(
@@ -551,6 +556,7 @@ export default function LeftSidebar() {
     activeProjectId,
     expandedProjectIds,
     setActiveProject,
+    setActiveWorktree,
     loadProjects,
     removeProject,
     toggleProjectExpanded,
@@ -613,6 +619,24 @@ export default function LeftSidebar() {
     }
   };
 
+  const [sessionTick, setSessionTick] = useState(0);
+  useEffect(() => {
+    return useTerminalStore.subscribe(() => {
+      setSessionTick((t) => t + 1);
+    });
+  }, []);
+
+  const sessions = useTerminalStore.getState().sessions;
+  const activeWorktrees = projects.flatMap((project) =>
+    project.worktrees
+      .filter((wt) => {
+        const activity = getWorktreeActivity(sessions, project.id, wt.id);
+        return activity === "unseen" || activity === "busy";
+      })
+      .map((wt) => ({ project, worktree: wt })),
+  );
+  void sessionTick;
+
   return (
     <DndContext
       sensors={sensors}
@@ -622,6 +646,47 @@ export default function LeftSidebar() {
       onDragEnd={handleDragEnd}
     >
       <div className="flex h-full flex-col">
+        {activeWorktrees.length > 0 && (
+          <div className="border-b border-[var(--color-surface0)] py-1">
+            <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-subtext1)]">
+              Active
+            </div>
+            {activeWorktrees.map(({ project, worktree }) => {
+              const activity = getWorktreeActivity(
+                useTerminalStore.getState().sessions,
+                project.id,
+                worktree.id,
+              );
+              return (
+                <button
+                  key={`${project.id}:${worktree.id}`}
+                  onClick={() => {
+                    const tStore = useTerminalStore.getState();
+                    tStore.sessions
+                      .filter((s) => s.worktreeId === worktree.id && s.hasUnseenActivity)
+                      .forEach((s) => tStore.markSessionSeen(s.id));
+                    setActiveProject(project.id);
+                    setActiveWorktree(project.id, worktree.id);
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1 text-left text-xs text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/50"
+                >
+                  {activity === "busy" ? (
+                    <Loader2 size={10} className="animate-spin text-[var(--color-blue)]" />
+                  ) : activity === "unseen" ? (
+                    <span className="animate-blink text-[10px] font-bold text-[var(--color-green)]">!</span>
+                  ) : (
+                    <span className="text-[10px] font-bold text-[var(--color-blue)]">
+                      {useTerminalStore.getState().sessions.filter(
+                        (s) => s.projectId === project.id && s.worktreeId === worktree.id,
+                      ).length}
+                    </span>
+                  )}
+                  <span className="truncate">{project.name} — {worktree.branch}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-[var(--color-surface0)] px-3 min-w-0">
           <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-subtext1)] truncate">
             Projects
