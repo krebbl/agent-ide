@@ -2478,7 +2478,7 @@ async fn ensure_ssh_connection(project_id: &str, state: &AppState) -> Result<(),
             connections.insert(
                 project_id.to_string(),
                 SshConnection {
-                    session,
+                    session: Arc::new(Mutex::new(session)),
                     sftp: sftp.map(Arc::new),
                     credentials,
                     status: ConnectionStatus::Connected,
