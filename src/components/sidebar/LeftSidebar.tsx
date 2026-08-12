@@ -477,7 +477,7 @@ function ProjectItem({
         ref={setNodeRef}
         {...attributes}
         {...listeners}
-        className={`group relative flex items-center gap-1.5 px-3 py-1.5 text-sm cursor-pointer transition-colors select-none ${
+        className={`group relative sticky top-0 z-10 flex items-center gap-1.5 bg-[var(--color-base)] px-3 py-1.5 text-sm cursor-pointer transition-colors select-none ${
           isActive
             ? "bg-[var(--color-surface0)] text-[var(--color-text)]"
             : "text-[var(--color-subtext1)] hover:bg-[var(--color-surface0)]/50"
@@ -754,15 +754,16 @@ export default function LeftSidebar() {
                   {showAbove && (
                     <div className="h-0.5 bg-[var(--color-blue)]" key="above" />
                   )}
-                  <ProjectItem
-                    key={project.id}
-                    project={project}
-                    isActive={project.id === activeProjectId}
-                    isExpanded={expandedProjectIds.has(project.id)}
-                    onToggle={() => handleToggle(project.id)}
-                    onSelect={() => setActiveProject(project.id)}
-                    onRemove={() => removeProject(project.id)}
-                  />
+                  <div key={project.id}>
+                    <ProjectItem
+                      project={project}
+                      isActive={project.id === activeProjectId}
+                      isExpanded={expandedProjectIds.has(project.id)}
+                      onToggle={() => handleToggle(project.id)}
+                      onSelect={() => setActiveProject(project.id)}
+                      onRemove={() => removeProject(project.id)}
+                    />
+                  </div>
                   {showBelow && (
                     <div className="h-0.5 bg-[var(--color-blue)]" key="below" />
                   )}
