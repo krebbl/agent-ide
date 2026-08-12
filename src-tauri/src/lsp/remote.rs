@@ -81,7 +81,9 @@ async fn exec_probe(session: &SessionHandle, command: String) -> ExecProbeResult
                         stderr,
                     }
                 }
-                Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
+                // Servers commonly send Eof before ExitStatus; keep waiting.
+                Some(ChannelMsg::Eof) => {}
+                Some(ChannelMsg::Close) | None => {
                     return ExecProbeResult {
                         exit_status: None,
                         stdout,
@@ -141,6 +143,10 @@ pub async fn remote_resolve_shell(session: &SessionHandle, command: &str) -> Opt
             return Some(shell);
         }
     }
+    tracing::warn!(
+        "lsp remote probe: `{}` not found on remote host (tried direct, login and interactive shells); is it installed there?",
+        command
+    );
     None
 }
 

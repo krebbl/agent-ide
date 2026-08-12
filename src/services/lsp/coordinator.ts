@@ -61,7 +61,7 @@ export function serverKeyForMonacoLanguage(monacoLanguage: string): string | nul
   return SERVER_KEY_BY_LSP_LANGUAGE[monacoLanguage] ?? null;
 }
 
-function serverKeyForPath(path: string): string | null {
+export function serverKeyForPath(path: string): string | null {
   const lspLanguage = lspLanguageFromPath(path);
   return lspLanguage ? (SERVER_KEY_BY_LSP_LANGUAGE[lspLanguage] ?? null) : null;
 }

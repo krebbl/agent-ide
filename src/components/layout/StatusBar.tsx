@@ -1,8 +1,9 @@
-import { PanelBottom } from "lucide-react";
+import { Info, PanelBottom } from "lucide-react";
 import { useLspStore, type LspServerStatus } from "../../stores/lspStore";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { useProjectStore } from "../../stores/projectStore";
-import { restartServer } from "../../services/lsp/coordinator";
+import { useEditorStore, languageFromPath } from "../../stores/editorStore";
+import { restartServer, serverKeyForPath } from "../../services/lsp/coordinator";
 
 const STATUS_COLORS: Record<LspServerStatus, string> = {
   ready: "var(--color-green)",
@@ -20,6 +21,10 @@ export default function StatusBar() {
   );
   const isCollapsed = useTerminalStore((s) => s.isCollapsed);
   const setCollapsed = useTerminalStore((s) => s.setCollapsed);
+  const activePath = useEditorStore((s) => s.activePath);
+  const activeLanguage = activePath ? languageFromPath(activePath) : null;
+  const noLspForActive =
+    activePath !== null && serverKeyForPath(activePath) === null;
 
   return (
     <div className="flex h-6 shrink-0 items-center border-t border-[var(--color-surface0)] bg-[var(--color-crust)] px-3 text-xs text-[var(--color-subtext0)]">
@@ -63,6 +68,15 @@ export default function StatusBar() {
             </button>
           );
         })}
+        {noLspForActive && (
+          <span
+            className="flex items-center gap-1.5 text-[var(--color-overlay0)]"
+            title={`No language server available for ${activeLanguage}`}
+          >
+            <Info size={11} />
+            {activeLanguage}: no LSP
+          </span>
+        )}
       </div>
     </div>
   );
