@@ -1597,6 +1597,12 @@ fn filter_available_branches(
     assigned: &[String],
 ) -> Vec<BranchInfo> {
     let assigned_set: HashSet<&str> = assigned.iter().map(|s| s.as_str()).collect();
+    let local_names: HashSet<String> = branches
+        .iter()
+        .filter(|b| !b.is_remote)
+        .map(|b| b.name.clone())
+        .collect();
+
     branches
         .into_iter()
         .filter(|b| {
@@ -1605,7 +1611,7 @@ fn filter_available_branches(
             }
             if b.is_remote {
                 if let Some(base) = b.name.splitn(2, '/').nth(1) {
-                    if assigned_set.contains(base) {
+                    if assigned_set.contains(base) || local_names.iter().any(|n| n == base) {
                         return false;
                     }
                 }
