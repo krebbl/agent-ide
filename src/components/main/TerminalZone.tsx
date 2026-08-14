@@ -13,7 +13,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useUiStore } from "../../stores/uiStore";
 import SplitPaneContainer from "./SplitPaneContainer";
 import TabStrip from "../ui/TabStrip";
-import LoadingOverlay from "../ui/LoadingOverlay";
+
 
 function tabHasBusySession(
   tab: import("../../types").TerminalTab,
@@ -67,7 +67,6 @@ export default function TerminalZone({
 
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const selectedWorktreeId = useProjectStore((s) => s.selectedWorktreeId);
-  const worktreeLoading = useUiStore((s) => s.worktreeLoading);
 
   const visibleTabs = useMemo(
     () =>
@@ -296,7 +295,6 @@ export default function TerminalZone({
       </div>
 
       <div className="relative flex-1 overflow-hidden bg-[var(--color-base)]">
-        {worktreeLoading && <LoadingOverlay label="Connecting to remote…" />}
         {visibleTabs.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-2 p-4">
             <span className="text-sm text-[var(--color-overlay0)]">
