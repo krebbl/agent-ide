@@ -43,16 +43,24 @@ export default function RightSidebar() {
 
     const seq = ++loadSeq.current;
     useUiStore.getState().setWorktreeLoading(true);
+    const fallbackTimer = setTimeout(() => {
+      if (loadSeq.current === seq) {
+        useUiStore.getState().setWorktreeLoading(false);
+      }
+    }, 15000);
     void Promise.all([
       useEditorStore
         .getState()
         .setWorktree(`${activeProject.id}:${worktree.path}`, activeProject.id),
       setRoot(worktree.path, activeProject.id, activeProject.type),
-    ]).finally(() => {
-      if (loadSeq.current === seq) {
-        useUiStore.getState().setWorktreeLoading(false);
-      }
-    });
+    ])
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(fallbackTimer);
+        if (loadSeq.current === seq) {
+          useUiStore.getState().setWorktreeLoading(false);
+        }
+      });
   }, [activeProjectId, projects, setRoot, connectionStatus]);
 
   return (
