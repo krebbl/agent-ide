@@ -1,7 +1,12 @@
 import AppLayout from "./components/layout/AppLayout";
+import AuthGate from "./components/AuthGate";
 
 function App() {
-  return <AppLayout />;
+  return (
+    <AuthGate>
+      <AppLayout />
+    </AuthGate>
+  );
 }
 
 export default App;

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../services/ipc";
 
 /** Rust DirEntry serialized as camelCase: `isDir` */
 export interface DirEntry {

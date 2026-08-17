@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../services/ipc";
 import { DaemonSessionMeta, Pane, LeafPane, SplitPane, TerminalTab } from "../types";
 import { useProjectStore } from "./projectStore";
 

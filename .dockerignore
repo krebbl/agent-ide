@@ -1,0 +1,14 @@
+node_modules
+dist
+target
+.git
+.gitignore
+.github
+Dockerfile
+docker-compose.yml
+.dockerignore
+*.md
+.claude
+scripts/dev-worktree.mjs
+*.log
+.DS_Store

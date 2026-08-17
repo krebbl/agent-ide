@@ -3,7 +3,8 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../services/ipc";
+import { openUrl } from "../../utils/openUrl";
 import {
   registerTerminal,
   registerTerminalIdle,
@@ -222,7 +223,7 @@ export default function TerminalView({
       allowTransparency: true,
       linkHandler: {
         activate: async (_event: MouseEvent, uri: string) => {
-          await invoke("util_open_url", { url: uri });
+          await openUrl(uri);
         },
         hover: () => {},
         leave: () => {},

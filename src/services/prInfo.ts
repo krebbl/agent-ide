@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { PrInfo, PrInfoResult } from "../types";
 
 export async function prForBranch(

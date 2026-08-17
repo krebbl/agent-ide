@@ -1,0 +1,21 @@
+services:
+  agent-ide:
+    build: .
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - agent-ide-config:/config
+      - ./projects:/projects
+      - type: bind
+        source: ${SSH_AUTH_SOCK}
+        target: /ssh-agent
+    environment:
+      - AGENT_IDE_CONFIG_DIR=/config
+      - AGENT_IDE_SECRET_STORE=file
+      - AGENT_IDE_AUTH_TOKEN=${AGENT_IDE_AUTH_TOKEN:?AGENT_IDE_AUTH_TOKEN must be set}
+      - AGENT_IDE_STATIC_DIR=/app/dist
+      - SSH_AUTH_SOCK=/ssh-agent
+      - AGENT_IDE_PORT=3000
+
+volumes:
+  agent-ide-config:

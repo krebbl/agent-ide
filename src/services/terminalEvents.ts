@@ -1,4 +1,4 @@
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "./ipc";
 import { useTerminalStore } from "../stores/terminalStore";
 
 interface PtyOutputEvent {

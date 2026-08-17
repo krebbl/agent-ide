@@ -116,3 +116,31 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full architecture document, tec
 ## License
 
 MIT
+
+## Docker
+
+Run the Agent IDE server with Docker Compose:
+
+```bash
+export AGENT_IDE_AUTH_TOKEN=$(openssl rand -hex 32)
+docker compose up --build
+```
+
+The server listens on `127.0.0.1:3000`. Static files are served from `/app/dist` inside the container, configuration is persisted in the `agent-ide-config` Docker volume, and your local SSH agent socket is forwarded into the container at `/ssh-agent`.
+
+Bind-mounted directories:
+
+- `./projects` → `/projects` (place projects here)
+- `$SSH_AUTH_SOCK` → `/ssh-agent` (SSH agent forwarding)
+
+To stop:
+
+```bash
+docker compose down
+```
+
+To remove the persistent config volume:
+
+```bash
+docker compose down -v
+```

@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke, listen } from "./ipc";
 import { useDevNotificationStore } from "../stores/devNotificationStore";
 import { useTerminalStore } from "../stores/terminalStore";
 
@@ -52,11 +51,24 @@ export function notify(options: NotifyOptions) {
       .addNotification(`${options.title}: ${options.body}`, options.sessionId);
     playNotificationSound();
   }
-  invoke("notification_show", {
-    title: options.title,
-    body: options.body,
-    sessionId: options.sessionId ?? null,
-  }).catch((e) => {
-    console.error("Failed to send notification:", e);
-  });
+
+  if (import.meta.env.VITE_TAURI === "true") {
+    invoke("notification_show", {
+      title: options.title,
+      body: options.body,
+      sessionId: options.sessionId ?? null,
+    }).catch((e) => {
+      console.error("Failed to send notification:", e);
+    });
+    return;
+  }
+
+  if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+    const n = new Notification(options.title, { body: options.body });
+    n.onclick = () => {
+      if (options.sessionId) {
+        useTerminalStore.getState().focusSession(options.sessionId);
+      }
+    };
+  }
 }

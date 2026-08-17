@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:web": "VITE_TAURI=false tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev:worktree": "node scripts/dev-worktree.mjs"

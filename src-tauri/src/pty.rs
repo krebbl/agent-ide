@@ -397,16 +397,20 @@ mod tests {
     }
 }
 
-#[tauri::command]
-pub async fn pty_spawn(
+fn require_pty_client(state: &crate::AppState) -> Result<Arc<crate::pty_client::PtyClient>, String> {
+    state.pty_client.get().cloned().ok_or_else(|| "PtyClient not initialized".to_string())
+}
+
+pub async fn cmd_pty_spawn(
+    state: &crate::AppState,
     cwd: Option<String>,
     cols: u16,
     rows: u16,
     project_id: Option<String>,
     worktree_id: Option<String>,
     session_type: Option<String>,
-    pty_client: tauri::State<'_, Arc<crate::pty_client::PtyClient>>,
 ) -> Result<String, String> {
+    let pty_client = require_pty_client(state)?;
     let is_remote = session_type.as_deref() == Some("ssh")
         || (project_id.is_some() && session_type.as_deref() != Some("local"));
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -419,19 +423,53 @@ pub async fn pty_spawn(
 }
 
 #[tauri::command]
+pub async fn pty_spawn(
+    cwd: Option<String>,
+    cols: u16,
+    rows: u16,
+    project_id: Option<String>,
+    worktree_id: Option<String>,
+    session_type: Option<String>,
+    state: tauri::State<'_, Arc<crate::AppState>>,
+) -> Result<String, String> {
+    crate::commands::pty_spawn(state.inner().as_ref(), cwd, cols, rows, project_id, worktree_id, session_type).await
+}
+
+pub async fn cmd_pty_list_sessions(state: &crate::AppState) -> Result<Vec<crate::pty_protocol::SessionMeta>, String> {
+    require_pty_client(state)?.list_sessions().await
+}
+
+#[tauri::command]
 pub async fn pty_list_sessions(
-    pty_client: tauri::State<'_, Arc<crate::pty_client::PtyClient>>,
+    state: tauri::State<'_, Arc<crate::AppState>>,
 ) -> Result<Vec<crate::pty_protocol::SessionMeta>, String> {
-    pty_client.list_sessions().await
+    crate::commands::pty_list_sessions(state.inner().as_ref()).await
+}
+
+pub async fn cmd_pty_write(
+    state: &crate::AppState,
+    session_id: String,
+    data: String,
+) -> Result<(), String> {
+    require_pty_client(state)?.write(session_id, data)
 }
 
 #[tauri::command]
 pub async fn pty_write(
     session_id: String,
     data: String,
-    pty_client: tauri::State<'_, Arc<crate::pty_client::PtyClient>>,
+    state: tauri::State<'_, Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    pty_client.write(session_id, data)
+    crate::commands::pty_write(state.inner().as_ref(), session_id, data).await
+}
+
+pub async fn cmd_pty_resize(
+    state: &crate::AppState,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    require_pty_client(state)?.resize(session_id, cols, rows)
 }
 
 #[tauri::command]
@@ -439,26 +477,61 @@ pub async fn pty_resize(
     session_id: String,
     cols: u16,
     rows: u16,
-    pty_client: tauri::State<'_, Arc<crate::pty_client::PtyClient>>,
+    state: tauri::State<'_, Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    pty_client.resize(session_id, cols, rows)
+    crate::commands::pty_resize(state.inner().as_ref(), session_id, cols, rows).await
+}
+
+pub async fn cmd_pty_kill(
+    state: &crate::AppState,
+    session_id: String,
+) -> Result<(), String> {
+    require_pty_client(state)?.kill(session_id)
 }
 
 #[tauri::command]
 pub async fn pty_kill(
     session_id: String,
-    pty_client: tauri::State<'_, Arc<crate::pty_client::PtyClient>>,
+    state: tauri::State<'_, Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    pty_client.kill(session_id)
+    crate::commands::pty_kill(state.inner().as_ref(), session_id).await
+}
+
+pub async fn cmd_pty_set_active(
+    state: &crate::AppState,
+    pty_id: Option<String>,
+) -> Result<(), String> {
+    state.set_active_pty(pty_id);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn pty_set_active(
+pub async fn pty_set_active(
     pty_id: Option<String>,
-    app_state: tauri::State<'_, Arc<crate::AppState>>,
+    state: tauri::State<'_, Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    app_state.set_active_pty(pty_id);
-    Ok(())
+    crate::commands::pty_set_active(state.inner().as_ref(), pty_id).await
+}
+
+pub async fn cmd_pty_register_ssh_project(
+    state: &crate::AppState,
+    project_id: String,
+    host: String,
+    port: u16,
+    username: String,
+    auth_method: String,
+    key_path: Option<String>,
+    password: Option<String>,
+) -> Result<(), String> {
+    require_pty_client(state)?.register_ssh_project(
+        project_id,
+        host,
+        port,
+        username,
+        auth_method,
+        key_path,
+        password,
+    )
 }
 
 #[tauri::command]
@@ -470,9 +543,10 @@ pub async fn pty_register_ssh_project(
     auth_method: String,
     key_path: Option<String>,
     password: Option<String>,
-    pty_client: tauri::State<'_, Arc<crate::pty_client::PtyClient>>,
+    state: tauri::State<'_, Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    pty_client.register_ssh_project(
+    crate::commands::pty_register_ssh_project(
+        state.inner().as_ref(),
         project_id,
         host,
         port,
@@ -481,6 +555,7 @@ pub async fn pty_register_ssh_project(
         key_path,
         password,
     )
+    .await
 }
 
 

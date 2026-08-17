@@ -7,7 +7,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { useEffect, useMemo, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../services/ipc";
 import { useTerminalStore, collectLeaves, findLeaf } from "../../stores/terminalStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { useUiStore } from "../../stores/uiStore";

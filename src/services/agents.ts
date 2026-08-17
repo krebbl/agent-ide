@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { AgentId, AgentStatus } from "../types";
 
 export async function checkAgentReady(id: AgentId): Promise<AgentStatus> {

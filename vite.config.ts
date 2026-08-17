@@ -13,6 +13,12 @@ const hmrPort = parseInt(process.env.AGENT_IDE_HMR_PORT || "1421", 10);
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
 
+  define: {
+    "import.meta.env.VITE_TAURI": JSON.stringify(
+      process.env.VITE_TAURI ?? "true",
+    ),
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { monaco } from "../utils/monacoSetup";
 import { useEditorStore, type OpenFile } from "../stores/editorStore";
 import { useFileTreeStore } from "../stores/fileTreeStore";

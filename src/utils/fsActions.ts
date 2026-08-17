@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../services/ipc";
 import { useEditorStore } from "../stores/editorStore";
 import { notifyWatchedFiles, FileChangeType } from "../services/lsp/coordinator";
 
