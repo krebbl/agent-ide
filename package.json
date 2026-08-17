@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:web": "VITE_TAURI=false vite",
     "build": "tsc && vite build",
     "build:web": "VITE_TAURI=false tsc && VITE_TAURI=false vite build",
     "build:server:debug": "cd src-tauri && cargo build --bin agent-ide-server",
