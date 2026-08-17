@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "build:web": "VITE_TAURI=false tsc && vite build",
+    "build:web": "VITE_TAURI=false tsc && VITE_TAURI=false vite build",
     "build:server:debug": "cd src-tauri && cargo build --bin agent-ide-server",
     "build:server": "cd src-tauri && cargo build --release --bin agent-ide-server",
     "build:web:server": "npm run build:web && npm run build:server",
