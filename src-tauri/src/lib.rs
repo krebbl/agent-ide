@@ -993,31 +993,80 @@ fn is_worktree_dirty(repo: &Repository) -> bool {
 }
 
 fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
+    fn worktree_branch_and_status(repo: &Repository) -> (String, String) {
+        let branch = if let Ok(head) = repo.head() {
+            if head.is_branch() {
+                head.shorthand().unwrap_or("main").to_string()
+            } else {
+                "main".to_string()
+            }
+        } else {
+            "main".to_string()
+        };
+        let status = if is_worktree_dirty(repo) {
+            "dirty".to_string()
+        } else {
+            "clean".to_string()
+        };
+        (branch, status)
+    }
+
     let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
+
+    let repo_path = Path::new(repo_path);
+    let repo_path_canon = repo_path
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize repository path: {}", e))?;
+
+    let common_dir_output = std::process::Command::new("git")
+        .args(["-C", repo_path.to_str().unwrap_or(""), "rev-parse", "--git-common-dir"])
+        .output()
+        .map_err(|e| format!("Failed to run git rev-parse: {}", e))?;
+    if !common_dir_output.status.success() {
+        return Err("Failed to resolve git common directory".to_string());
+    }
+    let common_dir_str = String::from_utf8_lossy(&common_dir_output.stdout)
+        .trim()
+        .to_string();
+    let common_dir = PathBuf::from(&common_dir_str);
+    let common_dir = if common_dir.is_absolute() {
+        common_dir
+    } else {
+        repo_path.join(common_dir)
+    };
+    let main_path = common_dir
+        .parent()
+        .ok_or_else(|| "Invalid repository: missing common directory".to_string())?;
+    let main_path = main_path
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize main worktree path: {}", e))?;
+
+    let is_current_main = repo_path_canon == main_path;
+    let main_repo_owned = if is_current_main {
+        None
+    } else {
+        Some(Repository::open(&main_path).map_err(|e| {
+            format!("Failed to open main worktree repository: {}", e)
+        })?)
+    };
+    let main_repo = main_repo_owned.as_ref().unwrap_or(&repo);
 
     let mut result = Vec::new();
 
-    let main_branch = if let Ok(head) = repo.head() {
-        if head.is_branch() {
-            head.shorthand().unwrap_or("main").to_string()
-        } else {
-            "main".to_string()
-        }
-    } else {
-        "main".to_string()
-    };
-
-    let (ahead, behind) = compute_ahead_behind(&repo, &main_branch);
-    let status = if is_worktree_dirty(&repo) { "dirty".to_string() } else { "clean".to_string() };
-
+    let (main_branch, main_status) = worktree_branch_and_status(main_repo);
+    let (main_ahead, main_behind) = compute_ahead_behind(main_repo, &main_branch);
     result.push(WorktreeInfo {
-        id: repo_path.split('/').filter(|s| !s.is_empty()).last().unwrap_or(repo_path).to_string(),
+        id: main_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("main")
+            .to_string(),
         branch: main_branch,
-        path: repo_path.to_string(),
+        path: main_path.to_str().unwrap_or("").to_string(),
         is_main: true,
-        status,
-        ahead,
-        behind,
+        status: main_status,
+        ahead: main_ahead,
+        behind: main_behind,
         locked: false,
     });
 
@@ -1028,24 +1077,12 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
 
         let wt = repo.find_worktree(wt_name).map_err(|e| format!("Failed to find worktree: {}", e))?;
 
-        let wt_path = wt.path().to_str().unwrap_or("").to_string();
+        let wt_path = wt.path().to_path_buf();
+        let wt_path_canon = wt_path.canonicalize().unwrap_or_else(|_| wt_path.clone());
+        let is_main = wt_path_canon == main_path;
 
         let (branch, status) = if let Ok(wt_repo) = Repository::open(&wt_path) {
-            let branch = if let Ok(head) = wt_repo.head() {
-                if head.is_branch() {
-                    head.shorthand().unwrap_or(wt_name).to_string()
-                } else {
-                    wt_name.to_string()
-                }
-            } else {
-                wt_name.to_string()
-            };
-            let status = if is_worktree_dirty(&wt_repo) {
-                "dirty".to_string()
-            } else {
-                "clean".to_string()
-            };
-            (branch, status)
+            worktree_branch_and_status(&wt_repo)
         } else {
             (wt_name.to_string(), "clean".to_string())
         };
@@ -1055,8 +1092,8 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
         result.push(WorktreeInfo {
             id: wt_name.to_string(),
             branch,
-            path: wt_path,
-            is_main: false,
+            path: wt_path.to_str().unwrap_or("").to_string(),
+            is_main,
             status,
             ahead,
             behind,
