@@ -1,23 +1,65 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { getToken, onUnauthorized, setToken } from "../services/auth";
+import { invoke } from "../services/ipc";
 
-const TOKEN_KEY = "agent-ide-token";
+const VALIDATE_INTERVAL_MS = 30000;
+
+function isUnauthorizedError(err: unknown): boolean {
+  const text = String(err).toLowerCase();
+  return text.includes("unauthorized") || text.includes("401");
+}
 
 export default function AuthGate({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState("");
-
   const isWebMode = import.meta.env.VITE_TAURI !== "true";
-  const hasToken = (localStorage.getItem(TOKEN_KEY) ?? "").length > 0;
+  const [storedToken, setStoredToken] = useState(() => getToken());
+  const [inputToken, setInputToken] = useState("");
+  const [needsAuth, setNeedsAuth] = useState(() => isWebMode && storedToken.length === 0);
 
-  if (!isWebMode || hasToken) {
-    return <>{children}</>;
-  }
+  const validate = useCallback(async () => {
+    if (!isWebMode) {
+      setNeedsAuth(false);
+      return;
+    }
+    if (!storedToken) {
+      setNeedsAuth(true);
+      return;
+    }
+    try {
+      const valid = await invoke<boolean>("validate_token", { token: storedToken });
+      setNeedsAuth(!valid);
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        setNeedsAuth(true);
+      }
+    }
+  }, [isWebMode, storedToken]);
 
-  const submit = (e: FormEvent<HTMLFormElement>) => {
+  useEffect(() => {
+    validate();
+    if (!isWebMode) return;
+    const id = setInterval(validate, VALIDATE_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [isWebMode, validate]);
+
+  useEffect(() => {
+    if (!isWebMode) return;
+    return onUnauthorized(() => {
+      setStoredToken("");
+      setNeedsAuth(true);
+    });
+  }, [isWebMode]);
+
+  const submit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!token.trim()) return;
-    localStorage.setItem(TOKEN_KEY, token.trim());
+    const trimmed = inputToken.trim();
+    if (!trimmed) return;
+    setToken(trimmed);
     window.location.reload();
   };
+
+  if (!needsAuth) {
+    return <>{children}</>;
+  }
 
   return (
     <div className="flex h-screen w-screen items-center justify-center bg-[var(--color-base)] text-[var(--color-text)]">
@@ -31,8 +73,8 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         </p>
         <input
           type="password"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
+          value={inputToken}
+          onChange={(e) => setInputToken(e.target.value)}
           placeholder="Access token"
           className="mb-4 w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm outline-none focus:border-[var(--color-blue)]"
           autoFocus
@@ -40,7 +82,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         <button
           type="submit"
           className="w-full rounded-md bg-[var(--color-blue)] px-3 py-2 text-sm font-medium text-[var(--color-base)] hover:opacity-90 disabled:opacity-50"
-          disabled={!token.trim()}
+          disabled={!inputToken.trim()}
         >
           Continue
         </button>

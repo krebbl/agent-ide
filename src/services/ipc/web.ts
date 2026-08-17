@@ -1,10 +1,5 @@
+import { emitUnauthorized, getToken } from "../auth";
 import type { IpcEvent } from "../ipc";
-
-const TOKEN_KEY = "agent-ide-token";
-
-function getToken(): string {
-  return localStorage.getItem(TOKEN_KEY) ?? "";
-}
 
 export async function invoke<T>(
   command: string,
@@ -22,6 +17,9 @@ export async function invoke<T>(
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
+    if (response.status === 401) {
+      emitUnauthorized();
+    }
     throw String(text || response.statusText);
   }
 
