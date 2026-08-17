@@ -1172,6 +1172,40 @@ mod worktree_id_tests {
         assert_eq!(worktrees[1].id, "a-2");
         assert_eq!(worktrees[2].id, "a-3");
     }
+
+    #[test]
+    fn deduplicates_main_and_linked_worktree_with_same_folder_name() {
+        let base = std::env::temp_dir().join(format!(
+            "agent-ide-care-center-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let main_path = base.join("care-center");
+        let wt_path = base.join("wt").join("care-center");
+        std::fs::create_dir_all(&main_path).unwrap();
+
+        fn run(dir: &std::path::Path, args: &[&str]) {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .status()
+                .expect("git command failed");
+            assert!(status.success(), "git {:?} failed", args);
+        }
+
+        run(&base, &["init", "care-center"]);
+        std::fs::write(main_path.join("file.txt"), "hello").unwrap();
+        run(&main_path, &["add", "file.txt"]);
+        run(&main_path, &["commit", "-m", "init"]);
+        run(&main_path, &["worktree", "add", wt_path.to_str().unwrap(), "-b", "feature"]);
+
+        let worktrees = list_worktrees_local(main_path.to_str().unwrap()).unwrap();
+        let ids: std::collections::HashSet<_> = worktrees.iter().map(|w| w.id.clone()).collect();
+        assert_eq!(ids.len(), worktrees.len(), "worktree ids must be unique");
+        assert!(ids.contains("care-center"));
+        assert!(ids.contains("care-center-2"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 fn compute_worktree_path(repo_path: &str, name: &str) -> Result<String, String> {
