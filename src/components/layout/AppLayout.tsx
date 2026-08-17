@@ -1,5 +1,4 @@
 import { Group, Panel, Separator } from "react-resizable-panels";
-import TitleBar from "./TitleBar";
 import StatusBar from "./StatusBar";
 import LeftSidebar from "../sidebar/LeftSidebar";
 import RightSidebar from "../sidebar/RightSidebar";
@@ -12,7 +11,6 @@ export default function AppLayout() {
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-base)]">
-      <TitleBar />
       <div className="flex flex-1 overflow-hidden">
         <Group orientation="horizontal" className="flex h-full w-full">
           <Panel
