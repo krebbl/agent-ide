@@ -108,6 +108,11 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/app/dist"));
 
+    let host: std::net::IpAddr = env::var("AGENT_IDE_HOST")
+        .ok()
+        .and_then(|h| h.parse().ok())
+        .unwrap_or(std::net::IpAddr::from([0, 0, 0, 0]));
+
     let port: u16 = env::var("AGENT_IDE_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
@@ -146,7 +151,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(CorsLayer::permissive())
         .with_state(server_state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let addr = SocketAddr::from((host, port));
     tracing::info!("agent-ide-server listening on http://{}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

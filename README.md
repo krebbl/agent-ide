@@ -157,12 +157,26 @@ export AGENT_IDE_AUTH_TOKEN=$(openssl rand -hex 32)
 export AGENT_IDE_CONFIG_DIR="$HOME/.config/agent-ide"
 export AGENT_IDE_SECRET_STORE=file
 export AGENT_IDE_STATIC_DIR="$(pwd)/dist"
+export AGENT_IDE_HOST=0.0.0.0
 export AGENT_IDE_PORT=3000
 
 src-tauri/target/release/agent-ide-server
 ```
 
-Open `http://localhost:3000`, paste the token, and start using Agent IDE from the browser.
+To bind to a specific address and port, e.g. `127.0.0.1:4555`:
+
+```bash
+export AGENT_IDE_AUTH_TOKEN=$(openssl rand -hex 32)
+export AGENT_IDE_CONFIG_DIR="$HOME/.config/agent-ide"
+export AGENT_IDE_SECRET_STORE=file
+export AGENT_IDE_STATIC_DIR="$(pwd)/dist"
+export AGENT_IDE_HOST=127.0.0.1
+export AGENT_IDE_PORT=4555
+
+src-tauri/target/release/agent-ide-server
+```
+
+Open `http://localhost:3000` (or the configured address/port), paste the token, and start using Agent IDE from the browser.
 
 ### Systemd service
 
@@ -176,6 +190,7 @@ AGENT_IDE_AUTH_TOKEN=your-token-here
 AGENT_IDE_CONFIG_DIR=/var/lib/agent-ide
 AGENT_IDE_SECRET_STORE=file
 AGENT_IDE_STATIC_DIR=/opt/agent-ide/dist
+AGENT_IDE_HOST=0.0.0.0
 AGENT_IDE_PORT=3000
 SSH_AUTH_SOCK=/run/user/1000/keyring/ssh
 ```
