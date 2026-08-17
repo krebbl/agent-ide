@@ -31,11 +31,18 @@ async fn auth_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    let provided = request
+    let header_token = request
         .headers()
         .get(AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "));
+
+    let query_token = request.uri().query().and_then(|q| {
+        q.split('&')
+            .find_map(|pair| pair.strip_prefix("token="))
+    });
+
+    let provided = header_token.or(query_token);
 
     match provided {
         Some(token) if token == state.auth_token => next.run(request).await,
