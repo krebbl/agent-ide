@@ -1101,7 +1101,77 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
         });
     }
 
+    deduplicate_worktree_ids(&mut result);
     Ok(result)
+}
+
+fn deduplicate_worktree_ids(worktrees: &mut Vec<WorktreeInfo>) {
+    let mut used: HashSet<String> = HashSet::new();
+    for wt in worktrees.iter_mut() {
+        let original = wt.id.clone();
+        if used.insert(original.clone()) {
+            continue;
+        }
+        let mut n = 2u32;
+        loop {
+            let candidate = format!("{}-{}", original, n);
+            if used.insert(candidate.clone()) {
+                wt.id = candidate;
+                break;
+            }
+            n += 1;
+            if n > 10_000 {
+                wt.id = format!("{}-{}", original, uuid::Uuid::new_v4());
+                used.insert(wt.id.clone());
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod worktree_id_tests {
+    use super::*;
+
+    fn wt(id: &str) -> WorktreeInfo {
+        WorktreeInfo {
+            id: id.to_string(),
+            branch: "main".to_string(),
+            path: format!("/tmp/{}", id),
+            is_main: false,
+            status: "clean".to_string(),
+            ahead: 0,
+            behind: 0,
+            locked: false,
+        }
+    }
+
+    #[test]
+    fn leaves_unique_ids_unchanged() {
+        let mut worktrees = vec![wt("a"), wt("b"), wt("c")];
+        deduplicate_worktree_ids(&mut worktrees);
+        assert_eq!(worktrees[0].id, "a");
+        assert_eq!(worktrees[1].id, "b");
+        assert_eq!(worktrees[2].id, "c");
+    }
+
+    #[test]
+    fn appends_suffix_to_duplicate_ids() {
+        let mut worktrees = vec![wt("a"), wt("a"), wt("a")];
+        deduplicate_worktree_ids(&mut worktrees);
+        assert_eq!(worktrees[0].id, "a");
+        assert_eq!(worktrees[1].id, "a-2");
+        assert_eq!(worktrees[2].id, "a-3");
+    }
+
+    #[test]
+    fn avoids_collision_with_existing_suffixed_id() {
+        let mut worktrees = vec![wt("a"), wt("a-2"), wt("a")];
+        deduplicate_worktree_ids(&mut worktrees);
+        assert_eq!(worktrees[0].id, "a");
+        assert_eq!(worktrees[1].id, "a-2");
+        assert_eq!(worktrees[2].id, "a-3");
+    }
 }
 
 fn compute_worktree_path(repo_path: &str, name: &str) -> Result<String, String> {
@@ -1501,6 +1571,7 @@ echo 'WT_STATES_END'"#,
         worktrees[0].is_main = true;
     }
 
+    deduplicate_worktree_ids(&mut worktrees);
     Ok(worktrees)
 }
 
