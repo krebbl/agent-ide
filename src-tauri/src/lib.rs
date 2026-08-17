@@ -2832,6 +2832,7 @@ pub fn run() {
                     pty_client::PtyClient::new(
                         pty_client::daemon_socket_path(),
                         event_bus.clone(),
+                        true,
                     )
                     .await
                 })

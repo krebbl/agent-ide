@@ -15,12 +15,13 @@ use crate::pty_protocol::{DaemonEvent, DaemonRequest, SessionMeta};
 pub struct PtyClient {
     request_tx: mpsc::UnboundedSender<DaemonRequest>,
     list_waiter: Arc<Mutex<Option<tokio::sync::oneshot::Sender<Vec<SessionMeta>>>>>,
+    _daemon: Option<std::process::Child>,
     _read_task: tokio::task::JoinHandle<()>,
 }
 
 impl PtyClient {
-    pub async fn new(socket_path: PathBuf, event_bus: EventBus) -> Result<Self, String> {
-        ensure_daemon_running(&socket_path).await?;
+    pub async fn new(socket_path: PathBuf, event_bus: EventBus, daemonize: bool) -> Result<Self, String> {
+        let daemon = ensure_daemon_running(&socket_path, daemonize).await?;
         let stream = connect_with_retry(&socket_path).await?;
         let (read_half, write_half) = stream.into_split();
         let (request_tx, mut request_rx) = mpsc::unbounded_channel::<DaemonRequest>();
@@ -69,6 +70,7 @@ impl PtyClient {
         Ok(Self {
             request_tx,
             list_waiter,
+            _daemon: daemon,
             _read_task: read_task,
         })
     }
@@ -237,11 +239,11 @@ impl PtyClient {
 
 const DAEMON_TOKEN: &str = env!("AGENT_IDE_DAEMON_TOKEN");
 
-async fn ensure_daemon_running(socket_path: &PathBuf) -> Result<(), String> {
+async fn ensure_daemon_running(socket_path: &PathBuf, daemonize: bool) -> Result<Option<std::process::Child>, String> {
     if socket_path.exists() {
         if let Ok(is_current) = check_existing_daemon(socket_path).await {
             if is_current {
-                return Ok(());
+                return Ok(None);
             }
         }
         kill_existing_daemon(socket_path).await;
@@ -249,17 +251,18 @@ async fn ensure_daemon_running(socket_path: &PathBuf) -> Result<(), String> {
     }
     let current_exe = std::env::current_exe()
         .map_err(|e| format!("Failed to get current executable: {}", e))?;
-    let _ = tokio::process::Command::new(current_exe)
-        .arg("--pty-daemon")
-        .arg("--daemonize")
-        .spawn()
-        .map_err(|e| format!("Failed to spawn pty daemon: {}", e))?;
+    let mut cmd = std::process::Command::new(current_exe);
+    cmd.arg("--pty-daemon");
+    if daemonize {
+        cmd.arg("--daemonize");
+    }
+    let child = cmd.spawn().map_err(|e| format!("Failed to spawn pty daemon: {}", e))?;
 
     for _ in 0..50 {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         if socket_path.exists() {
             if UnixStream::connect(socket_path).await.is_ok() {
-                return Ok(());
+                return Ok(Some(child));
             }
         }
     }

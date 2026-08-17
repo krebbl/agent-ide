@@ -58,6 +58,11 @@ The app window (1280x800) will open with the 3-panel IDE layout.
 |---------|-------------|
 | `npm run dev` | Start Vite dev server (frontend only, no Tauri window) |
 | `npm run build` | Build frontend for production (`tsc && vite build`) |
+| `npm run build:web` | Build browser frontend bundle (sets `VITE_TAURI=false`) |
+| `npm run build:server` | Build the headless server binary in release mode |
+| `npm run build:web:server` | Build web bundle and server binary |
+| `npm run server` | Run the release server binary (requires `dist/`) |
+| `npm run server:debug` | Run the debug server binary (requires `dist/`) |
 | `npm run tauri dev` | Run full app in dev mode (frontend + Rust backend) |
 | `npm run tauri:dev:worktree` | Run a dev instance isolated for the current git worktree |
 | `npm run tauri build` | Build production desktop app (creates installable bundle) |
@@ -117,30 +122,85 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full architecture document, tec
 
 MIT
 
-## Docker
+## Server deployment
 
-Run the Agent IDE server with Docker Compose:
+You can also run Agent IDE as a headless server and access it from a browser. The server serves the React frontend and exposes the same backend commands over HTTP/WebSocket.
+
+### Build the server binary
+
+Using npm:
 
 ```bash
 export AGENT_IDE_AUTH_TOKEN=$(openssl rand -hex 32)
-docker compose up --build
+npm run build:web:server
 ```
 
-The server listens on `127.0.0.1:3000`. Static files are served from `/app/dist` inside the container, configuration is persisted in the `agent-ide-config` Docker volume, and your local SSH agent socket is forwarded into the container at `/ssh-agent`.
-
-Bind-mounted directories:
-
-- `./projects` → `/projects` (place projects here)
-- `$SSH_AUTH_SOCK` → `/ssh-agent` (SSH agent forwarding)
-
-To stop:
+Or use the shell script:
 
 ```bash
-docker compose down
+./scripts/build-server.sh
 ```
 
-To remove the persistent config volume:
+Both produce `src-tauri/target/release/agent-ide-server` and the static bundle in `dist/`. Use `npm run build:server:debug` and `npm run server:debug` for a debug build.
+
+### Run locally
 
 ```bash
-docker compose down -v
+export AGENT_IDE_AUTH_TOKEN=$(openssl rand -hex 32)
+npm run server
 ```
+
+Or manually:
+
+```bash
+export AGENT_IDE_AUTH_TOKEN=$(openssl rand -hex 32)
+export AGENT_IDE_CONFIG_DIR="$HOME/.config/agent-ide"
+export AGENT_IDE_SECRET_STORE=file
+export AGENT_IDE_STATIC_DIR="$(pwd)/dist"
+export AGENT_IDE_PORT=3000
+
+src-tauri/target/release/agent-ide-server
+```
+
+Open `http://localhost:3000`, paste the token, and start using Agent IDE from the browser.
+
+### Systemd service
+
+1. Build the binary and copy it somewhere permanent, e.g. `/opt/agent-ide`.
+2. Copy the static bundle: `cp -r dist /opt/agent-ide/dist`.
+3. Copy `scripts/agent-ide-server.service` to `/etc/systemd/system/agent-ide-server.service`.
+4. Create `/etc/default/agent-ide-server` with at least `AGENT_IDE_AUTH_TOKEN` and any other environment variables:
+
+```bash
+AGENT_IDE_AUTH_TOKEN=your-token-here
+AGENT_IDE_CONFIG_DIR=/var/lib/agent-ide
+AGENT_IDE_SECRET_STORE=file
+AGENT_IDE_STATIC_DIR=/opt/agent-ide/dist
+AGENT_IDE_PORT=3000
+SSH_AUTH_SOCK=/run/user/1000/keyring/ssh
+```
+
+5. Enable and start the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now agent-ide-server
+```
+
+Access the UI at `http://<server>:3000` and enter the token.
+
+### SSH agent forwarding
+
+When running on a remote server, forward your local SSH agent so Agent IDE can use your keys for SSH projects:
+
+```bash
+ssh -A user@server
+```
+
+Then set `SSH_AUTH_SOCK` to the forwarded socket path in `/etc/default/agent-ide-server` (usually `/run/user/$UID/keyring/ssh` or `/tmp/ssh-XXXXXXXX/agent.XXXX`).
+
+### Security notes
+
+- The bearer token is required for command and WebSocket endpoints. Serve behind a TLS-terminating reverse proxy for remote access.
+- Bind `AGENT_IDE_PORT` to localhost or an internal interface unless you have another layer of authentication.
+- Single-user: the running server holds one shared `AppState`.
