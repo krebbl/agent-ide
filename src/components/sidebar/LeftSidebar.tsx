@@ -1,6 +1,4 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge, BrushCleaning } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
@@ -10,6 +8,7 @@ import AddProjectDialog from "../dialogs/AddProjectDialog";
 import AddWorktreeDialog from "../dialogs/AddWorktreeDialog";
 import { Project, PrInfo, Worktree } from "../../types";
 import Dialog from "../ui/Dialog";
+import { openUrl } from "../../utils/openUrl";
 import { useSortable } from "@dnd-kit/sortable";
 import {
   DndContext,

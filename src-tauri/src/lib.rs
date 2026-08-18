@@ -2197,7 +2197,7 @@ fn list_branches_available_for_worktrees_local(
 async fn list_worktree_branch_names_ssh(
     project_id: &str,
     repo_path: &str,
-    state: &Arc<AppState>,
+    state: &AppState,
 ) -> Result<Vec<String>, String> {
     let output = run_git_command_ssh(project_id, repo_path, &["worktree", "list", "--porcelain"], state).await?;
     Ok(parse_worktree_branch_names(&output))
