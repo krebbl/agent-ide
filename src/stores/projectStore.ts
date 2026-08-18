@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { Project, Worktree } from "../types";
 import { useTerminalStore } from "./terminalStore";
+import { usePrStore } from "./prStore";
 
 interface ProjectStore {
   projects: Project[];
@@ -24,6 +25,7 @@ interface ProjectStore {
   removeWorktree: (projectId: string, worktreePath: string, force?: boolean, deleteBranch?: boolean) => Promise<void>;
   refreshWorktrees: (projectId: string) => Promise<void>;
   addWorktree: (projectId: string, branch: string, name: string, newBranch: boolean) => Promise<void>;
+  cleanupMergedWorktrees: (projectId: string) => Promise<void>;
   reorderProjects: (fromIndex: number, toIndex: number) => Promise<void>;
 }
 
@@ -299,6 +301,31 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     }
 
     await get().refreshWorktrees(projectId);
+  },
+
+  cleanupMergedWorktrees: async (projectId: string) => {
+    const project = get().projects.find((p) => p.id === projectId);
+    if (!project) return;
+
+    const branchesToCheck = project.worktrees.filter((w) => !w.isMain).map((w) => w.branch);
+    await usePrStore.getState().fetchPrsForWorktrees(projectId, branchesToCheck, true);
+    const prCache = usePrStore.getState().cache;
+    const mergedWorktrees = project.worktrees.filter(
+      (wt) => !wt.isMain && prCache[`${projectId}:${wt.branch}`]?.pr?.state === "merged",
+    );
+
+    const errors: string[] = [];
+    for (const wt of mergedWorktrees) {
+      try {
+        await get().removeWorktree(projectId, wt.path, false, true);
+      } catch (e) {
+        errors.push(`${wt.branch}: ${e}`);
+      }
+    }
+
+    if (errors.length > 0) {
+      throw new Error(errors.join("\n"));
+    }
   },
 
   refreshWorktrees: async (projectId: string) => {

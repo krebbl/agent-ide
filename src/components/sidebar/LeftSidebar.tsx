@@ -1,14 +1,15 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge } from "lucide-react";
+import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge, BrushCleaning } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { usePrStore } from "../../stores/prStore";
 import AddProjectDialog from "../dialogs/AddProjectDialog";
 import AddWorktreeDialog from "../dialogs/AddWorktreeDialog";
-import { Project, PrInfo } from "../../types";
+import { Project, PrInfo, Worktree } from "../../types";
+import Dialog from "../ui/Dialog";
 import { useSortable } from "@dnd-kit/sortable";
 import {
   DndContext,
@@ -389,6 +390,77 @@ function WorktreeItem({
   );
 }
 
+function CleanupWorktreesDialog({
+  projectName,
+  target,
+  branches,
+  error,
+  loading,
+  onConfirm,
+  onCancel,
+}: {
+  projectName: string;
+  target: string;
+  branches: string[];
+  error: string | null;
+  loading: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Dialog
+      title="Cleanup merged worktrees"
+      icon={<BrushCleaning size={16} className="text-[var(--color-mauve)]" />}
+      danger
+      width="400px"
+      onClose={onCancel}
+      footer={
+        <>
+          <button
+            onClick={onCancel}
+            disabled={loading}
+            className="rounded-md px-4 py-2 text-sm text-[var(--color-overlay1)] hover:bg-[var(--color-surface0)] disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={loading || branches.length === 0}
+            className="rounded-md bg-[var(--color-red)] px-4 py-2 text-sm font-medium text-[var(--color-crust)] hover:bg-[var(--color-red)]/80 disabled:opacity-50"
+          >
+            {loading ? "Cleaning..." : "Cleanup"}
+          </button>
+        </>
+      }
+    >
+      {branches.length > 0 ? (
+        <>
+          <p className="mb-3 text-sm text-[var(--color-text)]">
+            Remove {branches.length} merged worktree{branches.length > 1 ? "s" : ""} from{" "}
+            <span className="font-medium">{projectName}</span> and close their terminal sessions?
+          </p>
+          <ul className="max-h-40 list-inside list-disc overflow-y-auto rounded-md bg-[var(--color-base)] p-2 text-xs text-[var(--color-subtext0)]">
+            {branches.map((branch) => (
+              <li key={branch}>{branch}</li>
+            ))}
+          </ul>
+          <p className="mt-3 text-xs text-[var(--color-overlay0)]">
+            Branches with <span className="font-medium">{target}</span>. The associated local branches will also be deleted.
+          </p>
+        </>
+      ) : (
+        <p className="text-sm text-[var(--color-text)]">
+          No worktrees with <span className="font-medium">{target}</span> to clean up for{" "}
+          <span className="font-medium">{projectName}</span>.
+        </p>
+      )}
+      {error && (
+        <p className="mt-3 whitespace-pre-line text-xs text-[var(--color-red)]">{error}</p>
+      )}
+    </Dialog>
+  );
+}
+
 function ProjectItem({
   project,
   isActive,
@@ -407,11 +479,16 @@ function ProjectItem({
   const { attributes, listeners, setNodeRef, isDragging } =
     useSortable({ id: project.id });
   const connectionStatus = useConnectionStatusStore((s) => s.statuses[project.id]?.status);
-  const { fetchWorktrees, setActiveWorktree, worktreeLoading, removeWorktree, refreshWorktrees, selectedWorktreeId, activeProjectId } = useProjectStore();
+  const { fetchWorktrees, setActiveWorktree, worktreeLoading, removeWorktree, refreshWorktrees, cleanupMergedWorktrees, selectedWorktreeId, activeProjectId } = useProjectStore();
   const { fetchPrsForWorktrees } = usePrStore();
   const prCache = usePrStore((s) => s.cache);
   const isWorktreeLoading = worktreeLoading[project.id] ?? false;
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showCleanupDialog, setShowCleanupDialog] = useState(false);
+  const [cleanupCandidates, setCleanupCandidates] = useState<Worktree[]>([]);
+  const [cleanupTarget, setCleanupTarget] = useState<string>("");
+  const [cleanupLoading, setCleanupLoading] = useState(false);
+  const [cleanupError, setCleanupError] = useState<string | null>(null);
 
   const statusColor =
     project.type !== "ssh"
@@ -467,6 +544,44 @@ function ProjectItem({
     });
   }, [project.worktrees, project.id, prCache]);
 
+  const handleCleanupOpen = async () => {
+    setCleanupError(null);
+    setCleanupCandidates([]);
+    setCleanupTarget("");
+    setCleanupLoading(true);
+    try {
+      const branchesToCheck = project.worktrees
+        .filter((w) => !w.isMain)
+        .map((w) => w.branch);
+      await fetchPrsForWorktrees(project.id, branchesToCheck, true);
+      const prCache = usePrStore.getState().cache;
+      const candidates = sortedWorktrees.filter(
+        (wt) => !wt.isMain && prCache[`${project.id}:${wt.branch}`]?.pr?.state === "merged",
+      );
+      setCleanupCandidates(candidates);
+      setCleanupTarget("merged PRs");
+    } catch (e) {
+      setCleanupError(String(e));
+    } finally {
+      setCleanupLoading(false);
+      setShowCleanupDialog(true);
+    }
+  };
+
+  const handleCleanup = async () => {
+    setCleanupError(null);
+    setCleanupLoading(true);
+    try {
+      await cleanupMergedWorktrees(project.id);
+      setShowCleanupDialog(false);
+      setCleanupCandidates([]);
+    } catch (e) {
+      setCleanupError(String(e));
+    } finally {
+      setCleanupLoading(false);
+    }
+  };
+
   const handleRemoveWorktree = async (worktreePath: string, force: boolean, deleteBranch: boolean) => {
     await removeWorktree(project.id, worktreePath, force, deleteBranch);
   };
@@ -511,6 +626,21 @@ function ProjectItem({
             title="Add worktree"
           >
             <Plus size={12} />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleCleanupOpen();
+            }}
+            disabled={isWorktreeLoading || sortedWorktrees.length <= 1}
+            className="text-[var(--color-overlay0)] hover:text-[var(--color-mauve)] disabled:opacity-50"
+            title="Cleanup merged worktrees"
+          >
+            {cleanupLoading ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <BrushCleaning size={12} />
+            )}
           </button>
           <button
             onClick={(e) => {
@@ -566,6 +696,17 @@ function ProjectItem({
         </div>
       )}
       {showAddDialog && <AddWorktreeDialog projectId={project.id} onClose={() => setShowAddDialog(false)} />}
+      {showCleanupDialog && (
+        <CleanupWorktreesDialog
+          projectName={project.name}
+          target={cleanupTarget}
+          branches={cleanupCandidates.map((wt) => wt.branch)}
+          error={cleanupError}
+          loading={cleanupLoading}
+          onConfirm={handleCleanup}
+          onCancel={() => setShowCleanupDialog(false)}
+        />
+      )}
     </>
   );
 }
