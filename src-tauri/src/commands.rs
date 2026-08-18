@@ -14,6 +14,7 @@ pub use crate::{
     cmd_fs_read_dir as fs_read_dir,
     cmd_fs_read_file as fs_read_file,
     cmd_fs_rm as fs_rm,
+    cmd_fs_search_files as fs_search_files,
     cmd_fs_stat as fs_stat,
     cmd_fs_write_file as fs_write_file,
     cmd_git_branches_available_for_worktrees_async as git_branches_available_for_worktrees_async,
@@ -102,6 +103,7 @@ pub async fn dispatch(
         "fs_rm" => cmd_state!(FsRmReq, fs_rm, [project_id: String, path: String, recursive: Option<bool>]),
         "fs_mv" => cmd_state!(FsMvReq, fs_mv, [project_id: String, from: String, to: String]),
         "fs_exists" => cmd_state!(FsExistsReq, fs_exists, [project_id: String, path: String]),
+        "fs_search_files" => cmd_state!(FsSearchFilesReq, fs_search_files, [project_id: String, root: String, query: String, limit: Option<usize>]),
         "check_agent_ready" => cmd_plain!(CheckAgentReadyReq, check_agent_ready, [id: String]),
         "check_agents_ready" => {
             let res = check_agents_ready().await?;
