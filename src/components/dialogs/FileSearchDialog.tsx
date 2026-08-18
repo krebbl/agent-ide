@@ -87,19 +87,50 @@ export default function FileSearchDialog({
 
   const highlightMatch = (text: string, q: string) => {
     if (!q.trim()) return text;
+    const terms = q.split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return text;
+
     const lower = text.toLowerCase();
-    const qLower = q.toLowerCase();
-    const idx = lower.indexOf(qLower);
-    if (idx === -1) return text;
-    return (
-      <>
-        {text.slice(0, idx)}
-        <strong className="text-[var(--color-blue)]">
-          {text.slice(idx, idx + qLower.length)}
+    const intervals: Array<[number, number]> = [];
+
+    for (const term of terms) {
+      const termLower = term.toLowerCase();
+      let start = 0;
+      while (true) {
+        const idx = lower.indexOf(termLower, start);
+        if (idx === -1) break;
+        intervals.push([idx, idx + termLower.length]);
+        start = idx + termLower.length;
+      }
+    }
+
+    if (intervals.length === 0) return text;
+
+    intervals.sort((a, b) => a[0] - b[0]);
+    const merged: Array<[number, number]> = [];
+    for (const [start, end] of intervals) {
+      const last = merged[merged.length - 1];
+      if (!last || last[1] < start) {
+        merged.push([start, end]);
+      } else {
+        last[1] = Math.max(last[1], end);
+      }
+    }
+
+    const parts: React.ReactNode[] = [];
+    let lastEnd = 0;
+    for (const [start, end] of merged) {
+      if (start > lastEnd) parts.push(text.slice(lastEnd, start));
+      parts.push(
+        <strong key={start} className="text-[var(--color-blue)]">
+          {text.slice(start, end)}
         </strong>
-        {text.slice(idx + qLower.length)}
-      </>
-    );
+      );
+      lastEnd = end;
+    }
+    if (lastEnd < text.length) parts.push(text.slice(lastEnd));
+
+    return <>{parts}</>;
   };
 
   return (
