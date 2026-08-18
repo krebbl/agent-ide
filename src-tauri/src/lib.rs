@@ -132,6 +132,7 @@ pub trait FileSystemProvider: Send + Sync {
     async fn rm(&self, path: &str, recursive: bool) -> Result<(), String>;
     async fn mv(&self, from: &str, to: &str) -> Result<(), String>;
     async fn exists(&self, path: &str) -> bool;
+    async fn search_files(&self, root: &str, query: &str, limit: usize) -> Result<Vec<String>, String>;
 }
 
 pub struct LocalFileSystem;
@@ -197,6 +198,52 @@ impl FileSystemProvider for LocalFileSystem {
 
     async fn exists(&self, path: &str) -> bool {
         Path::new(path).exists()
+    }
+
+    async fn search_files(&self, root: &str, query: &str, limit: usize) -> Result<Vec<String>, String> {
+        let root_owned = root.to_owned();
+        let query_lower = query.to_lowercase();
+
+        let results = tokio::task::spawn_blocking(move || {
+            let walker = ignore::WalkBuilder::new(&root_owned)
+                .git_global(true)
+                .git_exclude(true)
+                .git_ignore(true)
+                .build();
+
+            let mut matches = Vec::new();
+
+            for result in walker {
+                if matches.len() >= limit {
+                    break;
+                }
+
+                let entry = match result {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+
+                if entry.file_type().map_or(true, |ft| ft.is_dir()) {
+                    continue;
+                }
+
+                let path = entry.path();
+                let rel = path.strip_prefix(&root_owned).unwrap_or(path);
+                let rel_str = rel.to_string_lossy();
+
+                if rel_str.to_lowercase().contains(&query_lower)
+                    || path.file_name().map_or(false, |n| n.to_string_lossy().to_lowercase().contains(&query_lower))
+                {
+                    matches.push(path.to_string_lossy().to_string());
+                }
+            }
+
+            matches
+        })
+        .await
+        .map_err(|e| format!("File search failed: {}", e))?;
+
+        Ok(results)
     }
 }
 
@@ -453,6 +500,123 @@ impl FileSystemProvider for SftpFileSystem {
         };
         sftp.metadata(&resolved).await.is_ok()
     }
+
+    async fn search_files(&self, root: &str, query: &str, limit: usize) -> Result<Vec<String>, String> {
+        let resolved_root = self.resolve_path(root).await?;
+        let query_lower = query.to_lowercase();
+
+        // Try git ls-files via SSH exec first
+        let git_result = self.try_git_ls_files(&resolved_root, &query_lower, limit).await;
+        match git_result {
+            Ok(results) => return Ok(results),
+            Err(_) => {} // fall through to SFTP recursive walk
+        }
+
+        // Fallback: recursive SFTP directory walk
+        let sftp = self.get_sftp().await?;
+        self.search_files_sftp_recursive(sftp, &resolved_root, &query_lower, limit).await
+    }
+}
+
+impl SftpFileSystem {
+    async fn try_git_ls_files(&self, root: &str, query_lower: &str, limit: usize) -> Result<Vec<String>, String> {
+        let connections = self.state.ssh_connections.lock().await;
+        let conn = connections
+            .get(&self.project_id)
+            .ok_or("No SSH connection found for this project")?;
+
+        let root_escaped = shell_escape(root);
+        let cmd = format!("cd {} && git ls-files --cached --others --exclude-standard 2>/dev/null", root_escaped);
+
+        let mut channel = conn.session.lock().await
+            .channel_open_session()
+            .await
+            .map_err(|e| format!("Failed to open channel: {}", e))?;
+        channel
+            .exec(false, cmd.as_str())
+            .await
+            .map_err(|e| format!("Failed to execute command: {}", e))?;
+
+        let mut stdout = String::new();
+        let mut exit_status: Option<u32> = None;
+
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                russh::ChannelMsg::Data { data } => {
+                    stdout.push_str(&String::from_utf8_lossy(&data));
+                }
+                russh::ChannelMsg::ExitStatus { exit_status: status } => {
+                    exit_status = Some(status);
+                }
+                russh::ChannelMsg::Close => break,
+                _ => {}
+            }
+            if exit_status.is_some() {
+                break;
+            }
+        }
+
+        match exit_status {
+            Some(0) => {
+                let results: Vec<String> = stdout
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty() && l.to_lowercase().contains(query_lower))
+                    .map(|l| format!("{}/{}", root, l))
+                    .take(limit)
+                    .collect();
+                Ok(results)
+            }
+            _ => Err("git ls-files failed".to_string()),
+        }
+    }
+
+    async fn search_files_sftp_recursive(
+        &self,
+        sftp: Arc<SftpSession>,
+        dir: &str,
+        query_lower: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, String> {
+        use std::collections::VecDeque;
+
+        let mut results = Vec::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(dir.to_string());
+
+        while let Some(current_dir) = queue.pop_front() {
+            let entries = match sftp.read_dir(&current_dir).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            for entry in entries {
+                let name = entry.file_name().clone();
+                if name == "." || name == ".." || name.starts_with('.') {
+                    continue;
+                }
+
+                let full_path = if current_dir.ends_with('/') {
+                    format!("{}{}", current_dir, name)
+                } else {
+                    format!("{}/{}", current_dir, name)
+                };
+
+                if entry.metadata().is_dir() {
+                    queue.push_back(full_path);
+                } else {
+                    if full_path.to_lowercase().contains(query_lower) {
+                        results.push(full_path);
+                        if results.len() >= limit {
+                            return Ok(results);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
 }
 
 async fn sftp_remove_recursive(sftp: Arc<SftpSession>, path: &str) -> Result<(), String> {
@@ -644,6 +808,28 @@ async fn fs_exists(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<bool, String> {
     crate::commands::fs_exists(state.inner().as_ref(), project_id, path).await
+}
+
+pub async fn cmd_fs_search_files(
+    state: &AppState,
+    project_id: String,
+    root: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<String>, String> {
+    let provider = get_fs_provider(&project_id, state).await?;
+    provider.search_files(&root, &query, limit.unwrap_or(100)).await
+}
+
+#[tauri::command]
+async fn fs_search_files(
+    project_id: String,
+    root: String,
+    query: String,
+    limit: Option<usize>,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<String>, String> {
+    crate::commands::fs_search_files(state.inner().as_ref(), project_id, root, query, limit).await
 }
 
 pub async fn cmd_check_agent_ready(id: String) -> Result<agents::AgentStatus, String> {
@@ -951,6 +1137,11 @@ fn run_git_command(worktree_path: &str, args: &[&str]) -> Result<String, String>
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Shell-escape a string: wrap in single quotes, escape any embedded single quotes
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\"'\"'"))
 }
 
 fn compute_ahead_behind(repo: &Repository, branch_name: &str) -> (i32, i32) {
@@ -3025,6 +3216,7 @@ pub fn run() {
             fs_rm,
             fs_mv,
             fs_exists,
+            fs_search_files,
             check_agent_ready,
             check_agents_ready,
             pr_info::pr_for_branch,
