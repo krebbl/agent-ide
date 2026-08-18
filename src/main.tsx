@@ -5,9 +5,11 @@ import "./index.css";
 import { initConnectionStatusListener } from "./stores/connectionStatusStore";
 import { initTerminalEventListeners } from "./services/terminalEvents";
 import { initNotificationClickListener } from "./services/notifications";
+import { initFaviconBadge } from "./services/faviconBadge";
 import { useTerminalStore } from "./stores/terminalStore";
 initConnectionStatusListener();
 initNotificationClickListener();
+initFaviconBadge();
 initTerminalEventListeners()
   .then(() => useTerminalStore.getState().restoreSessions())
   .catch(() => {});

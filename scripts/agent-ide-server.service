@@ -1,0 +1,13 @@
+[Unit]
+Description=Agent IDE Server
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/agent-ide-server
+WorkingDirectory=/opt/agent-ide
+ExecStart=/opt/agent-ide/agent-ide-server
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

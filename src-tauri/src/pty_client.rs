@@ -1,12 +1,12 @@
 use serde_json;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use crate::event_bus::EventBus;
 use crate::pty::{
     PtyBusyEvent, PtyExitEvent, PtyIdleEvent, PtyOutputEvent, PtyTitleEvent,
 };
@@ -15,12 +15,13 @@ use crate::pty_protocol::{DaemonEvent, DaemonRequest, SessionMeta};
 pub struct PtyClient {
     request_tx: mpsc::UnboundedSender<DaemonRequest>,
     list_waiter: Arc<Mutex<Option<tokio::sync::oneshot::Sender<Vec<SessionMeta>>>>>,
+    _daemon: Option<std::process::Child>,
     _read_task: tokio::task::JoinHandle<()>,
 }
 
 impl PtyClient {
-    pub async fn new(socket_path: PathBuf, app_handle: AppHandle) -> Result<Self, String> {
-        ensure_daemon_running(&socket_path).await?;
+    pub async fn new(socket_path: PathBuf, event_bus: EventBus, daemonize: bool) -> Result<Self, String> {
+        let daemon = ensure_daemon_running(&socket_path, daemonize).await?;
         let stream = connect_with_retry(&socket_path).await?;
         let (read_half, write_half) = stream.into_split();
         let (request_tx, mut request_rx) = mpsc::unbounded_channel::<DaemonRequest>();
@@ -38,7 +39,7 @@ impl PtyClient {
 
         let list_waiter = Arc::new(Mutex::new(None::<tokio::sync::oneshot::Sender<Vec<SessionMeta>>>));
         let list_waiter_read = Arc::clone(&list_waiter);
-        let app_handle_for_read = app_handle.clone();
+        let event_bus_for_read = event_bus.clone();
         let read_task = tokio::spawn(async move {
             let mut reader = BufReader::new(read_half);
             let mut line = String::new();
@@ -53,7 +54,7 @@ impl PtyClient {
                                     let _ = tx.send(sessions.clone());
                                 }
                             }
-                            Self::emit_event(&app_handle_for_read, ev);
+                            Self::emit_event(&event_bus_for_read, ev);
                         }
                     }
                     Err(e) => {
@@ -69,14 +70,15 @@ impl PtyClient {
         Ok(Self {
             request_tx,
             list_waiter,
+            _daemon: daemon,
             _read_task: read_task,
         })
     }
 
-    fn emit_event(app_handle: &AppHandle, ev: DaemonEvent) {
+    fn emit_event(event_bus: &EventBus, ev: DaemonEvent) {
         match ev {
             DaemonEvent::Output { session_id, data } => {
-                let _ = app_handle.emit(
+                event_bus.emit(
                     "pty_output",
                     PtyOutputEvent {
                         session_id,
@@ -85,23 +87,23 @@ impl PtyClient {
                 );
             }
             DaemonEvent::Idle { session_id, title } => {
-                let _ = app_handle.emit("pty_idle", PtyIdleEvent { session_id, title });
+                event_bus.emit("pty_idle", PtyIdleEvent { session_id, title });
             }
             DaemonEvent::Busy { session_id, title } => {
-                let _ = app_handle.emit("pty_busy", PtyBusyEvent { session_id, title });
+                event_bus.emit("pty_busy", PtyBusyEvent { session_id, title });
             }
             DaemonEvent::Title { session_id, title } => {
-                let _ = app_handle.emit("pty_title", PtyTitleEvent { session_id, title });
+                event_bus.emit("pty_title", PtyTitleEvent { session_id, title });
             }
             DaemonEvent::Exit { session_id, exit_code } => {
-                let _ = app_handle.emit("pty_exit", PtyExitEvent { session_id, exit_code });
+                event_bus.emit("pty_exit", PtyExitEvent { session_id, exit_code });
             }
             DaemonEvent::StateSnapshot {
                 session_id,
                 is_busy,
                 title,
             } => {
-                let _ = app_handle.emit(
+                event_bus.emit(
                     "pty_state_snapshot",
                     PtyStateSnapshotEvent {
                         session_id,
@@ -111,11 +113,11 @@ impl PtyClient {
                 );
             }
             DaemonEvent::SessionList { sessions } => {
-                let _ = app_handle.emit("pty_session_list", PtySessionListEvent { sessions });
+                event_bus.emit("pty_session_list", PtySessionListEvent { sessions });
             }
             DaemonEvent::Error { session_id, message } => {
                 warn!("pty daemon error: {}", message);
-                let _ = app_handle.emit(
+                event_bus.emit(
                     "pty_error",
                     PtyErrorEvent {
                         session_id,
@@ -237,11 +239,11 @@ impl PtyClient {
 
 const DAEMON_TOKEN: &str = env!("AGENT_IDE_DAEMON_TOKEN");
 
-async fn ensure_daemon_running(socket_path: &PathBuf) -> Result<(), String> {
+async fn ensure_daemon_running(socket_path: &PathBuf, daemonize: bool) -> Result<Option<std::process::Child>, String> {
     if socket_path.exists() {
         if let Ok(is_current) = check_existing_daemon(socket_path).await {
             if is_current {
-                return Ok(());
+                return Ok(None);
             }
         }
         kill_existing_daemon(socket_path).await;
@@ -249,17 +251,18 @@ async fn ensure_daemon_running(socket_path: &PathBuf) -> Result<(), String> {
     }
     let current_exe = std::env::current_exe()
         .map_err(|e| format!("Failed to get current executable: {}", e))?;
-    let _ = tokio::process::Command::new(current_exe)
-        .arg("--pty-daemon")
-        .arg("--daemonize")
-        .spawn()
-        .map_err(|e| format!("Failed to spawn pty daemon: {}", e))?;
+    let mut cmd = std::process::Command::new(current_exe);
+    cmd.arg("--pty-daemon");
+    if daemonize {
+        cmd.arg("--daemonize");
+    }
+    let child = cmd.spawn().map_err(|e| format!("Failed to spawn pty daemon: {}", e))?;
 
     for _ in 0..50 {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         if socket_path.exists() {
             if UnixStream::connect(socket_path).await.is_ok() {
-                return Ok(());
+                return Ok(Some(child));
             }
         }
     }
@@ -369,14 +372,7 @@ pub struct PtySessionListEvent {
 }
 
 pub fn daemon_config_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("AGENT_IDE_CONFIG_DIR") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir);
-        }
-    }
-    dirs::config_dir()
-        .expect("config directory is available")
-        .join("agent-ide")
+    crate::config::app_config_dir().expect("config directory is available")
 }
 
 pub fn daemon_socket_path() -> PathBuf {

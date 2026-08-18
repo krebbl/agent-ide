@@ -8,12 +8,12 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::Emitter;
 use tokio::process::Child;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
+use crate::event_bus::EventBus;
 use crate::remote_ssh::SessionHandle;
-use crate::{AppState, Connection};
+use crate::AppState;
 
 const REQUEST_TIMEOUT_SECS: u64 = 60;
 const RESTART_DELAYS_SECS: [u64; 3] = [2, 5, 15];
@@ -208,7 +208,7 @@ impl LspManager {
 pub struct ReaderContext {
     transport: Arc<LspTransport>,
     stopping: Arc<AtomicBool>,
-    app_handle: Option<tauri::AppHandle>,
+    event_bus: Option<EventBus>,
     project_id: String,
     language_id: String,
     root_path: String,
@@ -217,14 +217,14 @@ pub struct ReaderContext {
 }
 
 fn emit_status(
-    app_handle: Option<&tauri::AppHandle>,
+    event_bus: Option<&EventBus>,
     project_id: &str,
     language_id: &str,
     status: &str,
     error: Option<String>,
 ) {
-    if let Some(handle) = app_handle {
-        let _ = handle.emit(
+    if let Some(event_bus) = event_bus {
+        event_bus.emit(
             "lsp://status",
             LspStatusEvent {
                 project_id: project_id.to_string(),
@@ -237,13 +237,13 @@ fn emit_status(
 }
 
 fn emit_message(
-    app_handle: &Option<tauri::AppHandle>,
+    event_bus: Option<&EventBus>,
     project_id: &str,
     language_id: &str,
     message: Value,
 ) {
-    if let Some(handle) = app_handle {
-        let _ = handle.emit(
+    if let Some(event_bus) = event_bus {
+        event_bus.emit(
             "lsp://message",
             LspMessageEvent {
                 project_id: project_id.to_string(),
@@ -281,9 +281,9 @@ pub(super) async fn dispatch_message(ctx: &ReaderContext, msg: Value) {
                     .await;
             });
         }
-        emit_message(&ctx.app_handle, &ctx.project_id, &ctx.language_id, msg);
+        emit_message(ctx.event_bus.as_ref(), &ctx.project_id, &ctx.language_id, msg);
     } else {
-        emit_message(&ctx.app_handle, &ctx.project_id, &ctx.language_id, msg);
+        emit_message(ctx.event_bus.as_ref(), &ctx.project_id, &ctx.language_id, msg);
     }
 }
 
@@ -291,7 +291,7 @@ pub(super) async fn handle_reader_exit(ctx: ReaderContext) {
     ctx.transport.fail_all_pending("Language server exited").await;
     if ctx.stopping.load(Ordering::SeqCst) {
         emit_status(
-            ctx.app_handle.as_ref(),
+            ctx.event_bus.as_ref(),
             &ctx.project_id,
             &ctx.language_id,
             "stopped",
@@ -300,7 +300,7 @@ pub(super) async fn handle_reader_exit(ctx: ReaderContext) {
         return;
     }
     emit_status(
-        ctx.app_handle.as_ref(),
+        ctx.event_bus.as_ref(),
         &ctx.project_id,
         &ctx.language_id,
         "crashed",
@@ -324,7 +324,7 @@ async fn auto_restart_inner(ctx: ReaderContext) {
             return;
         }
         if start_server(
-            ctx.app_handle.clone(),
+            ctx.event_bus.clone(),
             ctx.manager.clone(),
             &ctx.project_id,
             &ctx.language_id,
@@ -383,7 +383,7 @@ fn initialize_params(root_uri: &str) -> Value {
 }
 
 pub async fn start_server(
-    app_handle: Option<tauri::AppHandle>,
+    event_bus: Option<EventBus>,
     manager: Arc<LspManager>,
     project_id: &str,
     language_id: &str,
@@ -397,10 +397,10 @@ pub async fn start_server(
         manager.remove(project_id, language_id).await;
     }
 
-    emit_status(app_handle.as_ref(), project_id, language_id, "starting", None);
+    emit_status(event_bus.as_ref(), project_id, language_id, "starting", None);
 
     let result = spawn_and_initialize(
-        app_handle.clone(),
+        event_bus.clone(),
         manager.clone(),
         project_id,
         language_id,
@@ -413,12 +413,12 @@ pub async fn start_server(
         Ok(client) => {
             let info = client.info();
             manager.insert(client).await;
-            emit_status(app_handle.as_ref(), project_id, language_id, "ready", None);
+            emit_status(event_bus.as_ref(), project_id, language_id, "ready", None);
             Ok(info)
         }
         Err(e) => {
             emit_status(
-                app_handle.as_ref(),
+                event_bus.as_ref(),
                 project_id,
                 language_id,
                 "crashed",
@@ -430,7 +430,7 @@ pub async fn start_server(
 }
 
 async fn spawn_and_initialize(
-    app_handle: Option<tauri::AppHandle>,
+    event_bus: Option<EventBus>,
     manager: Arc<LspManager>,
     project_id: &str,
     language_id: &str,
@@ -451,7 +451,7 @@ async fn spawn_and_initialize(
     let ctx = ReaderContext {
         transport: Arc::clone(&transport),
         stopping: Arc::clone(&stopping),
-        app_handle,
+        event_bus,
         project_id: project_id.to_string(),
         language_id: language_id.to_string(),
         root_path: root_path.to_string(),
@@ -549,22 +549,20 @@ async fn spawn_and_initialize(
     }))
 }
 
-#[tauri::command]
-pub async fn lsp_start(
+pub async fn cmd_lsp_start(
+    state: &AppState,
     project_id: String,
     language_id: String,
     root_path: String,
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<LspServerInfo, String> {
-    let projects = crate::load_projects(app.clone())?;
+    let projects = crate::commands::load_projects(state).await?;
     let project = projects
         .iter()
         .find(|p| p.id == project_id)
         .ok_or("Project not found")?;
     let target = match &project.connection {
-        Connection::Local { .. } => SpawnTarget::Local,
-        Connection::Ssh { .. } => {
+        crate::Connection::Local { .. } => SpawnTarget::Local,
+        crate::Connection::Ssh { .. } => {
             let session = {
                 let connections = state.ssh_connections.lock().await;
                 connections
@@ -578,7 +576,7 @@ pub async fn lsp_start(
         }
     };
     start_server(
-        Some(app),
+        Some(state.event_bus.clone()),
         state.lsp_manager.clone(),
         &project_id,
         &language_id,
@@ -589,12 +587,21 @@ pub async fn lsp_start(
 }
 
 #[tauri::command]
-pub async fn lsp_request(
+pub async fn lsp_start(
+    project_id: String,
+    language_id: String,
+    root_path: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<LspServerInfo, String> {
+    crate::commands::lsp_start(state.inner().as_ref(), project_id, language_id, root_path).await
+}
+
+pub async fn cmd_lsp_request(
+    state: &AppState,
     project_id: String,
     language_id: String,
     method: String,
     params: Value,
-    state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Value, String> {
     let client = state
         .lsp_manager
@@ -605,12 +612,22 @@ pub async fn lsp_request(
 }
 
 #[tauri::command]
-pub async fn lsp_notify(
+pub async fn lsp_request(
     project_id: String,
     language_id: String,
     method: String,
     params: Value,
     state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Value, String> {
+    crate::commands::lsp_request(state.inner().as_ref(), project_id, language_id, method, params).await
+}
+
+pub async fn cmd_lsp_notify(
+    state: &AppState,
+    project_id: String,
+    language_id: String,
+    method: String,
+    params: Value,
 ) -> Result<(), String> {
     let client = state
         .lsp_manager
@@ -621,10 +638,20 @@ pub async fn lsp_notify(
 }
 
 #[tauri::command]
-pub async fn lsp_stop(
+pub async fn lsp_notify(
     project_id: String,
     language_id: String,
+    method: String,
+    params: Value,
     state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    crate::commands::lsp_notify(state.inner().as_ref(), project_id, language_id, method, params).await
+}
+
+pub async fn cmd_lsp_stop(
+    state: &AppState,
+    project_id: String,
+    language_id: String,
 ) -> Result<(), String> {
     if let Some(client) = state.lsp_manager.remove(&project_id, &language_id).await {
         client.shutdown().await;
@@ -633,9 +660,15 @@ pub async fn lsp_stop(
 }
 
 #[tauri::command]
-pub async fn lsp_list(
+pub async fn lsp_stop(
+    project_id: String,
+    language_id: String,
     state: tauri::State<'_, Arc<AppState>>,
-) -> Result<Vec<LspServerInfo>, String> {
+) -> Result<(), String> {
+    crate::commands::lsp_stop(state.inner().as_ref(), project_id, language_id).await
+}
+
+pub async fn cmd_lsp_list(state: &AppState) -> Result<Vec<LspServerInfo>, String> {
     Ok(state
         .lsp_manager
         .list()
@@ -646,23 +679,28 @@ pub async fn lsp_list(
 }
 
 #[tauri::command]
-pub async fn lsp_server_available(
+pub async fn lsp_list(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<LspServerInfo>, String> {
+    crate::commands::lsp_list(state.inner().as_ref()).await
+}
+
+pub async fn cmd_lsp_server_available(
+    state: &AppState,
     project_id: String,
     language_id: String,
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<bool, String> {
     let Some(spec) = registry::server_for_language(&language_id) else {
         return Ok(false);
     };
-    let projects = crate::load_projects(app)?;
+    let projects = crate::commands::load_projects(state).await?;
     let project = projects
         .iter()
         .find(|p| p.id == project_id)
         .ok_or("Project not found")?;
     match &project.connection {
-        Connection::Local { .. } => Ok(registry::resolve_on_path(spec.command).is_some()),
-        Connection::Ssh { .. } => {
+        crate::Connection::Local { .. } => Ok(registry::resolve_on_path(spec.command).is_some()),
+        crate::Connection::Ssh { .. } => {
             let session = {
                 let connections = state.ssh_connections.lock().await;
                 connections
@@ -675,6 +713,15 @@ pub async fn lsp_server_available(
             }
         }
     }
+}
+
+#[tauri::command]
+pub async fn lsp_server_available(
+    project_id: String,
+    language_id: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<bool, String> {
+    crate::commands::lsp_server_available(state.inner().as_ref(), project_id, language_id).await
 }
 
 #[cfg(test)]

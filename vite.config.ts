@@ -8,10 +8,20 @@ const host = process.env.TAURI_DEV_HOST;
 const port = parseInt(process.env.AGENT_IDE_PORT || "1420", 10);
 // @ts-expect-error process is a nodejs global
 const hmrPort = parseInt(process.env.AGENT_IDE_HMR_PORT || "1421", 10);
+// @ts-expect-error process is a nodejs global
+const isWeb = process.env.VITE_TAURI === "false";
+// @ts-expect-error process is a nodejs global
+const apiUrl = process.env.AGENT_IDE_API_URL || "http://localhost:3000";
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
+
+  define: {
+    "import.meta.env.VITE_TAURI": JSON.stringify(
+      process.env.VITE_TAURI ?? "true",
+    ),
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
@@ -27,6 +37,12 @@ export default defineConfig(async () => ({
           protocol: "ws",
           host,
           port: hmrPort,
+        }
+      : undefined,
+    proxy: isWeb
+      ? {
+          "/-/invoke": { target: apiUrl, changeOrigin: true },
+          "/-/events": { target: apiUrl, changeOrigin: true, ws: true },
         }
       : undefined,
     watch: {

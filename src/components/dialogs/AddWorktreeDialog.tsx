@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../services/ipc";
 import { Loader2, AlertCircle } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import SearchableSelect from "../ui/SearchableSelect";

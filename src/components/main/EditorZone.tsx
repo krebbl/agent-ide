@@ -51,14 +51,6 @@ export default function EditorZone() {
         e.preventDefault();
         void saveActive();
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === "w") {
-        if (useUiStore.getState().focusedZone !== "editor") return;
-        const { activePath, requestClose } = useEditorStore.getState();
-        if (activePath) {
-          e.preventDefault();
-          requestClose(activePath);
-        }
-      }
       if ((e.metaKey || e.ctrlKey) && e.key === "t") {
         if (useUiStore.getState().focusedZone !== "editor") return;
         if (useEditorStore.getState().activePath) {
@@ -82,10 +74,6 @@ export default function EditorZone() {
     });
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void saveActive();
-    });
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW, () => {
-      const { activePath, requestClose } = useEditorStore.getState();
-      if (activePath) requestClose(activePath);
     });
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyT, () => {
       if (useEditorStore.getState().activePath) setSymbolSearchOpen(true);

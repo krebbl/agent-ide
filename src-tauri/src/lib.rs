@@ -1,4 +1,7 @@
 mod agents;
+pub mod commands;
+pub mod config;
+pub mod event_bus;
 pub mod lsp;
 mod notification;
 mod pr_info;
@@ -8,6 +11,7 @@ pub mod pty_daemon;
 pub mod pty_engine;
 pub mod pty_protocol;
 pub mod remote_ssh;
+pub mod secrets;
 
 use git2::{BranchType, Repository};
 use russh::keys::agent::client::AgentClient;
@@ -20,18 +24,20 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use std::time::Duration;
-use tauri::Emitter;
 use tauri::Manager;
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 use open::that;
 
-#[tauri::command]
-fn util_open_url(url: String) -> Result<(), String> {
+pub async fn cmd_util_open_url(url: String) -> Result<(), String> {
     that(&url).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn util_open_url(url: String) -> Result<(), String> {
+    crate::commands::util_open_url(url).await
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,7 +207,7 @@ pub struct SftpFileSystem {
 
 impl SftpFileSystem {
     async fn ensure_connection(&self) -> Result<Arc<SftpSession>, String> {
-        ensure_ssh_connection(&self.project_id, &self.state).await?;
+        ensure_ssh_connection(&self.project_id, self.state.as_ref()).await?;
 
         let maybe_stale = {
             let connections = self.state.ssh_connections.lock().await;
@@ -223,7 +229,7 @@ impl SftpFileSystem {
         };
 
         if maybe_stale {
-            check_and_reconnect(&self.project_id, &self.state).await;
+            check_and_reconnect(&self.project_id, self.state.as_ref()).await;
             let connections = self.state.ssh_connections.lock().await;
             if let Some(conn) = connections.get(&self.project_id) {
                 if conn.status == ConnectionStatus::Connected {
@@ -477,20 +483,26 @@ async fn sftp_remove_recursive(sftp: Arc<SftpSession>, path: &str) -> Result<(),
         .map_err(|e| format!("Failed to remove directory {}: {}", path, e))
 }
 
-async fn get_fs_provider(project_id: &str, state: &Arc<AppState>) -> Result<Box<dyn FileSystemProvider>, String> {
-    let projects = {
-        let app_handle = state.app_handle.lock().unwrap().clone().ok_or("App handle not available")?;
-        load_projects(app_handle)?
-    };
+async fn get_fs_provider(project_id: &str, state: &AppState) -> Result<Box<dyn FileSystemProvider>, String> {
+    let projects = crate::commands::load_projects(state).await?;
     let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
 
     match &project.connection {
         Connection::Local { .. } => Ok(Box::new(LocalFileSystem)),
         Connection::Ssh { .. } => Ok(Box::new(SftpFileSystem {
             project_id: project_id.to_string(),
-            state: state.clone(),
+            state: Arc::new(state.clone()),
         })),
     }
+}
+
+pub async fn cmd_fs_read_dir(
+    state: &AppState,
+    project_id: String,
+    path: String,
+) -> Result<Vec<DirEntry>, String> {
+    let provider = get_fs_provider(&project_id, state).await?;
+    provider.read_dir(&path).await
 }
 
 #[tauri::command]
@@ -499,8 +511,16 @@ async fn fs_read_dir(
     path: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Vec<DirEntry>, String> {
-    let provider = get_fs_provider(&project_id, &state.inner()).await?;
-    provider.read_dir(&path).await
+    crate::commands::fs_read_dir(state.inner().as_ref(), project_id, path).await
+}
+
+pub async fn cmd_fs_read_file(
+    state: &AppState,
+    project_id: String,
+    path: String,
+) -> Result<String, String> {
+    let provider = get_fs_provider(&project_id, state).await?;
+    provider.read_file(&path).await
 }
 
 #[tauri::command]
@@ -509,8 +529,17 @@ async fn fs_read_file(
     path: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
-    let provider = get_fs_provider(&project_id, &state.inner()).await?;
-    provider.read_file(&path).await
+    crate::commands::fs_read_file(state.inner().as_ref(), project_id, path).await
+}
+
+pub async fn cmd_fs_write_file(
+    state: &AppState,
+    project_id: String,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    let provider = get_fs_provider(&project_id, state).await?;
+    provider.write_file(&path, &content).await
 }
 
 #[tauri::command]
@@ -520,8 +549,16 @@ async fn fs_write_file(
     content: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    let provider = get_fs_provider(&project_id, &state.inner()).await?;
-    provider.write_file(&path, &content).await
+    crate::commands::fs_write_file(state.inner().as_ref(), project_id, path, content).await
+}
+
+pub async fn cmd_fs_stat(
+    state: &AppState,
+    project_id: String,
+    path: String,
+) -> Result<FileStat, String> {
+    let provider = get_fs_provider(&project_id, state).await?;
+    provider.stat(&path).await
 }
 
 #[tauri::command]
@@ -530,8 +567,16 @@ async fn fs_stat(
     path: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<FileStat, String> {
-    let provider = get_fs_provider(&project_id, &state.inner()).await?;
-    provider.stat(&path).await
+    crate::commands::fs_stat(state.inner().as_ref(), project_id, path).await
+}
+
+pub async fn cmd_fs_mkdir(
+    state: &AppState,
+    project_id: String,
+    path: String,
+) -> Result<(), String> {
+    let provider = get_fs_provider(&project_id, state).await?;
+    provider.mkdir(&path).await
 }
 
 #[tauri::command]
@@ -540,8 +585,17 @@ async fn fs_mkdir(
     path: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    let provider = get_fs_provider(&project_id, &state.inner()).await?;
-    provider.mkdir(&path).await
+    crate::commands::fs_mkdir(state.inner().as_ref(), project_id, path).await
+}
+
+pub async fn cmd_fs_rm(
+    state: &AppState,
+    project_id: String,
+    path: String,
+    recursive: Option<bool>,
+) -> Result<(), String> {
+    let provider = get_fs_provider(&project_id, state).await?;
+    provider.rm(&path, recursive.unwrap_or(false)).await
 }
 
 #[tauri::command]
@@ -551,8 +605,17 @@ async fn fs_rm(
     recursive: Option<bool>,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    let provider = get_fs_provider(&project_id, &state.inner()).await?;
-    provider.rm(&path, recursive.unwrap_or(false)).await
+    crate::commands::fs_rm(state.inner().as_ref(), project_id, path, recursive).await
+}
+
+pub async fn cmd_fs_mv(
+    state: &AppState,
+    project_id: String,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    let provider = get_fs_provider(&project_id, state).await?;
+    provider.mv(&from, &to).await
 }
 
 #[tauri::command]
@@ -562,8 +625,16 @@ async fn fs_mv(
     to: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    let provider = get_fs_provider(&project_id, &state.inner()).await?;
-    provider.mv(&from, &to).await
+    crate::commands::fs_mv(state.inner().as_ref(), project_id, from, to).await
+}
+
+pub async fn cmd_fs_exists(
+    state: &AppState,
+    project_id: String,
+    path: String,
+) -> Result<bool, String> {
+    let provider = get_fs_provider(&project_id, state).await?;
+    Ok(provider.exists(&path).await)
 }
 
 #[tauri::command]
@@ -572,19 +643,26 @@ async fn fs_exists(
     path: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<bool, String> {
-    let provider = get_fs_provider(&project_id, &state.inner()).await?;
-    Ok(provider.exists(&path).await)
+    crate::commands::fs_exists(state.inner().as_ref(), project_id, path).await
 }
 
-#[tauri::command]
-fn check_agent_ready(id: String) -> Result<agents::AgentStatus, String> {
+pub async fn cmd_check_agent_ready(id: String) -> Result<agents::AgentStatus, String> {
     agents::check_agent_ready(&id)
         .ok_or_else(|| format!("Unknown agent: {}", id))
 }
 
 #[tauri::command]
-fn check_agents_ready() -> Result<Vec<agents::AgentStatus>, String> {
+async fn check_agent_ready(id: String) -> Result<agents::AgentStatus, String> {
+    crate::commands::check_agent_ready(id).await
+}
+
+pub async fn cmd_check_agents_ready() -> Result<Vec<agents::AgentStatus>, String> {
     Ok(agents::check_all_agents_ready())
+}
+
+#[tauri::command]
+async fn check_agents_ready() -> Result<Vec<agents::AgentStatus>, String> {
+    crate::commands::check_agents_ready().await
 }
 
 use remote_ssh::ClientHandler;
@@ -622,116 +700,115 @@ pub struct SshConnection {
     pub reconnect_attempts: u32,
 }
 
+#[derive(Clone)]
 pub struct AppState {
-    pub ssh_connections: Mutex<HashMap<String, SshConnection>>,
+    pub ssh_connections: Arc<tokio::sync::Mutex<HashMap<String, SshConnection>>>,
     pub lsp_manager: Arc<lsp::LspManager>,
-    pub app_handle: StdMutex<Option<tauri::AppHandle>>,
-    pub active_pty_id: StdMutex<Option<String>>,
-    pub pty_titles: StdMutex<HashMap<String, String>>,
+    pub event_bus: crate::event_bus::EventBus,
+    pub active_pty_id: Arc<parking_lot::Mutex<Option<String>>>,
+    pub pty_titles: Arc<parking_lot::Mutex<HashMap<String, String>>>,
+    pub pty_client: Arc<std::sync::OnceLock<Arc<crate::pty_client::PtyClient>>>,
+}
+
+impl AppState {
+    pub fn new(event_bus: crate::event_bus::EventBus, lsp_manager: Arc<lsp::LspManager>) -> Arc<Self> {
+        Arc::new(Self {
+            ssh_connections: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            lsp_manager,
+            event_bus,
+            active_pty_id: Arc::new(parking_lot::Mutex::new(None)),
+            pty_titles: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            pty_client: Arc::new(std::sync::OnceLock::new()),
+        })
+    }
 }
 
 impl AppState {
     pub fn set_active_pty(&self, pty_id: Option<String>) {
-        let mut active = self.active_pty_id.lock().unwrap();
+        let mut active = self.active_pty_id.lock();
         *active = pty_id.clone();
         tracing::debug!(active_pty_id = ?pty_id, "set active pty");
     }
 
     pub fn set_pty_title(&self, pty_id: &str, title: &str) {
-        self.pty_titles
-            .lock()
-            .unwrap()
-            .insert(pty_id.to_string(), title.to_string());
+        self.pty_titles.lock().insert(pty_id.to_string(), title.to_string());
     }
 
     pub fn clear_pty_state(&self, pty_id: &str) {
-        self.pty_titles.lock().unwrap().remove(pty_id);
+        self.pty_titles.lock().remove(pty_id);
     }
 
     pub fn emit_idle(&self, pty_id: &str) {
         let title = self
             .pty_titles
             .lock()
-            .unwrap()
             .get(pty_id)
             .cloned()
             .unwrap_or_else(|| "Terminal".to_string());
-        if let Some(handle) = self.app_handle.lock().unwrap().as_ref() {
-            let _ = handle.emit(
-                "pty_idle",
-                pty::PtyIdleEvent {
-                    session_id: pty_id.to_string(),
-                    title,
-                },
-            );
-        }
+        self.event_bus.emit(
+            "pty_idle",
+            pty::PtyIdleEvent {
+                session_id: pty_id.to_string(),
+                title,
+            },
+        );
     }
 
     pub fn emit_busy(&self, pty_id: &str) {
         let title = self
             .pty_titles
             .lock()
-            .unwrap()
             .get(pty_id)
             .cloned()
             .unwrap_or_else(|| "Terminal".to_string());
-        if let Some(handle) = self.app_handle.lock().unwrap().as_ref() {
-            let _ = handle.emit(
-                "pty_busy",
-                pty::PtyBusyEvent {
-                    session_id: pty_id.to_string(),
-                    title,
-                },
-            );
-        }
+        self.event_bus.emit(
+            "pty_busy",
+            pty::PtyBusyEvent {
+                session_id: pty_id.to_string(),
+                title,
+            },
+        );
     }
 
     pub fn emit_status(&self, project_id: &str, status: ConnectionStatus, error: Option<String>) {
-        if let Some(handle) = self.app_handle.lock().unwrap().as_ref() {
-            let _ = handle.emit("ssh_connection_status", ConnectionStatusEvent {
-                project_id: project_id.to_string(),
-                status: match status {
-                    ConnectionStatus::Connected => "connected".to_string(),
-                    ConnectionStatus::Disconnected => "disconnected".to_string(),
-                    ConnectionStatus::Reconnecting => "reconnecting".to_string(),
-                    ConnectionStatus::Error => "error".to_string(),
-                },
-                error,
-            });
-        }
+        self.event_bus.emit("ssh_connection_status", ConnectionStatusEvent {
+            project_id: project_id.to_string(),
+            status: match status {
+                ConnectionStatus::Connected => "connected".to_string(),
+                ConnectionStatus::Disconnected => "disconnected".to_string(),
+                ConnectionStatus::Reconnecting => "reconnecting".to_string(),
+                ConnectionStatus::Error => "error".to_string(),
+            },
+            error,
+        });
     }
 }
 
-fn app_config_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
-    app_handle
-        .path()
-        .app_config_dir()
-        .map_err(|e| format!("Failed to get config path: {}", e))
-}
-
-#[tauri::command]
-fn save_projects(projects: Vec<Project>, app_handle: tauri::AppHandle) -> Result<(), String> {
-    let config_path = app_config_path(&app_handle)?;
-
+pub async fn cmd_save_projects(_state: &AppState, projects: Vec<Project>) -> Result<(), String> {
+    let config_path = crate::config::app_config_dir()?;
     std::fs::create_dir_all(&config_path)
         .map_err(|e| format!("Failed to create config directory: {}", e))?;
-
     let file_path = config_path.join("projects.json");
     let json = serde_json::to_string_pretty(&projects)
         .map_err(|e| format!("Failed to serialize projects: {}", e))?;
-
     std::fs::write(&file_path, json)
         .map_err(|e| format!("Failed to write projects file: {}", e))?;
-
     Ok(())
 }
 
 #[tauri::command]
-fn save_expanded_projects(
-    ids: Vec<String>,
-    app_handle: tauri::AppHandle,
+async fn save_projects(
+    projects: Vec<Project>,
+    state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    let config_path = app_config_path(&app_handle)?;
+    crate::commands::save_projects(state.inner().as_ref(), projects).await
+}
+
+pub async fn cmd_save_expanded_projects(
+    _state: &AppState,
+    ids: Vec<String>,
+) -> Result<(), String> {
+    let config_path = crate::config::app_config_dir()?;
     std::fs::create_dir_all(&config_path)
         .map_err(|e| format!("Failed to create config directory: {}", e))?;
     let file_path = config_path.join("expanded_projects.json");
@@ -743,8 +820,15 @@ fn save_expanded_projects(
 }
 
 #[tauri::command]
-fn load_expanded_projects(app_handle: tauri::AppHandle) -> Result<Vec<String>, String> {
-    let config_path = app_config_path(&app_handle)?;
+async fn save_expanded_projects(
+    ids: Vec<String>,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    crate::commands::save_expanded_projects(state.inner().as_ref(), ids).await
+}
+
+pub async fn cmd_load_expanded_projects(_state: &AppState) -> Result<Vec<String>, String> {
+    let config_path = crate::config::app_config_dir()?;
     let file_path = config_path.join("expanded_projects.json");
     if !file_path.exists() {
         return Ok(Vec::new());
@@ -756,25 +840,30 @@ fn load_expanded_projects(app_handle: tauri::AppHandle) -> Result<Vec<String>, S
 }
 
 #[tauri::command]
-fn load_projects(app_handle: tauri::AppHandle) -> Result<Vec<Project>, String> {
-    let config_path = app_handle
-        .path()
-        .app_config_dir()
-        .map_err(|e| format!("Failed to get config path: {}", e))?;
+async fn load_expanded_projects(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<String>, String> {
+    crate::commands::load_expanded_projects(state.inner().as_ref()).await
+}
 
+pub async fn cmd_load_projects(_state: &AppState) -> Result<Vec<Project>, String> {
+    let config_path = crate::config::app_config_dir()?;
     let file_path = config_path.join("projects.json");
-
     if !file_path.exists() {
         return Ok(Vec::new());
     }
-
     let content = std::fs::read_to_string(&file_path)
         .map_err(|e| format!("Failed to read projects file: {}", e))?;
-
     let projects: Vec<Project> = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse projects file: {}", e))?;
-
     Ok(projects)
+}
+
+#[tauri::command]
+async fn load_projects(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<Project>, String> {
+    crate::commands::load_projects(state.inner().as_ref()).await
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -784,12 +873,11 @@ pub struct WorktreeTabs {
     pub active_path: Option<String>,
 }
 
-#[tauri::command]
-fn save_editor_tabs(
+pub async fn cmd_save_editor_tabs(
+    _state: &AppState,
     tabs: HashMap<String, WorktreeTabs>,
-    app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    let config_path = app_config_path(&app_handle)?;
+    let config_path = crate::config::app_config_dir()?;
     std::fs::create_dir_all(&config_path)
         .map_err(|e| format!("Failed to create config directory: {}", e))?;
     let file_path = config_path.join("editor_tabs.json");
@@ -801,10 +889,17 @@ fn save_editor_tabs(
 }
 
 #[tauri::command]
-fn load_editor_tabs(
-    app_handle: tauri::AppHandle,
+async fn save_editor_tabs(
+    tabs: HashMap<String, WorktreeTabs>,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    crate::commands::save_editor_tabs(state.inner().as_ref(), tabs).await
+}
+
+pub async fn cmd_load_editor_tabs(
+    _state: &AppState,
 ) -> Result<HashMap<String, WorktreeTabs>, String> {
-    let config_path = app_config_path(&app_handle)?;
+    let config_path = crate::config::app_config_dir()?;
     let file_path = config_path.join("editor_tabs.json");
     if !file_path.exists() {
         return Ok(HashMap::new());
@@ -816,15 +911,30 @@ fn load_editor_tabs(
 }
 
 #[tauri::command]
-fn check_is_git_repo(path: String) -> Result<bool, String> {
+async fn load_editor_tabs(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<HashMap<String, WorktreeTabs>, String> {
+    crate::commands::load_editor_tabs(state.inner().as_ref()).await
+}
+
+pub async fn cmd_check_is_git_repo(path: String) -> Result<bool, String> {
     let git_path = Path::new(&path).join(".git");
     Ok(git_path.exists())
 }
 
 #[tauri::command]
-fn git_init(path: String) -> Result<(), String> {
+async fn check_is_git_repo(path: String) -> Result<bool, String> {
+    crate::commands::check_is_git_repo(path).await
+}
+
+pub async fn cmd_git_init(path: String) -> Result<(), String> {
     Repository::init(&path).map_err(|e| format!("Failed to initialize git repository: {}", e))?;
     Ok(())
+}
+
+#[tauri::command]
+async fn git_init(path: String) -> Result<(), String> {
+    crate::commands::git_init(path).await
 }
 
 fn run_git_command(worktree_path: &str, args: &[&str]) -> Result<String, String> {
@@ -883,31 +993,80 @@ fn is_worktree_dirty(repo: &Repository) -> bool {
 }
 
 fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
+    fn worktree_branch_and_status(repo: &Repository) -> (String, String) {
+        let branch = if let Ok(head) = repo.head() {
+            if head.is_branch() {
+                head.shorthand().unwrap_or("main").to_string()
+            } else {
+                "main".to_string()
+            }
+        } else {
+            "main".to_string()
+        };
+        let status = if is_worktree_dirty(repo) {
+            "dirty".to_string()
+        } else {
+            "clean".to_string()
+        };
+        (branch, status)
+    }
+
     let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
+
+    let repo_path = Path::new(repo_path);
+    let repo_path_canon = repo_path
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize repository path: {}", e))?;
+
+    let common_dir_output = std::process::Command::new("git")
+        .args(["-C", repo_path.to_str().unwrap_or(""), "rev-parse", "--git-common-dir"])
+        .output()
+        .map_err(|e| format!("Failed to run git rev-parse: {}", e))?;
+    if !common_dir_output.status.success() {
+        return Err("Failed to resolve git common directory".to_string());
+    }
+    let common_dir_str = String::from_utf8_lossy(&common_dir_output.stdout)
+        .trim()
+        .to_string();
+    let common_dir = PathBuf::from(&common_dir_str);
+    let common_dir = if common_dir.is_absolute() {
+        common_dir
+    } else {
+        repo_path.join(common_dir)
+    };
+    let main_path = common_dir
+        .parent()
+        .ok_or_else(|| "Invalid repository: missing common directory".to_string())?;
+    let main_path = main_path
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize main worktree path: {}", e))?;
+
+    let is_current_main = repo_path_canon == main_path;
+    let main_repo_owned = if is_current_main {
+        None
+    } else {
+        Some(Repository::open(&main_path).map_err(|e| {
+            format!("Failed to open main worktree repository: {}", e)
+        })?)
+    };
+    let main_repo = main_repo_owned.as_ref().unwrap_or(&repo);
 
     let mut result = Vec::new();
 
-    let main_branch = if let Ok(head) = repo.head() {
-        if head.is_branch() {
-            head.shorthand().unwrap_or("main").to_string()
-        } else {
-            "main".to_string()
-        }
-    } else {
-        "main".to_string()
-    };
-
-    let (ahead, behind) = compute_ahead_behind(&repo, &main_branch);
-    let status = if is_worktree_dirty(&repo) { "dirty".to_string() } else { "clean".to_string() };
-
+    let (main_branch, main_status) = worktree_branch_and_status(main_repo);
+    let (main_ahead, main_behind) = compute_ahead_behind(main_repo, &main_branch);
     result.push(WorktreeInfo {
-        id: repo_path.split('/').filter(|s| !s.is_empty()).last().unwrap_or(repo_path).to_string(),
+        id: main_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("main")
+            .to_string(),
         branch: main_branch,
-        path: repo_path.to_string(),
+        path: main_path.to_str().unwrap_or("").to_string(),
         is_main: true,
-        status,
-        ahead,
-        behind,
+        status: main_status,
+        ahead: main_ahead,
+        behind: main_behind,
         locked: false,
     });
 
@@ -918,24 +1077,12 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
 
         let wt = repo.find_worktree(wt_name).map_err(|e| format!("Failed to find worktree: {}", e))?;
 
-        let wt_path = wt.path().to_str().unwrap_or("").to_string();
+        let wt_path = wt.path().to_path_buf();
+        let wt_path_canon = wt_path.canonicalize().unwrap_or_else(|_| wt_path.clone());
+        let is_main = wt_path_canon == main_path;
 
         let (branch, status) = if let Ok(wt_repo) = Repository::open(&wt_path) {
-            let branch = if let Ok(head) = wt_repo.head() {
-                if head.is_branch() {
-                    head.shorthand().unwrap_or(wt_name).to_string()
-                } else {
-                    wt_name.to_string()
-                }
-            } else {
-                wt_name.to_string()
-            };
-            let status = if is_worktree_dirty(&wt_repo) {
-                "dirty".to_string()
-            } else {
-                "clean".to_string()
-            };
-            (branch, status)
+            worktree_branch_and_status(&wt_repo)
         } else {
             (wt_name.to_string(), "clean".to_string())
         };
@@ -945,8 +1092,8 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
         result.push(WorktreeInfo {
             id: wt_name.to_string(),
             branch,
-            path: wt_path,
-            is_main: false,
+            path: wt_path.to_str().unwrap_or("").to_string(),
+            is_main,
             status,
             ahead,
             behind,
@@ -954,7 +1101,111 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
         });
     }
 
+    deduplicate_worktree_ids(&mut result);
     Ok(result)
+}
+
+fn deduplicate_worktree_ids(worktrees: &mut Vec<WorktreeInfo>) {
+    let mut used: HashSet<String> = HashSet::new();
+    for wt in worktrees.iter_mut() {
+        let original = wt.id.clone();
+        if used.insert(original.clone()) {
+            continue;
+        }
+        let mut n = 2u32;
+        loop {
+            let candidate = format!("{}-{}", original, n);
+            if used.insert(candidate.clone()) {
+                wt.id = candidate;
+                break;
+            }
+            n += 1;
+            if n > 10_000 {
+                wt.id = format!("{}-{}", original, uuid::Uuid::new_v4());
+                used.insert(wt.id.clone());
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod worktree_id_tests {
+    use super::*;
+
+    fn wt(id: &str) -> WorktreeInfo {
+        WorktreeInfo {
+            id: id.to_string(),
+            branch: "main".to_string(),
+            path: format!("/tmp/{}", id),
+            is_main: false,
+            status: "clean".to_string(),
+            ahead: 0,
+            behind: 0,
+            locked: false,
+        }
+    }
+
+    #[test]
+    fn leaves_unique_ids_unchanged() {
+        let mut worktrees = vec![wt("a"), wt("b"), wt("c")];
+        deduplicate_worktree_ids(&mut worktrees);
+        assert_eq!(worktrees[0].id, "a");
+        assert_eq!(worktrees[1].id, "b");
+        assert_eq!(worktrees[2].id, "c");
+    }
+
+    #[test]
+    fn appends_suffix_to_duplicate_ids() {
+        let mut worktrees = vec![wt("a"), wt("a"), wt("a")];
+        deduplicate_worktree_ids(&mut worktrees);
+        assert_eq!(worktrees[0].id, "a");
+        assert_eq!(worktrees[1].id, "a-2");
+        assert_eq!(worktrees[2].id, "a-3");
+    }
+
+    #[test]
+    fn avoids_collision_with_existing_suffixed_id() {
+        let mut worktrees = vec![wt("a"), wt("a-2"), wt("a")];
+        deduplicate_worktree_ids(&mut worktrees);
+        assert_eq!(worktrees[0].id, "a");
+        assert_eq!(worktrees[1].id, "a-2");
+        assert_eq!(worktrees[2].id, "a-3");
+    }
+
+    #[test]
+    fn deduplicates_main_and_linked_worktree_with_same_folder_name() {
+        let base = std::env::temp_dir().join(format!(
+            "agent-ide-care-center-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let main_path = base.join("care-center");
+        let wt_path = base.join("wt").join("care-center");
+        std::fs::create_dir_all(&main_path).unwrap();
+
+        fn run(dir: &std::path::Path, args: &[&str]) {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .status()
+                .expect("git command failed");
+            assert!(status.success(), "git {:?} failed", args);
+        }
+
+        run(&base, &["init", "care-center"]);
+        std::fs::write(main_path.join("file.txt"), "hello").unwrap();
+        run(&main_path, &["add", "file.txt"]);
+        run(&main_path, &["commit", "-m", "init"]);
+        run(&main_path, &["worktree", "add", wt_path.to_str().unwrap(), "-b", "feature"]);
+
+        let worktrees = list_worktrees_local(main_path.to_str().unwrap()).unwrap();
+        let ids: std::collections::HashSet<_> = worktrees.iter().map(|w| w.id.clone()).collect();
+        assert_eq!(ids.len(), worktrees.len(), "worktree ids must be unique");
+        assert!(ids.contains("care-center"));
+        assert!(ids.contains("care-center-2"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 fn compute_worktree_path(repo_path: &str, name: &str) -> Result<String, String> {
@@ -1081,7 +1332,7 @@ async fn run_git_command_ssh(
     project_id: &str,
     worktree_path: &str,
     args: &[&str],
-    state: &Arc<AppState>,
+    state: &AppState,
 ) -> Result<String, String> {
     ensure_ssh_connection(project_id, state).await?;
     let connections = state.ssh_connections.lock().await;
@@ -1155,7 +1406,7 @@ async fn run_git_command_ssh(
 async fn list_worktrees_ssh(
     project_id: &str,
     repo_path: &str,
-    state: &Arc<AppState>,
+    state: &AppState,
 ) -> Result<Vec<WorktreeInfo>, String> {
     ensure_ssh_connection(project_id, state).await?;
     let connections = state.ssh_connections.lock().await;
@@ -1354,6 +1605,7 @@ echo 'WT_STATES_END'"#,
         worktrees[0].is_main = true;
     }
 
+    deduplicate_worktree_ids(&mut worktrees);
     Ok(worktrees)
 }
 
@@ -1363,7 +1615,7 @@ async fn add_worktree_ssh(
     branch: &str,
     name: &str,
     new_branch: bool,
-    state: &Arc<AppState>,
+    state: &AppState,
 ) -> Result<(), String> {
     let worktree_path = compute_worktree_path(repo_path, name)?;
 
@@ -1389,7 +1641,7 @@ async fn resolve_worktree_branch_ssh(
     project_id: &str,
     repo_path: &str,
     worktree_path: &str,
-    state: &Arc<AppState>,
+    state: &AppState,
 ) -> Result<Option<String>, String> {
     let output = run_git_command_ssh(project_id, repo_path, &["worktree", "list", "--porcelain"], state).await?;
     let mut current_worktree: Option<&str> = None;
@@ -1414,7 +1666,7 @@ async fn remove_worktree_ssh(
     repo_path: &str,
     worktree_path: &str,
     force: bool,
-    state: &Arc<AppState>,
+    state: &AppState,
     delete_branch: bool,
 ) -> Result<(), String> {
     let branch_to_delete = if delete_branch {
@@ -1453,7 +1705,7 @@ async fn remove_worktree_ssh(
 async fn list_branches_ssh(
     project_id: &str,
     repo_path: &str,
-    state: &Arc<AppState>,
+    state: &AppState,
 ) -> Result<Vec<BranchInfo>, String> {
     info!("list_branches_ssh: project_id={} repo_path={}", project_id, repo_path);
     let mut branches = Vec::new();
@@ -1506,15 +1758,28 @@ async fn list_branches_ssh(
     Ok(branches)
 }
 
-#[tauri::command]
-fn git_worktree_list(project_id: String, app_handle: tauri::AppHandle) -> Result<Vec<WorktreeInfo>, String> {
-    let projects = load_projects(app_handle)?;
-    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+pub async fn cmd_git_worktree_list(
+    state: &AppState,
+    project_id: String,
+) -> Result<Vec<WorktreeInfo>, String> {
+    let projects = crate::commands::load_projects(state).await?;
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or("Project not found")?;
 
     match &project.connection {
         Connection::Local { path } => list_worktrees_local(path),
         Connection::Ssh { .. } => Err("SSH worktree listing requires async execution. Use git_worktree_list_async instead.".to_string()),
     }
+}
+
+#[tauri::command]
+async fn git_worktree_list(
+    project_id: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<WorktreeInfo>, String> {
+    crate::commands::git_worktree_list(state.inner().as_ref(), project_id).await
 }
 
 fn get_repo_path(project: &Project) -> String {
@@ -1530,22 +1795,53 @@ fn get_repo_path(project: &Project) -> String {
     }
 }
 
-#[tauri::command]
-async fn git_worktree_list_async(
+pub async fn cmd_git_worktree_list_async(
+    state: &AppState,
     project_id: String,
-    state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Vec<WorktreeInfo>, String> {
-    let projects = {
-        let app_handle = state.app_handle.lock().unwrap().clone().ok_or("App handle not available")?;
-        load_projects(app_handle)?
-    };
-    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+    let projects = crate::commands::load_projects(state).await?;
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or("Project not found")?;
 
     match &project.connection {
         Connection::Local { path } => list_worktrees_local(path),
         Connection::Ssh { .. } => {
             let repo_path = get_repo_path(project);
-            list_worktrees_ssh(&project_id, &repo_path, &state).await
+            list_worktrees_ssh(&project_id, &repo_path, state).await
+        }
+    }
+}
+
+#[tauri::command]
+async fn git_worktree_list_async(
+    project_id: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<WorktreeInfo>, String> {
+    crate::commands::git_worktree_list_async(state.inner().as_ref(), project_id).await
+}
+
+pub async fn cmd_git_worktree_add_async(
+    state: &AppState,
+    project_id: String,
+    branch: String,
+    name: String,
+    new_branch: Option<bool>,
+) -> Result<(), String> {
+    let projects = crate::commands::load_projects(state).await?;
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or("Project not found")?;
+
+    let new_branch = new_branch.unwrap_or(false);
+
+    match &project.connection {
+        Connection::Local { path: repo_path } => add_worktree_local(repo_path, &branch, &name, new_branch),
+        Connection::Ssh { .. } => {
+            let repo_path = get_repo_path(project);
+            add_worktree_ssh(&project_id, &repo_path, &branch, &name, new_branch, state).await
         }
     }
 }
@@ -1558,19 +1854,32 @@ async fn git_worktree_add_async(
     new_branch: Option<bool>,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    let projects = {
-        let app_handle = state.app_handle.lock().unwrap().clone().ok_or("App handle not available")?;
-        load_projects(app_handle)?
-    };
-    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+    crate::commands::git_worktree_add_async(state.inner().as_ref(), project_id, branch, name, new_branch).await
+}
 
-    let new_branch = new_branch.unwrap_or(false);
+pub async fn cmd_git_worktree_remove_async(
+    state: &AppState,
+    project_id: String,
+    worktree_path: String,
+    force: Option<bool>,
+    delete_branch: Option<bool>,
+) -> Result<(), String> {
+    let projects = crate::commands::load_projects(state).await?;
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or("Project not found")?;
+
+    let force = force.unwrap_or(false);
+    let delete_branch = delete_branch.unwrap_or(false);
 
     match &project.connection {
-        Connection::Local { path: repo_path } => add_worktree_local(repo_path, &branch, &name, new_branch),
+        Connection::Local { path: repo_path } => {
+            remove_worktree_local(repo_path, &worktree_path, force, delete_branch)
+        }
         Connection::Ssh { .. } => {
             let repo_path = get_repo_path(project);
-            add_worktree_ssh(&project_id, &repo_path, &branch, &name, new_branch, &state).await
+            remove_worktree_ssh(&project_id, &repo_path, &worktree_path, force, state, delete_branch).await
         }
     }
 }
@@ -1583,22 +1892,31 @@ async fn git_worktree_remove_async(
     delete_branch: Option<bool>,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    let projects = {
-        let app_handle = state.app_handle.lock().unwrap().clone().ok_or("App handle not available")?;
-        load_projects(app_handle)?
-    };
-    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+    crate::commands::git_worktree_remove_async(
+        state.inner().as_ref(),
+        project_id,
+        worktree_path,
+        force,
+        delete_branch,
+    )
+    .await
+}
 
-    let force = force.unwrap_or(false);
-    let delete_branch = delete_branch.unwrap_or(false);
+pub async fn cmd_git_branches_list_async(
+    state: &AppState,
+    project_id: String,
+) -> Result<Vec<BranchInfo>, String> {
+    let projects = crate::commands::load_projects(state).await?;
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or("Project not found")?;
 
     match &project.connection {
-        Connection::Local { path: repo_path } => {
-            remove_worktree_local(repo_path, &worktree_path, force, delete_branch)
-        }
+        Connection::Local { path } => list_branches_local(path),
         Connection::Ssh { .. } => {
             let repo_path = get_repo_path(project);
-            remove_worktree_ssh(&project_id, &repo_path, &worktree_path, force, &state, delete_branch).await
+            list_branches_ssh(&project_id, &repo_path, state).await
         }
     }
 }
@@ -1608,19 +1926,7 @@ async fn git_branches_list_async(
     project_id: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Vec<BranchInfo>, String> {
-    let projects = {
-        let app_handle = state.app_handle.lock().unwrap().clone().ok_or("App handle not available")?;
-        load_projects(app_handle)?
-    };
-    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
-
-    match &project.connection {
-        Connection::Local { path } => list_branches_local(path),
-        Connection::Ssh { .. } => {
-            let repo_path = get_repo_path(project);
-            list_branches_ssh(&project_id, &repo_path, &state).await
-        }
-    }
+    crate::commands::git_branches_list_async(state.inner().as_ref(), project_id).await
 }
 
 fn filter_available_branches(
@@ -1697,7 +2003,7 @@ async fn list_worktree_branch_names_ssh(
 async fn fetch_remotes_ssh(
     project_id: &str,
     repo_path: &str,
-    state: &Arc<AppState>,
+    state: &AppState,
 ) -> Result<(), String> {
     run_git_command_ssh(project_id, repo_path, &["fetch", "--all", "--prune"], state)
         .await
@@ -1707,7 +2013,7 @@ async fn fetch_remotes_ssh(
 async fn list_branches_available_for_worktrees_ssh(
     project_id: &str,
     repo_path: &str,
-    state: &Arc<AppState>,
+    state: &AppState,
 ) -> Result<Vec<BranchInfo>, String> {
     if let Err(e) = fetch_remotes_ssh(project_id, repo_path, state).await {
         warn!("list_branches_available_for_worktrees_ssh: fetch failed: {}", e);
@@ -1717,26 +2023,32 @@ async fn list_branches_available_for_worktrees_ssh(
     Ok(filter_available_branches(branches, &assigned))
 }
 
-#[tauri::command]
-async fn git_branches_available_for_worktrees_async(
+pub async fn cmd_git_branches_available_for_worktrees_async(
+    state: &AppState,
     project_id: String,
-    state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Vec<BranchInfo>, String> {
-    let projects = {
-        let app_handle = state.app_handle.lock().unwrap().clone().ok_or("App handle not available")?;
-        load_projects(app_handle)?
-    };
-    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+    let projects = crate::commands::load_projects(state).await?;
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or("Project not found")?;
 
     match &project.connection {
         Connection::Local { path } => list_branches_available_for_worktrees_local(path),
         Connection::Ssh { .. } => {
             let repo_path = get_repo_path(project);
-            list_branches_available_for_worktrees_ssh(&project_id, &repo_path, &state).await
+            list_branches_available_for_worktrees_ssh(&project_id, &repo_path, state).await
         }
     }
 }
 
+#[tauri::command]
+async fn git_branches_available_for_worktrees_async(
+    project_id: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<BranchInfo>, String> {
+    crate::commands::git_branches_available_for_worktrees_async(state.inner().as_ref(), project_id).await
+}
 fn one_password_agent_socket() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -2019,6 +2331,10 @@ pub struct SshAgentInfo {
 
 #[tauri::command]
 async fn ssh_agent_info() -> Result<SshAgentInfo, String> {
+    cmd_ssh_agent_info().await
+}
+
+pub async fn cmd_ssh_agent_info() -> Result<SshAgentInfo, String> {
     info!("ssh_agent_info: starting");
     let auth_sock = std::env::var("SSH_AUTH_SOCK").ok();
     let socket_exists = auth_sock
@@ -2091,6 +2407,17 @@ async fn ssh_test_connection(
     key_path: Option<String>,
     password: Option<String>,
 ) -> Result<String, String> {
+    cmd_ssh_test_connection(host, port, username, auth_method, key_path, password).await
+}
+
+pub async fn cmd_ssh_test_connection(
+    host: String,
+    port: u16,
+    username: String,
+    auth_method: String,
+    key_path: Option<String>,
+    password: Option<String>,
+) -> Result<String, String> {
     info!("ssh_test_connection: starting connect with SFTP");
     let (session, sftp) = connect_ssh(
         &host,
@@ -2121,6 +2448,19 @@ async fn ssh_connect(
     key_path: Option<String>,
     password: Option<String>,
     state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    cmd_ssh_connect(state.inner().as_ref(), project_id, host, port, username, auth_method, key_path, password).await
+}
+
+pub async fn cmd_ssh_connect(
+    state: &AppState,
+    project_id: String,
+    host: String,
+    port: u16,
+    username: String,
+    auth_method: String,
+    key_path: Option<String>,
+    password: Option<String>,
 ) -> Result<(), String> {
     info!("ssh_connect: project_id={} host={} port={} username={} auth_method={}", project_id, host, port, username, auth_method);
     {
@@ -2185,6 +2525,13 @@ async fn ssh_disconnect(
     project_id: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
+    cmd_ssh_disconnect(state.inner().as_ref(), project_id).await
+}
+
+pub async fn cmd_ssh_disconnect(
+    state: &AppState,
+    project_id: String,
+) -> Result<(), String> {
     info!("ssh_disconnect: project_id={}", project_id);
     state.lsp_manager.stop_project(&project_id).await;
     let mut connections = state.ssh_connections.lock().await;
@@ -2201,6 +2548,14 @@ async fn ssh_list_directory(
     project_id: String,
     path: String,
     state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<SshDirEntry>, String> {
+    cmd_ssh_list_directory(state.inner().as_ref(), project_id, path).await
+}
+
+pub async fn cmd_ssh_list_directory(
+    state: &AppState,
+    project_id: String,
+    path: String,
 ) -> Result<Vec<SshDirEntry>, String> {
     info!("ssh_list_directory: project_id={} path={}", project_id, path);
     let connections = state.ssh_connections.lock().await;
@@ -2237,6 +2592,14 @@ async fn ssh_check_git(
     path: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<bool, String> {
+    cmd_ssh_check_git(state.inner().as_ref(), project_id, path).await
+}
+
+pub async fn cmd_ssh_check_git(
+    state: &AppState,
+    project_id: String,
+    path: String,
+) -> Result<bool, String> {
     info!("ssh_check_git: project_id={} path={}", project_id, path);
     let connections = state.ssh_connections.lock().await;
     let conn = connections
@@ -2259,39 +2622,49 @@ async fn ssh_check_git(
 }
 
 #[tauri::command]
-fn ssh_store_password(project_id: String, password: String) -> Result<(), String> {
+async fn ssh_store_password(
+    project_id: String,
+    password: String,
+) -> Result<(), String> {
+    cmd_ssh_store_password(project_id, password).await
+}
+
+pub async fn cmd_ssh_store_password(
+    project_id: String,
+    password: String,
+) -> Result<(), String> {
     info!("ssh_store_password: project_id={}", project_id);
-    let entry = keyring::Entry::new("agent-ide-ssh", &project_id)
-        .map_err(|e| format!("Failed to create keychain entry: {}", e))?;
-    entry
-        .set_password(&password)
-        .map_err(|e| format!("Failed to store password: {}", e))?;
-    Ok(())
+    crate::secrets::set_secret(&format!("ssh-password-{}", project_id), &password)
 }
 
 #[tauri::command]
-fn ssh_get_password(project_id: String) -> Result<Option<String>, String> {
+async fn ssh_get_password(
+    project_id: String,
+) -> Result<Option<String>, String> {
+    cmd_ssh_get_password(project_id).await
+}
+
+pub async fn cmd_ssh_get_password(
+    project_id: String,
+) -> Result<Option<String>, String> {
     info!("ssh_get_password: project_id={}", project_id);
-    let entry = keyring::Entry::new("agent-ide-ssh", &project_id)
-        .map_err(|e| format!("Failed to create keychain entry: {}", e))?;
-    match entry.get_password() {
-        Ok(password) => Ok(Some(password)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("Failed to retrieve password: {}", e)),
-    }
+    crate::secrets::get_secret(&format!("ssh-password-{}", project_id))
 }
 
 #[tauri::command]
-fn ssh_delete_password(project_id: String) -> Result<(), String> {
-    info!("ssh_delete_password: project_id={}", project_id);
-    let entry = keyring::Entry::new("agent-ide-ssh", &project_id)
-        .map_err(|e| format!("Failed to create keychain entry: {}", e))?;
-    match entry.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(format!("Failed to delete password: {}", e)),
-    }
+async fn ssh_delete_password(
+    project_id: String,
+) -> Result<(), String> {
+    cmd_ssh_delete_password(project_id).await
 }
+
+pub async fn cmd_ssh_delete_password(
+    project_id: String,
+) -> Result<(), String> {
+    info!("ssh_delete_password: project_id={}", project_id);
+    crate::secrets::delete_secret(&format!("ssh-password-{}", project_id))
+}
+
 
 async fn start_health_check(state: Arc<AppState>) {
     let mut interval = tokio::time::interval(Duration::from_secs(30));
@@ -2333,22 +2706,14 @@ async fn ensure_ssh_connection(project_id: &str, state: &AppState) -> Result<(),
     let credentials = match existing_credentials {
         Some(creds) => creds,
         None => {
-            let app_handle = state
-                .app_handle
-                .lock()
-                .unwrap()
-                .clone()
-                .ok_or("App handle not available")?;
-            let projects = load_projects(app_handle)?;
+            let projects = crate::commands::load_projects(state).await?;
             let project = projects
                 .iter()
                 .find(|p| p.id == project_id)
                 .ok_or("Project not found")?;
             match &project.connection {
                 Connection::Ssh { host, port, username, auth_method, key_path, .. } => {
-                    let password = keyring::Entry::new("agent-ide-ssh", project_id)
-                        .ok()
-                        .and_then(|e| e.get_password().ok());
+                    let password = secrets::get_secret(project_id).ok().flatten();
                     SshCredentials {
                         host: host.clone(),
                         port: *port,
@@ -2402,7 +2767,7 @@ async fn ensure_ssh_connection(project_id: &str, state: &AppState) -> Result<(),
     }
 }
 
-async fn check_and_reconnect(project_id: &str, state: &Arc<AppState>) {
+async fn check_and_reconnect(project_id: &str, state: &AppState) {
     let needs_reconnect = {
         let connections = state.ssh_connections.lock().await;
         if let Some(conn) = connections.get(project_id) {
@@ -2594,11 +2959,12 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            let state: tauri::State<Arc<AppState>> = app.state();
-            *state.app_handle.lock().unwrap() = Some(app.handle().clone());
-            crate::notification::set_app_handle(app.handle().clone());
+            let event_bus = crate::event_bus::EventBus::Tauri(app.handle().clone());
+            let state = crate::AppState::new(event_bus.clone(), Arc::new(lsp::LspManager::default()));
+            app.manage(state.clone());
+            crate::notification::set_event_bus(event_bus.clone());
 
-            let state_clone = state.inner().clone();
+            let state_clone = state.clone();
             tauri::async_runtime::spawn(async move {
                 start_health_check(state_clone).await;
             });
@@ -2607,23 +2973,17 @@ pub fn run() {
                 tauri::async_runtime::block_on(async {
                     pty_client::PtyClient::new(
                         pty_client::daemon_socket_path(),
-                        app.handle().clone(),
+                        event_bus.clone(),
+                        true,
                     )
                     .await
                 })
                 .expect("failed to connect to pty daemon"),
             );
-            app.manage(pty_client);
+            let _ = state.pty_client.set(pty_client);
 
             Ok(())
         })
-        .manage(Arc::new(AppState {
-            ssh_connections: Mutex::new(HashMap::new()),
-            lsp_manager: Arc::new(lsp::LspManager::default()),
-            app_handle: StdMutex::new(None),
-            active_pty_id: StdMutex::new(None),
-            pty_titles: StdMutex::new(HashMap::new()),
-        }))
         .invoke_handler(tauri::generate_handler![
             save_projects,
             load_projects,

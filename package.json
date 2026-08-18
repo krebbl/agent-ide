@@ -5,7 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:web": "VITE_TAURI=false vite",
+    "dev:web:server": "AGENT_IDE_PORT=${AGENT_IDE_PORT:-3001} concurrently -k -n fe,be -c cyan,yellow \"VITE_TAURI=false vite build --watch\" \"AGENT_IDE_STATIC_DIR=$PWD/dist cargo-watch -q -C src-tauri -- cargo run --bin agent-ide-server\"",
     "build": "tsc && vite build",
+    "build:web": "VITE_TAURI=false tsc && VITE_TAURI=false vite build",
+    "build:server:debug": "npm run build:web && cd src-tauri && cargo build --bin agent-ide-server",
+    "build:server": "cd src-tauri && cargo build --release --bin agent-ide-server",
+    "build:web:server": "npm run build:web && npm run build:server",
+    "server:debug": "AGENT_IDE_HOST=${AGENT_IDE_HOST:-0.0.0.0} AGENT_IDE_PORT=${AGENT_IDE_PORT:-3000} AGENT_IDE_CONFIG_DIR=${AGENT_IDE_CONFIG_DIR:-./.agent-ide} AGENT_IDE_SECRET_STORE=${AGENT_IDE_SECRET_STORE:-file} AGENT_IDE_STATIC_DIR=${AGENT_IDE_STATIC_DIR:-./dist} ./src-tauri/target/debug/agent-ide-server",
+    "server": "AGENT_IDE_HOST=${AGENT_IDE_HOST:-0.0.0.0} AGENT_IDE_PORT=${AGENT_IDE_PORT:-3000} AGENT_IDE_CONFIG_DIR=${AGENT_IDE_CONFIG_DIR:-./.agent-ide} AGENT_IDE_SECRET_STORE=${AGENT_IDE_SECRET_STORE:-file} AGENT_IDE_STATIC_DIR=${AGENT_IDE_STATIC_DIR:-./dist} ./src-tauri/target/release/agent-ide-server",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev:worktree": "node scripts/dev-worktree.mjs"
@@ -38,6 +46,7 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "concurrently": "^10.0.5",
     "typescript": "~5.8.3",
     "vite": "^7.0.4"
   }

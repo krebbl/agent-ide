@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke, listen } from "./ipc";
 import { useDevNotificationStore } from "../stores/devNotificationStore";
 import { useTerminalStore } from "../stores/terminalStore";
+import { showFaviconBadge } from "./faviconBadge";
 
 export interface NotifyOptions {
   title: string;
@@ -10,16 +10,24 @@ export interface NotifyOptions {
 }
 
 export function initNotificationClickListener() {
-  listen<{ sessionId: string }>("notification_clicked", (event) => {
-    useTerminalStore.getState().focusSession(event.payload.sessionId);
-  }).catch(() => {});
+  if (import.meta.env.VITE_TAURI === "true") {
+    listen<{ sessionId: string }>("notification_clicked", (event) => {
+      useTerminalStore.getState().focusSession(event.payload.sessionId);
+    }).catch(() => {});
+  }
 }
 
 let audioContext: AudioContext | null = null;
 
 function playNotificationSound() {
   if (!audioContext) {
-    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    const Ctx =
+      window.AudioContext ||
+      (
+        window as unknown as {
+          webkitAudioContext?: typeof AudioContext;
+        }
+      ).webkitAudioContext;
     if (!Ctx) return;
     audioContext = new Ctx();
   }
@@ -44,19 +52,51 @@ function playNotificationSound() {
   osc.stop(audioContext.currentTime + 0.2);
 }
 
+function showInAppToast(options: NotifyOptions) {
+  useDevNotificationStore
+    .getState()
+    .addNotification(`${options.title}: ${options.body}`, options.sessionId);
+  playNotificationSound();
+}
+
+async function showBrowserNotification(options: NotifyOptions) {
+  if (typeof Notification === "undefined") return;
+
+  if (Notification.permission === "denied") return;
+
+  if (Notification.permission === "default") {
+    const result = await Notification.requestPermission();
+    if (result !== "granted") return;
+  }
+
+  const n = new Notification(options.title, { body: options.body });
+  n.onclick = () => {
+    n.close();
+    window.focus();
+    if (options.sessionId) {
+      useTerminalStore.getState().focusSession(options.sessionId);
+    }
+  };
+}
+
 export function notify(options: NotifyOptions) {
   console.log("Sending notification:", options);
-  if (import.meta.env.DEV) {
-    useDevNotificationStore
-      .getState()
-      .addNotification(`${options.title}: ${options.body}`, options.sessionId);
-    playNotificationSound();
+  showFaviconBadge();
+
+  if (import.meta.env.VITE_TAURI === "true") {
+    showInAppToast(options);
+    invoke("notification_show", {
+      title: options.title,
+      body: options.body,
+      sessionId: options.sessionId ?? null,
+    }).catch((e) => {
+      console.error("Failed to send notification:", e);
+    });
+    return;
   }
-  invoke("notification_show", {
-    title: options.title,
-    body: options.body,
-    sessionId: options.sessionId ?? null,
-  }).catch((e) => {
-    console.error("Failed to send notification:", e);
+
+  showInAppToast(options);
+  showBrowserNotification(options).catch((e) => {
+    console.error("Failed to show browser notification:", e);
   });
 }

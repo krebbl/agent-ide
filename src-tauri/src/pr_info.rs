@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
-use crate::{load_projects, get_repo_path, AppState, Connection};
+use crate::{get_repo_path, AppState, Connection};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -580,14 +580,12 @@ fn parse_bkt_state(state: Option<&str>) -> PrState {
 
 // ── Tauri commands ────────────────────────────────────────────────
 
-#[tauri::command]
-pub async fn pr_for_branch(
+pub async fn cmd_pr_for_branch(
+    state: &AppState,
     project_id: String,
     branch: String,
-    state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<PrInfoResult, String> {
-    let app_handle = state.app_handle.lock().unwrap().clone().ok_or("App handle not available")?;
-    let projects = load_projects(app_handle)?;
+    let projects = crate::commands::load_projects(state).await?;
     let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
 
     let repo_path = get_repo_path(project);
@@ -788,13 +786,11 @@ pub async fn pr_for_branch(
     }
 }
 
-#[tauri::command]
-pub async fn pr_list_for_repo(
+pub async fn cmd_pr_list_for_repo(
+    state: &AppState,
     project_id: String,
-    state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Vec<PrInfo>, String> {
-    let app_handle = state.app_handle.lock().unwrap().clone().ok_or("App handle not available")?;
-    let projects = load_projects(app_handle)?;
+    let projects = crate::commands::load_projects(state).await?;
     let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
 
     let repo_path = get_repo_path(project);
@@ -873,4 +869,20 @@ pub async fn pr_list_for_repo(
             }
         }
     }
+}
+#[tauri::command]
+pub async fn pr_for_branch(
+    project_id: String,
+    branch: String,
+    state: tauri::State<'_, Arc<crate::AppState>>,
+) -> Result<PrInfoResult, String> {
+    crate::commands::pr_for_branch(state.inner().as_ref(), project_id, branch).await
+}
+
+#[tauri::command]
+pub async fn pr_list_for_repo(
+    project_id: String,
+    state: tauri::State<'_, Arc<crate::AppState>>,
+) -> Result<Vec<PrInfo>, String> {
+    crate::commands::pr_list_for_repo(state.inner().as_ref(), project_id).await
 }

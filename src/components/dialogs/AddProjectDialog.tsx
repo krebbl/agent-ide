@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "../../services/ipc";
 import { FolderOpen, Server, Key, Lock, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { Project, SSHConnection, LocalConnection } from "../../types";
@@ -45,6 +44,9 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
   const [sshAgentChecking, setSshAgentChecking] = useState(false);
 
   const handleLocalBrowse = async () => {
+    if (import.meta.env.VITE_TAURI !== "true") return;
+    // Platform-specific Tauri dialog; keep out of the web bundle.
+    const { open } = await import("@tauri-apps/plugin-dialog");
     const selected = await open({ directory: true, multiple: false });
     if (selected && typeof selected === "string") {
       setLocalPath(selected);
@@ -62,6 +64,31 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
       }
     }
   };
+
+  useEffect(() => {
+    if (!localPath) {
+      setLocalIsGit(null);
+      return;
+    }
+    let cancelled = false;
+    setLocalChecking(true);
+    const timer = setTimeout(() => {
+      invoke<boolean>("check_is_git_repo", { path: localPath })
+        .then((isGit) => {
+          if (!cancelled) setLocalIsGit(isGit);
+        })
+        .catch(() => {
+          if (!cancelled) setLocalIsGit(false);
+        })
+        .finally(() => {
+          if (!cancelled) setLocalChecking(false);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [localPath]);
 
   const handleLocalInit = async () => {
     if (!localPath) return;
@@ -254,12 +281,14 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
                 placeholder="/path/to/project"
                 className="flex-1 rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
               />
-              <button
-                onClick={handleLocalBrowse}
-                className="rounded-md bg-[var(--color-surface0)] px-3 py-2 text-sm text-[var(--color-text)] hover:bg-[var(--color-surface1)]"
-              >
-                Browse
-              </button>
+              {import.meta.env.VITE_TAURI === "true" && (
+                <button
+                  onClick={handleLocalBrowse}
+                  className="rounded-md bg-[var(--color-surface0)] px-3 py-2 text-sm text-[var(--color-text)] hover:bg-[var(--color-surface1)]"
+                >
+                  Browse
+                </button>
+              )}
             </div>
           </div>
 
@@ -374,17 +403,21 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
                   placeholder="~/.ssh/id_ed25519"
                   className="flex-1 rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
                 />
-                <button
-                  onClick={async () => {
-                    const selected = await open({ multiple: false });
-                    if (selected && typeof selected === "string") {
-                      setSshKeyPath(selected);
-                    }
-                  }}
-                  className="rounded-md bg-[var(--color-surface0)] px-3 py-2 text-sm text-[var(--color-text)] hover:bg-[var(--color-surface1)]"
-                >
-                  Browse
-                </button>
+                {import.meta.env.VITE_TAURI === "true" && (
+                  <button
+                    onClick={async () => {
+                      // Platform-specific Tauri dialog; keep out of the web bundle.
+                      const { open } = await import("@tauri-apps/plugin-dialog");
+                      const selected = await open({ multiple: false });
+                      if (selected && typeof selected === "string") {
+                        setSshKeyPath(selected);
+                      }
+                    }}
+                    className="rounded-md bg-[var(--color-surface0)] px-3 py-2 text-sm text-[var(--color-text)] hover:bg-[var(--color-surface1)]"
+                  >
+                    Browse
+                  </button>
+                )}
               </div>
             </div>
           )}

@@ -7,7 +7,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { useEffect, useMemo, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../services/ipc";
 import { useTerminalStore, collectLeaves, findLeaf } from "../../stores/terminalStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { useUiStore } from "../../stores/uiStore";
@@ -147,14 +147,6 @@ export default function TerminalZone({
     [tabs, removeSession],
   );
 
-  const handleCloseActivePane = useCallback(() => {
-    if (!activeTab || !activeTab.focusedPaneId) return;
-    const leaf = findLeaf(activeTab.rootPane, activeTab.focusedPaneId);
-    if (leaf) {
-      removeSession(leaf.sessionId).catch(() => {});
-    }
-  }, [activeTab, removeSession]);
-
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const isMod = e.metaKey || e.ctrlKey;
@@ -164,12 +156,6 @@ export default function TerminalZone({
       if (e.key.toLowerCase() === "t") {
         e.preventDefault();
         handleNewTerminal();
-        return;
-      }
-
-      if (e.key.toLowerCase() === "w") {
-        e.preventDefault();
-        handleCloseActivePane();
         return;
       }
 
@@ -208,7 +194,7 @@ export default function TerminalZone({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [handleNewTerminal, handleCloseActivePane, activeSessionId, splitPane, navigatePane]);
+  }, [handleNewTerminal, activeSessionId, splitPane, navigatePane]);
 
   return (
     <div

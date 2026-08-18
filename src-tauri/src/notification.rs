@@ -2,17 +2,21 @@
 use std::ffi::{CStr, CString};
 use std::sync::OnceLock;
 
+#[cfg(target_os = "macos")]
 use serde::Serialize;
-use tauri::Emitter;
 
-static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+use crate::event_bus::EventBus;
 
+static EVENT_BUS: OnceLock<EventBus> = OnceLock::new();
+
+#[cfg(target_os = "macos")]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationClickedEvent {
     pub session_id: String,
 }
 
+#[cfg(target_os = "macos")]
 extern "C" fn on_notification_clicked(session_id: *const i8) {
     if session_id.is_null() {
         return;
@@ -21,16 +25,16 @@ extern "C" fn on_notification_clicked(session_id: *const i8) {
         .to_string_lossy()
         .to_string();
     tracing::info!(session_id = %id, "notification clicked");
-    if let Some(handle) = APP_HANDLE.get() {
-        let _ = handle.emit(
+    if let Some(event_bus) = EVENT_BUS.get() {
+        event_bus.emit(
             "notification_clicked",
             NotificationClickedEvent { session_id: id },
         );
     }
 }
 
-pub fn set_app_handle(handle: tauri::AppHandle) {
-    let _ = APP_HANDLE.set(handle);
+pub fn set_event_bus(event_bus: EventBus) {
+    let _ = EVENT_BUS.set(event_bus);
     #[cfg(target_os = "macos")]
     unsafe {
         set_notification_clicked_callback(on_notification_clicked);
@@ -69,12 +73,20 @@ pub fn show(title: &str, body: &str, session_id: Option<&str>) -> Result<(), Str
     }
 }
 
-#[tauri::command]
-pub async fn notification_show(
+pub async fn cmd_notification_show(
     title: String,
     body: String,
     session_id: Option<String>,
 ) -> Result<(), String> {
     tracing::info!(title, body, ?session_id, "notification_show command called");
     show(&title, &body, session_id.as_deref())
+}
+
+#[tauri::command]
+pub async fn notification_show(
+    title: String,
+    body: String,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    crate::commands::notification_show(title, body, session_id).await
 }

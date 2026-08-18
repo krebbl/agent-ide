@@ -355,7 +355,7 @@ function WorktreeItem({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                invoke("util_open_url", { url: prEntry.pr!.url }).catch(() => {});
+                openUrl(prEntry.pr!.url).catch(() => {});
               }}
               className={`text-[10px] ${prColor} hover:text-[var(--color-blue)] hover:underline`}
               title={prEntry.pr.title}
@@ -746,23 +746,33 @@ export default function LeftSidebar() {
   }, [loadProjects]);
 
   useEffect(() => {
+    const refresh = () => {
+      const { projects, expandedProjectIds } = useProjectStore.getState();
+      const statuses = useConnectionStatusStore.getState().statuses;
+      const { fetchPrsForWorktrees, lastFetchedAt } = usePrStore.getState();
+      for (const p of projects) {
+        if (!expandedProjectIds.has(p.id)) continue;
+        if (p.type === "ssh" && statuses[p.id]?.status !== "connected") continue;
+        if (p.worktrees.length === 0) continue;
+        if (Date.now() - (lastFetchedAt[p.id] ?? 0) < 15_000) continue;
+        fetchPrsForWorktrees(p.id, p.worktrees.map((w) => w.branch), true);
+      }
+    };
+
     let unlisten: (() => void) | undefined;
-    getCurrentWindow()
-      .listen("tauri://focus", () => {
-        const { projects, expandedProjectIds } = useProjectStore.getState();
-        const statuses = useConnectionStatusStore.getState().statuses;
-        const { fetchPrsForWorktrees, lastFetchedAt } = usePrStore.getState();
-        for (const p of projects) {
-          if (!expandedProjectIds.has(p.id)) continue;
-          if (p.type === "ssh" && statuses[p.id]?.status !== "connected") continue;
-          if (p.worktrees.length === 0) continue;
-          if (Date.now() - (lastFetchedAt[p.id] ?? 0) < 15_000) continue;
-          fetchPrsForWorktrees(p.id, p.worktrees.map((w) => w.branch), true);
-        }
-      })
-      .then((u) => {
-        unlisten = u;
-      });
+    const setup = async () => {
+      if (import.meta.env.VITE_TAURI === "true") {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        unlisten = await getCurrentWindow().listen("tauri://focus", refresh);
+      } else {
+        const handler = () => {
+          if (!document.hidden) refresh();
+        };
+        document.addEventListener("visibilitychange", handler);
+        unlisten = () => document.removeEventListener("visibilitychange", handler);
+      }
+    };
+    setup().catch(() => {});
     return () => unlisten?.();
   }, []);
 

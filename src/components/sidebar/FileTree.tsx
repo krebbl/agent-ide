@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../services/ipc";
 import { EyeOff, Eye, RefreshCw, Loader2, FilePlus, FolderPlus } from "lucide-react";
 import { useFileTreeStore } from "../../stores/fileTreeStore";
 import FileTreeNode from "./FileTreeNode";

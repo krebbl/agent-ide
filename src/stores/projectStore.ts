@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../services/ipc";
 import { Project, Worktree } from "../types";
 import { useTerminalStore } from "./terminalStore";
 import { usePrStore } from "./prStore";
