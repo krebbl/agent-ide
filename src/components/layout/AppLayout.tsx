@@ -45,7 +45,7 @@ export default function AppLayout() {
         </Group>
       </div>
       <StatusBar />
-      {import.meta.env.DEV && <DevNotificationContainer />}
+      <DevNotificationContainer />
     </div>
   );
 }
