@@ -1685,108 +1685,13 @@ fn list_branches_available_for_worktrees_local(
     Ok(filter_available_branches(branches, &assigned))
 }
 
-async fn list_branches_and_worktree_branch_names_ssh(
+async fn list_worktree_branch_names_ssh(
     project_id: &str,
     repo_path: &str,
     state: &Arc<AppState>,
-) -> Result<(Vec<BranchInfo>, Vec<String>), String> {
-    ensure_ssh_connection(project_id, state).await?;
-    let connections = state.ssh_connections.lock().await;
-    let conn = connections
-        .get(project_id)
-        .ok_or("No SSH connection found for this project")?;
-
-    let worktree_quoted = shlex::try_quote(repo_path)
-        .map_err(|_| "Repository path contains invalid characters".to_string())?
-        .into_owned();
-    let separator = "AGENT_IDE_WT_SEP";
-    let cmd = format!(
-        "cd {} && git for-each-ref --format='BRANCH %(refname:short) %(refname)' refs/heads refs/remotes && echo '{}' && git worktree list --porcelain",
-        worktree_quoted, separator
-    );
-
-    info!(
-        "list_branches_and_worktree_branch_names_ssh: executing '{}'",
-        cmd
-    );
-
-    let mut channel = conn
-        .session
-        .lock()
-        .await
-        .channel_open_session()
-        .await
-        .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
-
-    channel
-        .exec(false, cmd.as_str())
-        .await
-        .map_err(|e| format!("Failed to execute command: {}", e))?;
-
-    let mut stdout = String::new();
-    let mut stderr = String::new();
-    let mut exit_status: Option<u32> = None;
-
-    while let Some(msg) = channel.wait().await {
-        match msg {
-            russh::ChannelMsg::Data { data } => {
-                stdout.push_str(&String::from_utf8_lossy(&data));
-            }
-            russh::ChannelMsg::ExtendedData { data, ext } => {
-                if ext == 1 {
-                    stderr.push_str(&String::from_utf8_lossy(&data));
-                } else {
-                    stdout.push_str(&String::from_utf8_lossy(&data));
-                }
-            }
-            russh::ChannelMsg::ExitStatus { exit_status: status } => {
-                exit_status = Some(status);
-                break;
-            }
-            russh::ChannelMsg::Close => break,
-            _ => {}
-        }
-    }
-
-    if exit_status != Some(0) {
-        return Err(format!(
-            "Failed to list branches and worktrees: {}",
-            stderr.trim()
-        ));
-    }
-
-    let mut branches = Vec::new();
-    let mut assigned = Vec::new();
-    let mut past_separator = false;
-
-    for line in stdout.lines() {
-        if line == separator {
-            past_separator = true;
-            continue;
-        }
-        if !past_separator {
-            if let Some(rest) = line.strip_prefix("BRANCH ") {
-                let mut parts = rest.splitn(2, ' ');
-                let name = parts.next().unwrap_or("").to_string();
-                let full_ref = parts.next().unwrap_or("");
-                if name == "origin/HEAD" {
-                    continue;
-                }
-                branches.push(BranchInfo {
-                    name,
-                    is_remote: full_ref.starts_with("refs/remotes/"),
-                });
-            }
-        } else if let Some(b) = line.strip_prefix("branch ") {
-            assigned.push(
-                b.trim_start_matches("refs/heads/")
-                    .trim_start_matches("refs/remotes/")
-                    .to_string(),
-            );
-        }
-    }
-
-    Ok((branches, assigned))
+) -> Result<Vec<String>, String> {
+    let output = run_git_command_ssh(project_id, repo_path, &["worktree", "list", "--porcelain"], state).await?;
+    Ok(parse_worktree_branch_names(&output))
 }
 
 async fn fetch_remotes_ssh(
@@ -1807,8 +1712,8 @@ async fn list_branches_available_for_worktrees_ssh(
     if let Err(e) = fetch_remotes_ssh(project_id, repo_path, state).await {
         warn!("list_branches_available_for_worktrees_ssh: fetch failed: {}", e);
     }
-    let (branches, assigned) =
-        list_branches_and_worktree_branch_names_ssh(project_id, repo_path, state).await?;
+    let branches = list_branches_ssh(project_id, repo_path, state).await?;
+    let assigned = list_worktree_branch_names_ssh(project_id, repo_path, state).await?;
     Ok(filter_available_branches(branches, &assigned))
 }
 
