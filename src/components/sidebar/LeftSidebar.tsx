@@ -544,6 +544,14 @@ function ProjectItem({
     });
   }, [project.worktrees, project.id, prCache]);
 
+  const hasMergedWorktrees = useMemo(
+    () =>
+      project.worktrees.some(
+        (wt) => !wt.isMain && prCache[`${project.id}:${wt.branch}`]?.pr?.state === "merged",
+      ),
+    [project.worktrees, project.id, prCache],
+  );
+
   const handleCleanupOpen = async () => {
     setCleanupError(null);
     setCleanupCandidates([]);
@@ -627,21 +635,23 @@ function ProjectItem({
           >
             <Plus size={12} />
           </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleCleanupOpen();
-            }}
-            disabled={isWorktreeLoading || sortedWorktrees.length <= 1}
-            className="text-[var(--color-overlay0)] hover:text-[var(--color-mauve)] disabled:opacity-50"
-            title="Cleanup merged worktrees"
-          >
-            {cleanupLoading ? (
-              <Loader2 size={12} className="animate-spin" />
-            ) : (
-              <BrushCleaning size={12} />
-            )}
-          </button>
+          {hasMergedWorktrees && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleCleanupOpen();
+              }}
+              disabled={isWorktreeLoading || sortedWorktrees.length <= 1}
+              className="text-[var(--color-overlay0)] hover:text-[var(--color-mauve)] disabled:opacity-50"
+              title="Cleanup merged worktrees"
+            >
+              {cleanupLoading ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : (
+                <BrushCleaning size={12} />
+              )}
+            </button>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation();
