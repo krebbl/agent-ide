@@ -93,7 +93,7 @@ impl PtyClient {
                 event_bus.emit("pty_busy", PtyBusyEvent { session_id, title });
             }
             DaemonEvent::Title { session_id, title } => {
-                let _ = app_handle.emit("pty_title", PtyTitleEvent { session_id, title });
+                event_bus.emit("pty_title", PtyTitleEvent { session_id, title });
             }
             DaemonEvent::Exit { session_id, exit_code } => {
                 event_bus.emit("pty_exit", PtyExitEvent { session_id, exit_code });

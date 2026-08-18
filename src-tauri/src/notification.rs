@@ -2,6 +2,7 @@
 use std::ffi::{CStr, CString};
 use std::sync::OnceLock;
 
+#[cfg(target_os = "macos")]
 use serde::Serialize;
 
 use crate::event_bus::EventBus;
