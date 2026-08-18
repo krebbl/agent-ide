@@ -317,7 +317,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const errors: string[] = [];
     for (const wt of mergedWorktrees) {
       try {
-        await get().removeWorktree(projectId, wt.path, false, true);
+        await get().removeWorktree(projectId, wt.path, true, true);
       } catch (e) {
         errors.push(`${wt.branch}: ${e}`);
       }
