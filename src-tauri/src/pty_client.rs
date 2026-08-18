@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::pty::{
-    PtyBusyEvent, PtyExitEvent, PtyIdleEvent, PtyOutputEvent,
+    PtyBusyEvent, PtyExitEvent, PtyIdleEvent, PtyOutputEvent, PtyTitleEvent,
 };
 use crate::pty_protocol::{DaemonEvent, DaemonRequest, SessionMeta};
 
@@ -89,6 +89,9 @@ impl PtyClient {
             }
             DaemonEvent::Busy { session_id, title } => {
                 let _ = app_handle.emit("pty_busy", PtyBusyEvent { session_id, title });
+            }
+            DaemonEvent::Title { session_id, title } => {
+                let _ = app_handle.emit("pty_title", PtyTitleEvent { session_id, title });
             }
             DaemonEvent::Exit { session_id, exit_code } => {
                 let _ = app_handle.emit("pty_exit", PtyExitEvent { session_id, exit_code });

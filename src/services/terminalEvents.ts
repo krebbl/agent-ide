@@ -21,6 +21,11 @@ interface PtyBusyEvent {
   title: string;
 }
 
+interface PtyTitleEvent {
+  sessionId: string;
+  title: string;
+}
+
 interface PtyStateSnapshotEvent {
   sessionId: string;
   isBusy: boolean;
@@ -72,7 +77,6 @@ export async function initTerminalEventListeners() {
     store.updateSessionByPtyId(event.payload.sessionId, {
       isBusy: false,
       needsInput: true,
-      title: event.payload.title,
       ...(wasBusy && isNotActive ? { hasUnseenActivity: true } : {}),
     });
     const handler = idleHandlers.get(event.payload.sessionId);
@@ -84,11 +88,20 @@ export async function initTerminalEventListeners() {
     useTerminalStore.getState().updateSessionByPtyId(event.payload.sessionId, {
       isBusy: true,
       needsInput: false,
-      title: event.payload.title,
     });
     const handler = busyHandlers.get(event.payload.sessionId);
     if (handler) {
       handler(event.payload.title);
+    }
+  });
+  await listen<PtyTitleEvent>("pty_title", (event) => {
+    const title = event.payload.title
+      .replace(/[\u0000-\u001F\u007F-\u009F\uFFFD]/g, "")
+      .trim();
+    if (title) {
+      useTerminalStore.getState().updateSessionByPtyId(event.payload.sessionId, {
+        title,
+      });
     }
   });
   await listen<PtyErrorEvent>("pty_error", (event) => {
@@ -100,10 +113,13 @@ export async function initTerminalEventListeners() {
     }
   });
   await listen<PtyStateSnapshotEvent>("pty_state_snapshot", (event) => {
+    const title = event.payload.title
+      .replace(/[\u0000-\u001F\u007F-\u009F\uFFFD]/g, "")
+      .trim();
     useTerminalStore.getState().updateSessionByPtyId(event.payload.sessionId, {
       isBusy: event.payload.isBusy,
       needsInput: !event.payload.isBusy,
-      title: event.payload.title,
+      ...(title ? { title } : {}),
     });
   });
 }

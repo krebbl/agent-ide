@@ -29,6 +29,13 @@ pub struct PtyBusyEvent {
     pub title: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyTitleEvent {
+    pub session_id: String,
+    pub title: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Osc133Event {
     Start,
@@ -114,6 +121,132 @@ pub fn scan_osc133_command(state: &mut Vec<u8>, data: &[u8]) -> Option<Osc133Eve
     result
 }
 
+pub fn scan_osc_title(state: &mut Vec<u8>, data: &[u8]) -> Option<String> {
+    fn sanitize_title(title: &str) -> Option<String> {
+        let cleaned: String = title
+            .chars()
+            .filter(|c| !c.is_control() && *c != '\u{FFFD}')
+            .collect();
+        let trimmed = cleaned.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+
+    // Look for OSC 0 or OSC 2 title sequences: ESC ] 0 ; title BEL/ST
+    const MARKER_PREFIX: &[u8] = b"\x1b]";
+    let mut buffer = Vec::with_capacity(state.len() + data.len());
+    buffer.extend_from_slice(state);
+    buffer.extend_from_slice(data);
+
+    let mut result: Option<String> = None;
+    let mut carry_start: Option<usize> = None;
+    let mut start = 0;
+
+    while start + MARKER_PREFIX.len() <= buffer.len() {
+        if let Some(pos) = buffer[start..]
+            .windows(MARKER_PREFIX.len())
+            .position(|w| w == MARKER_PREFIX)
+        {
+            let marker_start = start + pos;
+            let kind_idx = marker_start + MARKER_PREFIX.len();
+
+            let kind = match buffer.get(kind_idx) {
+                Some(&c) => c,
+                None => {
+                    carry_start = Some(marker_start);
+                    break;
+                }
+            };
+
+            if kind != b'0' && kind != b'2' {
+                start = kind_idx + 1;
+                continue;
+            }
+
+            let semicolon_idx = kind_idx + 1;
+            match buffer.get(semicolon_idx) {
+                Some(&b';') => {}
+                Some(_) => {
+                    start = semicolon_idx + 1;
+                    continue;
+                }
+                None => {
+                    carry_start = Some(marker_start);
+                    break;
+                }
+            }
+
+            let title_start = semicolon_idx + 1;
+            let mut terminated = false;
+            let mut title_end = title_start;
+            let mut scan = title_start;
+            let mut malformed = false;
+            while scan < buffer.len() {
+                if buffer[scan] == 0x07 || buffer[scan] == 0x9c {
+                    terminated = true;
+                    title_end = scan;
+                    break;
+                }
+                if buffer[scan] == 0x1b {
+                    match buffer.get(scan + 1) {
+                        Some(&b'\\') => {
+                            terminated = true;
+                            title_end = scan;
+                            break;
+                        }
+                        Some(_) => {
+                            // Non-ST escape inside title; malformed.
+                            malformed = true;
+                            start = marker_start + 1;
+                            break;
+                        }
+                        None => {
+                            // ESC may be the start of an ST that continues in the next chunk.
+                            break;
+                        }
+                    }
+                }
+                scan += 1;
+            }
+
+            if terminated {
+                if let Some(title) = sanitize_title(&String::from_utf8_lossy(&buffer[title_start..title_end])) {
+                    result = Some(title);
+                }
+                start = scan + 1;
+            } else if malformed {
+                // start already advanced past the malformed marker.
+            } else {
+                carry_start = Some(marker_start);
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    state.clear();
+    if let Some(from) = carry_start {
+        state.extend_from_slice(&buffer[from..]);
+    } else {
+        // Keep only a genuine partial marker suffix (ESC or ESC ]).
+        let keep = if buffer.ends_with(MARKER_PREFIX) {
+            MARKER_PREFIX.len()
+        } else if buffer.last() == Some(&MARKER_PREFIX[0]) {
+            1
+        } else {
+            0
+        };
+        if keep > 0 {
+            state.extend_from_slice(&buffer[buffer.len() - keep..]);
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +309,91 @@ mod tests {
     fn split_between_st_bytes() {
         let (result, _) = scan_split(&[b"foo \x1b]133;D\x1b", b"\\ bar"]);
         assert_eq!(result, Some(Osc133Event::End));
+    }
+
+    fn scan_title_once(data: &[u8]) -> Option<String> {
+        let mut state = Vec::new();
+        scan_osc_title(&mut state, data)
+    }
+
+    fn scan_title_split(parts: &[&[u8]]) -> (Option<String>, Vec<u8>) {
+        let mut state = Vec::new();
+        let mut result = None;
+        for part in parts {
+            if let Some(title) = scan_osc_title(&mut state, part) {
+                result = Some(title);
+            }
+        }
+        (result, state)
+    }
+
+    #[test]
+    fn detects_osc0_title_bel() {
+        assert_eq!(
+            scan_title_once(b"\x1b]0;my title\x07"),
+            Some("my title".to_string())
+        );
+    }
+
+    #[test]
+    fn detects_osc2_title_st() {
+        assert_eq!(
+            scan_title_once(b"\x1b]2;my title\x1b\\"),
+            Some("my title".to_string())
+        );
+    }
+
+    #[test]
+    fn ignores_osc1_title() {
+        assert_eq!(scan_title_once(b"\x1b]1;icon\x07"), None);
+    }
+
+    #[test]
+    fn detects_title_split_across_chunks() {
+        let (result, _) = scan_title_split(&[b"foo \x1b]0;my", b" title\x07 bar"]);
+        assert_eq!(result, Some("my title".to_string()));
+    }
+
+    #[test]
+    fn detects_title_split_at_st() {
+        let (result, _) = scan_title_split(&[b"\x1b]2;my title\x1b", b"\\"]);
+        assert_eq!(result, Some("my title".to_string()));
+    }
+
+    #[test]
+    fn detects_two_sequential_title_calls() {
+        let mut state = Vec::new();
+        assert_eq!(
+            scan_osc_title(&mut state, b"\x1b]0;first\x07"),
+            Some("first".to_string())
+        );
+        assert!(state.is_empty());
+        assert_eq!(
+            scan_osc_title(&mut state, b"\x1b]0;second\x07"),
+            Some("second".to_string())
+        );
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn detects_last_title_in_single_chunk() {
+        let mut state = Vec::new();
+        let result = scan_osc_title(&mut state, b"\x1b]0;first\x07\x1b]0;second\x07");
+        assert_eq!(result, Some("second".to_string()));
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn ignores_title_with_only_invalid_utf8() {
+        assert_eq!(scan_title_once(b"\x1b]0;\xff\xfe\x07"), None);
+    }
+
+    #[test]
+    fn strips_replacement_character_and_controls() {
+        assert_eq!(
+            scan_title_once(b"\x1b]0;hello \xffworld\x07"),
+            Some("hello world".to_string())
+        );
     }
 }
 

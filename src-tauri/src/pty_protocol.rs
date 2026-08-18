@@ -81,6 +81,10 @@ pub enum DaemonEvent {
         session_id: String,
         exit_code: Option<i32>,
     },
+    Title {
+        session_id: String,
+        title: String,
+    },
     SessionList {
         sessions: Vec<SessionMeta>,
     },

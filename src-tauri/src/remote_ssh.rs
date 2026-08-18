@@ -270,6 +270,7 @@ async fn run_remote_terminal(
 ) {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let mut osc_state = Vec::new();
+    let mut title_state = Vec::new();
     let mut exit_code: Option<i32> = None;
 
     loop {
@@ -285,6 +286,9 @@ async fn run_remote_terminal(
                                 let _ = event_tx.send((session_id.clone(), crate::pty_engine::EngineEvent::Busy)).await;
                             }
                             None => {}
+                        }
+                        if let Some(title) = crate::pty::scan_osc_title(&mut title_state, data.as_ref()) {
+                            let _ = event_tx.send((session_id.clone(), crate::pty_engine::EngineEvent::Title(title))).await;
                         }
                         let encoded = STANDARD.encode(data.as_ref());
                         let _ = event_tx.send((session_id.clone(), crate::pty_engine::EngineEvent::Output(encoded))).await;

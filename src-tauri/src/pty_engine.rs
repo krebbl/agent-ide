@@ -6,7 +6,7 @@ use std::time::Duration;
 use tracing::{info, trace};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use crate::pty::scan_osc133_command;
+use crate::pty::{scan_osc133_command, scan_osc_title};
 
 pub trait PtyEngine: Send + Sync {
     fn write(&self, data: &[u8]) -> Result<(), String>;
@@ -50,6 +50,7 @@ pub enum EngineEvent {
     Output(String),
     Idle,
     Busy,
+    Title(String),
     Exit(Option<i32>),
 }
 
@@ -107,6 +108,7 @@ impl LocalPtyEngine {
             let mut reader = master_reader;
             let mut buffer = [0u8; 4096];
             let mut osc_state = Vec::new();
+            let mut title_state = Vec::new();
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
@@ -125,6 +127,12 @@ impl LocalPtyEngine {
                                 ));
                             }
                             None => {}
+                        }
+                        if let Some(title) = scan_osc_title(&mut title_state, &buffer[..n]) {
+                            let _ = reader_event_tx.blocking_send((
+                                reader_session_id.clone(),
+                                EngineEvent::Title(title),
+                            ));
                         }
                         let data = STANDARD.encode(&buffer[..n]);
                         let _ = reader_event_tx.blocking_send((

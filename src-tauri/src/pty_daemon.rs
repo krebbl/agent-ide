@@ -237,6 +237,21 @@ impl PtyDaemon {
                     );
                     continue;
                 }
+                EngineEvent::Title(title) => {
+                    if let Some(session) = map.get_mut(&session_id) {
+                        if session.meta.title != title {
+                            session.meta.title = title.clone();
+                            dirty = true;
+                        }
+                    }
+                    let event = DaemonEvent::Title { session_id, title };
+                    drop(map);
+                    if dirty {
+                        Self::persist(&sessions, &persistence_path);
+                    }
+                    let _ = Self::send_to_client(&client_tx, event);
+                    continue;
+                }
                 EngineEvent::Idle => {
                     if let Some(session) = map.get_mut(&session_id) {
                         if session.meta.is_busy {
