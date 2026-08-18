@@ -235,7 +235,7 @@ export default function TerminalView({
     terminal.loadAddon(new ClipboardAddon());
     terminal.loadAddon(
       new WebLinksAddon(async (_event, uri) => {
-        await invoke("util_open_url", { url: uri });
+        await openUrl(uri);
       }),
     );
 
