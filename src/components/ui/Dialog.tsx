@@ -8,6 +8,7 @@ interface DialogProps {
   scrollable?: boolean;
   danger?: boolean;
   closeOnBackdrop?: boolean;
+  placement?: "center" | "top";
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
@@ -20,6 +21,7 @@ export default function Dialog({
   scrollable = false,
   danger = false,
   closeOnBackdrop = true,
+  placement = "center",
   onClose,
   children,
   footer,
@@ -40,7 +42,9 @@ export default function Dialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className={`fixed inset-0 z-50 flex justify-center bg-black/60 ${
+        placement === "top" ? "items-start pt-16" : "items-center"
+      }`}
       onClick={closeOnBackdrop ? onClose : undefined}
     >
       <div

@@ -107,6 +107,7 @@ export default function FileSearchDialog({
       title="Search Files"
       icon={<Search size={16} className="text-[var(--color-blue)]" />}
       width="560px"
+      placement="top"
       onClose={onClose}
     >
       <input
