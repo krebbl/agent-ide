@@ -54,6 +54,7 @@ export default function NewAgentSessionDialog({
   const [branchesError, setBranchesError] = useState<string | null>(null);
   const [worktreeName, setWorktreeName] = useState("");
   const [worktreeNameDirty, setWorktreeNameDirty] = useState(false);
+  const [createNew, setCreateNew] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,9 +63,9 @@ export default function NewAgentSessionDialog({
   const existingNames = worktrees.map((w) => w.id);
 
   const existingWorktree = worktrees.find((w) => w.branch === selectedBranch);
-  const needsCreate = Boolean(selectedBranch) && !existingWorktree;
+  const willCreate = Boolean(selectedBranch) && (createNew || !existingWorktree);
   const effectiveWorktreeName =
-    needsCreate ? worktreeName || generateWorktreeName(selectedBranch, existingNames) : "";
+    willCreate ? worktreeName || generateWorktreeName(selectedBranch, existingNames) : "";
 
   useEffect(() => {
     let cancelled = false;
@@ -132,10 +133,15 @@ export default function NewAgentSessionDialog({
   }, [projectId]);
 
   useEffect(() => {
-    if (needsCreate && !worktreeNameDirty) {
+    setCreateNew(false);
+    setWorktreeNameDirty(false);
+  }, [selectedBranch]);
+
+  useEffect(() => {
+    if (willCreate && !worktreeNameDirty) {
       setWorktreeName(generateWorktreeName(selectedBranch, existingNames));
     }
-  }, [selectedBranch, needsCreate, worktreeNameDirty, existingNames]);
+  }, [selectedBranch, willCreate, worktreeNameDirty, existingNames]);
 
   const agentOptions = agents.map((a) => ({
     value: a.id,
@@ -172,7 +178,7 @@ export default function NewAgentSessionDialog({
   }, [worktrees, availableBranches]);
 
   const canSubmit =
-    selectedAgentId && prompt.trim() && selectedBranch && (!needsCreate || effectiveWorktreeName);
+    selectedAgentId && prompt.trim() && selectedBranch && (!willCreate || effectiveWorktreeName);
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -185,20 +191,34 @@ export default function NewAgentSessionDialog({
         prompt.trim(),
       );
 
-      if (needsCreate) {
+      let worktreeId: string;
+      if (willCreate) {
         await addWorktree(projectId, selectedBranch, effectiveWorktreeName, false);
-      }
-      const refreshed = useProjectStore.getState().projects.find((p) => p.id === projectId);
-      const wt = refreshed?.worktrees.find(
-        (w) => w.branch === selectedBranch && (needsCreate || !w.isMain),
-      ) ?? refreshed?.worktrees.find((w) => w.branch === selectedBranch);
-      if (!wt) {
-        throw new Error(`Worktree for branch "${selectedBranch}" was not found`);
+        const refreshed = useProjectStore.getState().projects.find((p) => p.id === projectId);
+        const created = refreshed?.worktrees.find((w) => w.id === effectiveWorktreeName);
+        if (!created) {
+          throw new Error(
+            `Worktree "${effectiveWorktreeName}" was not found after creation`,
+          );
+        }
+        worktreeId = created.id;
+      } else {
+        if (!existingWorktree) {
+          throw new Error("Selected worktree was not found");
+        }
+        worktreeId = existingWorktree.id;
       }
 
-      await setActiveWorktree(projectId, wt.id);
+      await setActiveWorktree(projectId, worktreeId);
+      const wt = useProjectStore
+        .getState()
+        .projects.find((p) => p.id === projectId)
+        ?.worktrees.find((w) => w.id === worktreeId);
+      if (!wt) {
+        throw new Error("Worktree was not found");
+      }
       const projectType = project?.type === "ssh" ? "ssh" : "local";
-      await addSession(wt.path, projectType, projectId, wt.id, argv);
+      await addSession(wt.path, projectType, projectId, worktreeId, argv);
       onClose();
     } catch (e) {
       setError(String(e));
@@ -305,7 +325,62 @@ export default function NewAgentSessionDialog({
               {branchesError}
             </div>
           )}
-          {needsCreate && (
+          {existingWorktree && (
+            <div className="mt-3 space-y-3 rounded-md border border-[var(--color-surface0)] bg-[var(--color-surface0)]/30 p-3">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setCreateNew(false)}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    !createNew
+                      ? "bg-[var(--color-blue)]/20 text-[var(--color-blue)]"
+                      : "bg-[var(--color-surface0)] text-[var(--color-overlay1)] hover:bg-[var(--color-surface1)]"
+                  }`}
+                >
+                  Use existing worktree
+                </button>
+                <button
+                  onClick={() => setCreateNew(true)}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    createNew
+                      ? "bg-[var(--color-blue)]/20 text-[var(--color-blue)]"
+                      : "bg-[var(--color-surface0)] text-[var(--color-overlay1)] hover:bg-[var(--color-surface1)]"
+                  }`}
+                >
+                  New worktree
+                </button>
+              </div>
+              {!createNew ? (
+                <div className="flex items-center gap-1.5 text-xs text-[var(--color-subtext1)]">
+                  <GitBranch size={12} className="text-[var(--color-green)]" />
+                  Uses existing worktree{" "}
+                  <span className="font-mono">{worktreeLabel(existingWorktree)}</span>
+                </div>
+              ) : (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">
+                    Worktree Name{" "}
+                    <span className="text-[var(--color-overlay0)]">
+                      (optional, auto-generated)
+                    </span>
+                  </label>
+                  <input
+                    type="text"
+                    value={worktreeName}
+                    onChange={(e) => {
+                      setWorktreeNameDirty(true);
+                      setWorktreeName(
+                        e.target.value.replace(/\s/g, "-").replace(/[^a-zA-Z0-9_-]/g, ""),
+                      );
+                    }}
+                    pattern="[a-zA-Z0-9_-]*"
+                    placeholder="auto-generated from branch"
+                    className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          {!existingWorktree && willCreate && (
             <div className="mt-3 space-y-3 rounded-md border border-[var(--color-surface0)] bg-[var(--color-surface0)]/30 p-3">
               <p className="flex items-center gap-1.5 text-xs text-[var(--color-subtext1)]">
                 <GitBranch size={12} className="text-[var(--color-mauve)]" />
@@ -332,13 +407,6 @@ export default function NewAgentSessionDialog({
                   className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
                 />
               </div>
-            </div>
-          )}
-          {existingWorktree && (
-            <div className="mt-3 flex items-center gap-1.5 rounded-md border border-[var(--color-surface0)] bg-[var(--color-surface0)]/30 px-3 py-2 text-xs text-[var(--color-subtext1)]">
-              <GitBranch size={12} className="text-[var(--color-green)]" />
-              Uses existing worktree{" "}
-              <span className="font-mono">{worktreeLabel(existingWorktree)}</span>
             </div>
           )}
         </div>
