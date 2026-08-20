@@ -261,8 +261,7 @@ pub fn launch_command(
 }
 
 /// Model catalogue for an agent. Curated defaults, enriched at runtime where
-/// the CLI exposes the authoritative list (`opencode models`) or the user's
-/// config (`~/.omp/agent/config.yml` modelRoles).
+/// the CLI exposes the authoritative list (`opencode models`, `omp models`).
 pub fn list_agent_models(agent_id: &str) -> Vec<AgentModel> {
     let agent = match builtin_agents().into_iter().find(|a| a.id == agent_id) {
         Some(a) => a,
@@ -270,17 +269,7 @@ pub fn list_agent_models(agent_id: &str) -> Vec<AgentModel> {
     };
     match agent.id.as_str() {
         "opencode" => opencode_models().unwrap_or_default(),
-        "omp" => {
-            let mut models = Vec::new();
-            if let Some(default) = omp_config_default_model() {
-                models.push(AgentModel {
-                    label: format!("{} (config default)", default),
-                    id: default,
-                });
-            }
-            models.extend(agent.models);
-            models
-        }
+        "omp" => omp_models().unwrap_or(agent.models),
         _ => agent.models,
     }
 }
@@ -300,6 +289,60 @@ fn opencode_models() -> Option<Vec<AgentModel>> {
             label: line.to_string(),
         })
         .collect();
+    if models.is_empty() {
+        None
+    } else {
+        Some(models)
+    }
+}
+
+#[derive(Deserialize)]
+struct OmpModelsResponse {
+    #[serde(default)]
+    models: Vec<OmpModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct OmpModelEntry {
+    #[serde(default)]
+    selector: String,
+    #[serde(default)]
+    name: String,
+}
+
+/// Full model catalogue from `omp models --json`. The `selector` is the value
+/// omp's `--model` flag accepts. The config default (which may use a :high
+/// suffix the catalogue does not contain) is prepended as its own entry.
+fn omp_models() -> Option<Vec<AgentModel>> {
+    let output = Command::new("omp")
+        .args(["models", "--json"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let parsed: OmpModelsResponse = serde_json::from_slice(&output.stdout).ok()?;
+    let mut models: Vec<AgentModel> = Vec::new();
+    if let Some(default) = omp_config_default_model() {
+        models.push(AgentModel {
+            label: format!("{} (config default)", default),
+            id: default,
+        });
+    }
+    for entry in parsed.models {
+        if entry.selector.trim().is_empty() {
+            continue;
+        }
+        let label = if entry.name.trim().is_empty() {
+            entry.selector.clone()
+        } else {
+            entry.name
+        };
+        models.push(AgentModel {
+            id: entry.selector,
+            label,
+        });
+    }
     if models.is_empty() {
         None
     } else {
@@ -488,5 +531,41 @@ fn home_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         std::env::var_os("USERPROFILE").map(PathBuf::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_omp_models_json_entries() {
+        let json = r#"{"models":[
+            {"provider":"openrouter","id":"~x/y","selector":"openrouter/~x/y","name":"X Y"},
+            {"provider":"openrouter","id":"~a/b","selector":"openrouter/~a/b","name":"A B"}
+        ]}"#;
+        let parsed: OmpModelsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.models.len(), 2);
+        assert_eq!(parsed.models[0].selector, "openrouter/~x/y");
+        assert_eq!(parsed.models[0].name, "X Y");
+    }
+
+    #[test]
+    fn omp_models_response_allows_missing_fields() {
+        let parsed: OmpModelsResponse = serde_json::from_str(r#"{"models":[]}"#).unwrap();
+        assert!(parsed.models.is_empty());
+    }
+
+    #[test]
+    fn omp_models_skips_empty_selector() {
+        // Entries without a usable selector must be skipped, not emitted as
+        // blank options.
+        let json = r#"{"models":[
+            {"selector":"openrouter/~x/y","name":"X Y"},
+            {"selector":"","name":"Broken"}
+        ]}"#;
+        let parsed: OmpModelsResponse = serde_json::from_str(json).unwrap();
+        let count = parsed.models.iter().filter(|m| !m.selector.trim().is_empty()).count();
+        assert_eq!(count, 1);
     }
 }
