@@ -1,4 +1,5 @@
 mod agents;
+mod agent_detect;
 pub mod commands;
 pub mod config;
 pub mod event_bus;

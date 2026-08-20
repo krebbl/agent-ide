@@ -6,8 +6,12 @@ use std::time::{Duration, Instant};
 use tracing::{info, trace};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use async_trait::async_trait;
+use crate::agent_detect;
 use crate::pty::{scan_osc133_command, scan_osc_title};
+use crate::pty_protocol::ProcessInfo;
 
+#[async_trait]
 pub trait PtyEngine: Send + Sync {
     fn write(&self, data: &[u8]) -> Result<(), String>;
     fn resize(&self, cols: u16, rows: u16) -> Result<(), String>;
@@ -15,8 +19,15 @@ pub trait PtyEngine: Send + Sync {
     /// Process group id of the shell, when the backend can resolve one
     /// (local PTYs). Used to enumerate the terminal's processes.
     fn process_group_id(&self) -> Option<i32>;
+    /// Enumerate the processes running in this terminal session. Local
+    /// engines run `ps` on this host; remote engines query the server over
+    /// SSH. Defaults to empty.
+    async fn probe_processes(&self) -> Vec<ProcessInfo> {
+        Vec::new()
+    }
 }
 
+#[async_trait]
 impl PtyEngine for LocalPtyEngine {
     fn write(&self, data: &[u8]) -> Result<(), String> {
         let mut writer = self.writer.lock().unwrap();
@@ -53,6 +64,24 @@ impl PtyEngine for LocalPtyEngine {
         { self.shell_pgid.map(|p| p as i32) }
         #[cfg(not(unix))]
         { None }
+    }
+
+    #[cfg(unix)]
+    async fn probe_processes(&self) -> Vec<ProcessInfo> {
+        let Some(pgid) = self.process_group_id() else {
+            return Vec::new();
+        };
+        let Some(output) = std::process::Command::new("ps")
+            .args(["-A", "-o", "pgid=,pid=,comm=,args="])
+            .output()
+            .ok()
+        else {
+            return Vec::new();
+        };
+        if !output.status.success() {
+            return Vec::new();
+        }
+        agent_detect::parse_processes(&String::from_utf8_lossy(&output.stdout), pgid)
     }
 }
 
@@ -256,7 +285,7 @@ impl LocalPtyEngine {
                         .unwrap_or(true);
                     if command_running && probe_due {
                         last_agent_probe = Some(Instant::now());
-                        let probe = foreground_agent_name(fg_pgid, KNOWN_AGENT_BINARIES);
+                        let probe = foreground_agent_name(fg_pgid);
                         if probe != agent_name {
                             agent_name = probe;
                             let _ = monitor_event_tx.blocking_send((
@@ -285,67 +314,18 @@ impl LocalPtyEngine {
     }
 }
 
-/// Binary names of coding agents whose foreground presence makes a terminal
-/// session show up in the UI's Active section.
-const KNOWN_AGENT_BINARIES: &[&str] = &[
-    "claude",
-    "omp",
-    "opencode",
-    "codex",
-    "gemini",
-    "amp",
-    "mastracode",
-    "pi",
-    "copilot",
-    "cursor-agent",
-];
-
-fn matches_agent(comm: &str, argv0_base: &str, agents: &[&str]) -> Option<String> {
-    let argv0_base = argv0_base.rsplit('/').next().unwrap_or(argv0_base);
-    agents
-        .iter()
-        .find(|agent| comm == **agent || argv0_base == **agent)
-        .map(|name| name.to_string())
-}
-
-/// Scan `ps -e -o pgid=,comm=,args=` output for a known agent process whose
-/// process group matches `fg_pgid`. Matches on both `comm` (truncated to 16
-/// chars on macOS) and the basename of argv[0] (catches node-wrapped CLIs
-/// such as Claude Code).
-fn agent_name_from_ps_output(ps_output: &str, fg_pgid: i32, agents: &[&str]) -> Option<String> {
-    for line in ps_output.lines() {
-        let mut fields = line.split_whitespace();
-        let Some(pgid_token) = fields.next() else { continue };
-        let Ok(pgid) = pgid_token.parse::<i32>() else { continue };
-        if pgid != fg_pgid {
-            continue;
-        }
-        let comm = fields.next().unwrap_or("");
-        let argv0 = fields.next().unwrap_or("");
-        let argv0_base = argv0.rsplit('/').next().unwrap_or(argv0);
-        if let Some(name) = matches_agent(comm, argv0_base, agents) {
-            return Some(name);
-        }
-    }
-    None
-}
-
 /// Resolve the name of a known coding agent in the given foreground process
 /// group, or `None` when no known agent is running there.
 #[cfg(unix)]
-fn foreground_agent_name(fg_pgid: i32, agents: &[&str]) -> Option<String> {
+fn foreground_agent_name(fg_pgid: i32) -> Option<String> {
     let output = std::process::Command::new("ps")
-        .args(["-e", "-o", "pgid=,comm=,args="])
+        .args(["-A", "-o", "pgid=,pid=,comm=,args="])
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
-    agent_name_from_ps_output(
-        &String::from_utf8_lossy(&output.stdout),
-        fg_pgid,
-        agents,
-    )
+    agent_detect::detect_agent_in(&String::from_utf8_lossy(&output.stdout), fg_pgid)
 }
 
 fn default_shell() -> String {
@@ -380,61 +360,6 @@ fn command_exists(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn matches_agent_by_comm() {
-        assert_eq!(
-            matches_agent("claude", "", KNOWN_AGENT_BINARIES),
-            Some("claude".to_string())
-        );
-        assert_eq!(
-            matches_agent("omp", "-zsh", KNOWN_AGENT_BINARIES),
-            Some("omp".to_string())
-        );
-    }
-
-    #[test]
-    fn matches_agent_by_argv0_basename() {
-        // Node-wrapped CLI: comm is "node", argv0 points at the agent bin.
-        assert_eq!(
-            matches_agent("node", "/usr/local/bin/claude", KNOWN_AGENT_BINARIES),
-            Some("claude".to_string())
-        );
-    }
-
-    #[test]
-    fn ignores_non_agent_processes() {
-        assert_eq!(matches_agent("zsh", "zsh", KNOWN_AGENT_BINARIES), None);
-        assert_eq!(matches_agent("vim", "vim", KNOWN_AGENT_BINARIES), None);
-        assert_eq!(matches_agent("node", "npm", KNOWN_AGENT_BINARIES), None);
-    }
-
-    #[test]
-    fn parses_agent_from_ps_output() {
-        let output = "  1234 zsh    -zsh\n  4321 claude claude --dangerously-skip-permissions\n  4321 git   git status\n";
-        assert_eq!(
-            agent_name_from_ps_output(output, 4321, KNOWN_AGENT_BINARIES),
-            Some("claude".to_string())
-        );
-    }
-
-    #[test]
-    fn ps_output_other_pgid_ignored() {
-        let output = "  4321 claude claude\n  9999 zsh    -zsh\n";
-        assert_eq!(
-            agent_name_from_ps_output(output, 9999, KNOWN_AGENT_BINARIES),
-            None
-        );
-    }
-
-    #[test]
-    fn ps_output_missing_columns_tolerated() {
-        let output = "   -    ?? ???\n  4321 claude claude\n";
-        assert_eq!(
-            agent_name_from_ps_output(output, 4321, KNOWN_AGENT_BINARIES),
-            Some("claude".to_string())
-        );
-    }
 
     /// End-to-end: spawn a real PTY, run a fake `claude` script in the
     /// foreground, and assert the monitor emits Agent(Some("claude")) while

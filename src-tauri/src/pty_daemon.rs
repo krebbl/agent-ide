@@ -8,12 +8,12 @@ use tokio::sync::{mpsc, Mutex as TokioMutex};
 use tracing::{error, info, warn};
 
 use crate::pty_engine::{EngineEvent, LocalPtyEngine, PtyEngine};
-use crate::pty_protocol::{DaemonEvent, DaemonRequest, ProcessInfo, SessionMeta};
+use crate::pty_protocol::{DaemonEvent, DaemonRequest, SessionMeta};
 use crate::remote_ssh::{self, RemotePtyEngine, SessionHandle};
 
 struct DaemonSession {
     meta: SessionMeta,
-    engine: Option<Box<dyn PtyEngine>>,
+    engine: Option<Arc<dyn PtyEngine>>,
 }
 
 struct SshProject {
@@ -190,14 +190,20 @@ impl PtyDaemon {
                                     if let Ok(req) =
                                         serde_json::from_str::<DaemonRequest>(line.trim())
                                     {
+                                        // Clone the optional sender out of the
+                                        // lock guard: the request handler may
+                                        // await (remote probes), and holding a
+                                        // guard across await is not Send.
+                                        let client_tx_opt =
+                                            client_tx_cell.lock().unwrap().clone();
                                         daemon.handle_request(
                                             req,
                                             &sessions,
                                             &persistence_path,
                                             &event_tx,
-                                            client_tx_cell.lock().unwrap().as_ref(),
+                                            client_tx_opt.as_ref(),
                                             &ssh_manager,
-                                        );
+                                        ).await;
                                     }
                                 }
                                 Err(e) => {
@@ -324,7 +330,7 @@ impl PtyDaemon {
         }
     }
 
-    fn handle_request(
+    async fn handle_request(
         &self,
         req: DaemonRequest,
         sessions: &Arc<Mutex<HashMap<String, DaemonSession>>>,
@@ -387,7 +393,7 @@ impl PtyDaemon {
                     session_id.clone(),
                     DaemonSession {
                         meta,
-                        engine: Some(Box::new(engine)),
+                        engine: Some(Arc::new(engine)),
                     },
                 );
                 drop(map);
@@ -506,7 +512,7 @@ impl PtyDaemon {
                             if (latest_cols, latest_rows) != (cols, rows) {
                                 let _ = engine.resize(latest_cols, latest_rows);
                             }
-                            session.engine = Some(Box::new(engine));
+                            session.engine = Some(Arc::new(engine));
                         }
                         // If an engine is already attached (concurrent respawn),
                         // drop the redundant one; dropping it closes the channel.
@@ -596,13 +602,18 @@ impl PtyDaemon {
                 }
             }
             DaemonRequest::ProcessList { session_id } => {
-                let pgid = {
+                // Clone the engine Arc under the lock, then probe outside it:
+                // a remote probe can take seconds and must not block the
+                // daemon's other requests.
+                let engine = {
                     let map = sessions.lock().unwrap();
-                    map.get(&session_id).map(|s| s.meta.pgid).unwrap_or_default()
+                    map.get(&session_id)
+                        .and_then(|s| s.engine.as_ref().map(Arc::clone))
                 };
-                let processes = pgid
-                    .map(|p| list_processes_for_pgid(p))
-                    .unwrap_or_default();
+                let processes = match engine {
+                    Some(engine) => engine.probe_processes().await,
+                    None => Vec::new(),
+                };
                 if let Some(tx) = client_tx {
                     let _ = tx.send(DaemonEvent::ProcessList {
                         session_id,
@@ -629,11 +640,11 @@ impl PtyDaemon {
         let mut map = self.sessions.lock().unwrap();
         for mut meta in persisted {
             let session_id = meta.session_id.clone();
-            let engine: Option<Box<dyn PtyEngine>> = if meta.session_type == "local" {
+            let engine: Option<Arc<dyn PtyEngine>> = if meta.session_type == "local" {
                 match self.respawn_local_engine(&meta) {
                     Ok(e) => {
                         meta.pgid = e.process_group_id();
-                        Some(Box::new(e))
+                        Some(Arc::new(e))
                     }
                     Err(e) => {
                         error!(session_id = %session_id, error = %e, "failed to respawn persisted local pty session");
@@ -718,7 +729,7 @@ impl PtyDaemon {
                         if (latest_cols, latest_rows) != (meta.cols, meta.rows) {
                             let _ = engine.resize(latest_cols, latest_rows);
                         }
-                        session.engine = Some(Box::new(engine));
+                        session.engine = Some(Arc::new(engine));
                     }
                     // If an engine is already attached, drop the redundant one;
                     // dropping it closes the channel.
@@ -727,7 +738,7 @@ impl PtyDaemon {
                         session_id,
                         DaemonSession {
                             meta,
-                            engine: Some(Box::new(engine)),
+                            engine: Some(Arc::new(engine)),
                         },
                     );
                 }
@@ -759,84 +770,4 @@ fn basename(path: &str) -> String {
         .last()
         .map(|s| s.to_string())
         .unwrap_or_else(|| path.to_string())
-}
-
-/// Parse `ps -A -o pgid=,pid=,comm=,args=` output, keeping only rows whose
-/// process group matches `pgid`.
-fn parse_processes_for_pgid(ps_output: &str, pgid: i32) -> Vec<ProcessInfo> {
-    let mut procs = Vec::new();
-    for line in ps_output.lines() {
-        let tokens: Vec<String> = line.split_whitespace().map(|t| t.to_string()).collect();
-        if tokens.len() < 3 {
-            continue;
-        }
-        let Ok(row_pgid) = tokens[0].parse::<i32>() else { continue };
-        let Ok(pid) = tokens[1].parse::<i32>() else { continue };
-        if row_pgid != pgid {
-            continue;
-        }
-        let comm = tokens[2].clone();
-        let args = tokens[3..].join(" ");
-        procs.push(ProcessInfo {
-            pid,
-            pgid: row_pgid,
-            comm,
-            args,
-        });
-    }
-    procs
-}
-
-/// Enumerate the live processes sharing a process group via `ps -A`,
-/// i.e. the shell and its jobs running in one terminal session.
-fn list_processes_for_pgid(pgid: i32) -> Vec<ProcessInfo> {
-    let Some(output) = std::process::Command::new("ps")
-        .args(["-A", "-o", "pgid=,pid=,comm=,args="])
-        .output()
-        .ok()
-    else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    parse_processes_for_pgid(&String::from_utf8_lossy(&output.stdout), pgid)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn parse_once(output: &str, pgid: i32) -> Vec<ProcessInfo> {
-        parse_processes_for_pgid(output, pgid)
-    }
-
-    #[test]
-    fn filters_to_requested_pgid() {
-        let output = "  42  100 zsh    -zsh\n  42  101 claude claude --dangerously-skip-permissions\n  43  102 vim    file.txt\n";
-        let procs = parse_once(output, 42);
-        assert_eq!(procs.len(), 2);
-        assert_eq!(procs[0].pid, 100);
-        assert_eq!(procs[0].comm, "zsh");
-        assert_eq!(procs[1].pid, 101);
-        assert_eq!(procs[1].comm, "claude");
-        assert_eq!(procs[1].args, "claude --dangerously-skip-permissions");
-    }
-
-    #[test]
-    fn joins_remaining_args() {
-        let output = "  7 8 node /usr/local/bin/claude --something\n";
-        let procs = parse_once(output, 7);
-        assert_eq!(procs.len(), 1);
-        assert_eq!(procs[0].comm, "node");
-        assert_eq!(procs[0].args, "/usr/local/bin/claude --something");
-    }
-
-    #[test]
-    fn ignores_unparseable_rows() {
-        let output = "   -    ?? ???\n  9 10 zsh -zsh\n";
-        let procs = parse_once(output, 9);
-        assert_eq!(procs.len(), 1);
-        assert_eq!(procs[0].pid, 10);
-    }
 }
