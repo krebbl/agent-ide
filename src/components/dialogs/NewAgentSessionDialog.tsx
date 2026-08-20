@@ -39,7 +39,7 @@ export default function NewAgentSessionDialog({
   initialWorktreeId,
   onClose,
 }: NewAgentSessionDialogProps) {
-  const { projects, addWorktree, setActiveWorktree } = useProjectStore();
+  const { projects, addWorktree, setActiveWorktree, fetchWorktrees } = useProjectStore();
   const { addSession } = useTerminalStore();
   const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
@@ -121,6 +121,11 @@ export default function NewAgentSessionDialog({
   }, [projectId]);
 
   useEffect(() => {
+    fetchWorktrees(projectId).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  useEffect(() => {
     setBranchesLoading(true);
     setBranchesError(null);
     invoke<{ name: string; isRemote: boolean }[]>(
@@ -193,7 +198,19 @@ export default function NewAgentSessionDialog({
 
       let worktreeId: string;
       if (willCreate) {
-        await addWorktree(projectId, selectedBranch, effectiveWorktreeName, false);
+        if (existingWorktree) {
+          // Branch is checked out elsewhere; git forbids a second checkout of
+          // the same branch, so derive a new branch from it.
+          await addWorktree(
+            projectId,
+            effectiveWorktreeName,
+            effectiveWorktreeName,
+            false,
+            selectedBranch,
+          );
+        } else {
+          await addWorktree(projectId, selectedBranch, effectiveWorktreeName, false);
+        }
         const refreshed = useProjectStore.getState().projects.find((p) => p.id === projectId);
         const created = refreshed?.worktrees.find((w) => w.id === effectiveWorktreeName);
         if (!created) {
