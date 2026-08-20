@@ -13,6 +13,11 @@ pub struct SessionMeta {
     /// Foreground coding-agent binary name (claude, omp, ...), when detected.
     #[serde(default)]
     pub agent_name: Option<String>,
+    /// Live flag: a coding agent is the current foreground process right now.
+    /// Unlike `agent_name` (sticky session history), this clears when the
+    /// agent finishes.
+    #[serde(default)]
+    pub agent_active: bool,
     /// Local PTY process group id, used to enumerate the processes (shell +
     /// jobs) running in this terminal session. `None` for remote sessions.
     pub pgid: Option<i32>,

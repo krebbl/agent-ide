@@ -259,15 +259,23 @@ impl PtyDaemon {
                     continue;
                 }
                 EngineEvent::Agent(name) => {
-                    // Once an agent is detected for a session, keep it in the
-                    // metadata: the session stays an agent session until it
-                    // closes, so the UI can show it in Active while idle too.
-                    if let Some(agent) = name.as_ref() {
-                        if let Some(session) = map.get_mut(&session_id) {
-                            if session.meta.agent_name != Some(agent.to_string()) {
+                    // `name` is the live foreground agent (None once it
+                    // finishes). Keep `agent_name` sticky (session history)
+                    // and `agent_active` live so the UI can pick the icon.
+                    if let Some(session) = map.get_mut(&session_id) {
+                        let mut changed = false;
+                        if session.meta.agent_active != name.is_some() {
+                            session.meta.agent_active = name.is_some();
+                            changed = true;
+                        }
+                        if let Some(agent) = name.as_ref() {
+                            if session.meta.agent_name.as_deref() != Some(agent.as_str()) {
                                 session.meta.agent_name = Some(agent.clone());
-                                dirty = true;
+                                changed = true;
                             }
+                        }
+                        if changed {
+                            dirty = true;
                         }
                     }
                     let event = DaemonEvent::Agent { session_id, name };
@@ -363,6 +371,7 @@ impl PtyDaemon {
                     project_id,
                     worktree_id,
                     agent_name: None,
+                    agent_active: false,
                     pgid: None,
                     cols,
                     rows,
@@ -431,6 +440,7 @@ impl PtyDaemon {
                     title: title.clone(),
                     is_busy: false,
                     agent_name: None,
+                    agent_active: false,
                     pgid: None,
                     cols,
                     rows,

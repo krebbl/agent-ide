@@ -253,6 +253,14 @@ impl LocalPtyEngine {
                             shell_pgid = pgid,
                             "foreground command started"
                         );
+                        // A foreground command is running in this terminal
+                        // regardless of whether it emits OSC-133 markers.
+                        // Mark the session busy for the command's whole
+                        // duration, not just while it produces output.
+                        let _ = monitor_event_tx.blocking_send((
+                            monitor_session_id.clone(),
+                            EngineEvent::Busy,
+                        ));
                     } else if fg_pgid == pgid && command_running {
                         command_running = false;
                         info!(session_id = monitor_session_id, "foreground command finished");

@@ -212,6 +212,23 @@ mod tests {
     }
 
     #[test]
+    fn does_not_flag_npm_or_vite_as_agent() {
+        // `npm run dev` spawns node/vite processes; none are agents.
+        let output = "  42  100 npm  npm run dev\n  42  101 node /Users/x/.npm/_npx/node_modules/vite/bin/vite.js dev\n  42  102 node /usr/local/bin/npm\n";
+        let procs = parse_processes(output, 42);
+        assert!(procs.iter().all(|p| !p.is_agent));
+        assert_eq!(detect_agent_in(output, 42), None);
+    }
+
+    #[test]
+    fn flags_real_agent_rows() {
+        let output = "  42 100 zsh -zsh\n  42 101 node /usr/local/bin/claude --dangerously-skip-permissions\n";
+        let procs = parse_processes(output, 42);
+        assert!(procs[1].is_agent);
+        assert!(!procs[0].is_agent);
+    }
+
+    #[test]
     fn parses_agent_from_ps_output() {
         let output = "  1234 999 zsh    -zsh\n  4321 100 claude claude --dangerously-skip-permissions\n  4321 101 git   git status\n";
         assert_eq!(
