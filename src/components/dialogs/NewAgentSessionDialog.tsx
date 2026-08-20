@@ -64,8 +64,12 @@ export default function NewAgentSessionDialog({
 
   const existingWorktree = worktrees.find((w) => w.branch === selectedBranch);
   const willCreate = Boolean(selectedBranch) && (createNew || !existingWorktree);
-  const effectiveWorktreeName =
-    willCreate ? worktreeName || generateWorktreeName(selectedBranch, existingNames) : "";
+  // Auto-generate only for branches with no worktree yet. For the local/main
+  // branch or branches that already have a worktree the user picks the name.
+  const autoName = willCreate && !existingWorktree;
+  const effectiveWorktreeName = willCreate
+    ? worktreeName || (autoName ? generateWorktreeName(selectedBranch, existingNames) : "")
+    : "";
 
   useEffect(() => {
     let cancelled = false;
@@ -140,13 +144,14 @@ export default function NewAgentSessionDialog({
   useEffect(() => {
     setCreateNew(false);
     setWorktreeNameDirty(false);
+    setWorktreeName("");
   }, [selectedBranch]);
 
   useEffect(() => {
-    if (willCreate && !worktreeNameDirty) {
+    if (autoName && !worktreeNameDirty) {
       setWorktreeName(generateWorktreeName(selectedBranch, existingNames));
     }
-  }, [selectedBranch, willCreate, worktreeNameDirty, existingNames]);
+  }, [selectedBranch, autoName, worktreeNameDirty, existingNames]);
 
   const agentOptions = agents.map((a) => ({
     value: a.id,
