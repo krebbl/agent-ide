@@ -140,6 +140,13 @@ impl LocalPtyEngine {
             cmd.cwd(cwd);
         }
 
+        // A session started with a non-empty argv has no intervening shell:
+        // the spawned command IS the pty's foreground process group leader,
+        // so tcgetpgrp() equals shell_pgid for its whole lifetime. Without
+        // this flag the monitor never sees a "foreground command" and would
+        // never probe that group for a coding agent.
+        let direct_cmd = argv.as_ref().is_some_and(|a| !a.is_empty());
+
         let child = pair
             .slave
             .spawn_command(cmd)
@@ -221,6 +228,7 @@ impl LocalPtyEngine {
         let monitor_session_id = session_id.clone();
         let monitor_event_tx = event_tx.clone();
         let monitor_child = child_arc.clone();
+        let monitor_direct_cmd = direct_cmd;
         let monitor_handle = thread::spawn(move || {
             info!(session_id = monitor_session_id, "daemon local pty monitor started");
             let mut child = monitor_child.lock().unwrap();
@@ -256,7 +264,7 @@ impl LocalPtyEngine {
                     if fg_pgid < 0 {
                         let err = std::io::Error::last_os_error();
                         tracing::error!(session_id = monitor_session_id, error = %err, "tcgetpgrp failed");
-                    } else if fg_pgid != pgid && !command_running {
+                    } else if (monitor_direct_cmd || fg_pgid != pgid) && !command_running {
                         command_running = true;
                         info!(
                             session_id = monitor_session_id,
@@ -272,7 +280,7 @@ impl LocalPtyEngine {
                             monitor_session_id.clone(),
                             EngineEvent::Busy,
                         ));
-                    } else if fg_pgid == pgid && command_running {
+                    } else if !monitor_direct_cmd && fg_pgid == pgid && command_running {
                         command_running = false;
                         info!(session_id = monitor_session_id, "foreground command finished");
                         if agent_name.is_some() {
@@ -408,6 +416,7 @@ mod tests {
             80,
             24,
             event_tx,
+            None,
         )
         .expect("spawn engine");
 
@@ -442,5 +451,61 @@ mod tests {
 
         assert!(saw_agent, "expected Agent(Some(\"claude\")) while script ran");
         assert!(saw_clear, "expected Agent(None) after script finished");
+    }
+
+    /// Dialog-launched (argv) sessions spawn the agent directly as the pty's
+    /// process-group leader, so tcgetpgrp() == shell_pgid for its whole
+    /// lifetime. The monitor must treat it as a foreground command and keep
+    /// emitting Agent(Some("claude")) instead of never probing it.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn detects_agent_in_direct_spawned_argv() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::time::{Duration, Instant};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let claude_path = bin_dir.join("claude");
+        let mut f = std::fs::File::create(&claude_path).unwrap();
+        f.write_all(b"#!/bin/sh\nexec -a claude sleep 3\n").unwrap();
+        std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(64);
+        let engine = LocalPtyEngine::spawn(
+            "agent-argv-smoke-test".to_string(),
+            Some(tmp.path().to_string_lossy().to_string()),
+            80,
+            24,
+            event_tx,
+            Some(vec!["claude".to_string()]),
+        )
+        .expect("spawn engine");
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut saw_agent = false;
+        while Instant::now() < deadline {
+            tokio::select! {
+                ev = event_rx.recv() => {
+                    let Some((session_id, event)) = ev else { break };
+                    if session_id != "agent-argv-smoke-test" {
+                        continue;
+                    }
+                    if let EngineEvent::Agent(Some(name)) = event {
+                        if name == "claude" {
+                            saw_agent = true;
+                        }
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+            }
+        }
+
+        engine.kill().ok();
+
+        assert!(
+            saw_agent,
+            "expected Agent(Some(\"claude\")) for a directly-spawned argv session"
+        );
     }
 }
