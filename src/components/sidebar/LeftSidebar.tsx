@@ -6,6 +6,7 @@ import { useTerminalStore } from "../../stores/terminalStore";
 import { usePrStore } from "../../stores/prStore";
 import AddProjectDialog from "../dialogs/AddProjectDialog";
 import AddWorktreeDialog from "../dialogs/AddWorktreeDialog";
+import NewAgentSessionDialog from "../dialogs/NewAgentSessionDialog";
 import { Project, PrInfo, Worktree } from "../../types";
 import Dialog from "../ui/Dialog";
 import { openUrl } from "../../utils/openUrl";
@@ -28,12 +29,14 @@ function WorktreeContextMenu({
   projectType,
   onClose,
   onRemove,
+  onStartAgent,
 }: {
   worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number; locked: boolean };
   projectId: string;
   projectType: "local" | "ssh";
   onClose: () => void;
   onRemove: (force: boolean, deleteBranch: boolean) => Promise<void>;
+  onStartAgent: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -154,6 +157,16 @@ function WorktreeContextMenu({
         Open in Terminal
       </button>
       <button
+        onClick={() => {
+          onStartAgent();
+          onClose();
+        }}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]"
+      >
+        <Bot size={12} />
+        Start Agent Session
+      </button>
+      <button
         onClick={handleOpenInFileManager}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]"
       >
@@ -212,6 +225,7 @@ function WorktreeItem({
   isActive,
   onActivate,
   onRemove,
+  onStartAgent,
 }: {
   worktree: { id: string; branch: string; path: string; isMain: boolean; status: string; ahead: number; behind: number; locked: boolean };
   projectId: string;
@@ -219,6 +233,7 @@ function WorktreeItem({
   isActive: boolean;
   onActivate: () => void;
   onRemove: (force: boolean, deleteBranch: boolean) => Promise<void>;
+  onStartAgent: () => void;
 }) {
   const prEntry = usePrStore((s) => s.cache[`${projectId}:${worktree.branch}`]);
   const prText = prEntry?.pr ? `#${prEntry.pr.number}` : null;
@@ -382,6 +397,7 @@ function WorktreeItem({
             projectType={projectType}
             onClose={() => setShowMenu(false)}
             onRemove={onRemove}
+            onStartAgent={onStartAgent}
           />
         </div>
       )}
@@ -483,6 +499,8 @@ function ProjectItem({
   const prCache = usePrStore((s) => s.cache);
   const isWorktreeLoading = worktreeLoading[project.id] ?? false;
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showAgentDialog, setShowAgentDialog] = useState(false);
+  const [agentWorktreeId, setAgentWorktreeId] = useState<string | undefined>(undefined);
   const [showCleanupDialog, setShowCleanupDialog] = useState(false);
   const [cleanupCandidates, setCleanupCandidates] = useState<Worktree[]>([]);
   const [cleanupTarget, setCleanupTarget] = useState<string>("");
@@ -627,6 +645,17 @@ function ProjectItem({
           <button
             onClick={(e) => {
               e.stopPropagation();
+              setAgentWorktreeId(undefined);
+              setShowAgentDialog(true);
+            }}
+            className="text-[var(--color-overlay0)] hover:text-[var(--color-mauve)]"
+            title="Start agent session"
+          >
+            <Bot size={12} />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
               setShowAddDialog(true);
             }}
             className="text-[var(--color-overlay0)] hover:text-[var(--color-blue)]"
@@ -700,11 +729,22 @@ function ProjectItem({
                 setActiveWorktree(project.id, wt.id);
               }}
               onRemove={(force, deleteBranch) => handleRemoveWorktree(wt.path, force, deleteBranch)}
+              onStartAgent={() => {
+                setAgentWorktreeId(wt.id);
+                setShowAgentDialog(true);
+              }}
             />
           ))}
         </div>
       )}
       {showAddDialog && <AddWorktreeDialog projectId={project.id} onClose={() => setShowAddDialog(false)} />}
+      {showAgentDialog && (
+        <NewAgentSessionDialog
+          projectId={project.id}
+          initialWorktreeId={agentWorktreeId}
+          onClose={() => setShowAgentDialog(false)}
+        />
+      )}
       {showCleanupDialog && (
         <CleanupWorktreesDialog
           projectName={project.name}

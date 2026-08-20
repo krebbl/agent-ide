@@ -67,6 +67,13 @@ pub struct Project {
     pub connection: Connection,
     pub worktrees: Vec<Worktree>,
     pub active_worktree_id: Option<String>,
+    /// Last coding agent + model used for this project's agent sessions.
+    /// None when the user never started one; Default keeps old projects.json
+    /// (without these fields) loadable.
+    #[serde(default)]
+    pub preferred_agent: Option<String>,
+    #[serde(default)]
+    pub preferred_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -864,6 +871,32 @@ async fn check_agents_ready() -> Result<Vec<agents::AgentStatus>, String> {
     crate::commands::check_agents_ready().await
 }
 
+pub async fn cmd_list_agent_models(id: String) -> Result<Vec<agents::AgentModel>, String> {
+    Ok(agents::list_agent_models(&id))
+}
+
+#[tauri::command]
+async fn list_agent_models(id: String) -> Result<Vec<agents::AgentModel>, String> {
+    crate::commands::list_agent_models(id).await
+}
+
+pub async fn cmd_build_agent_command(
+    agent_id: String,
+    model: Option<String>,
+    prompt: String,
+) -> Result<Vec<String>, String> {
+    agents::launch_command(&agent_id, model.as_deref(), &prompt)
+}
+
+#[tauri::command]
+async fn build_agent_command(
+    agent_id: String,
+    model: Option<String>,
+    prompt: String,
+) -> Result<Vec<String>, String> {
+    crate::commands::build_agent_command(agent_id, model, prompt).await
+}
+
 use remote_ssh::ClientHandler;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1431,6 +1464,7 @@ fn add_worktree_local(
     branch: &str,
     name: &str,
     new_branch: bool,
+    base_branch: Option<&str>,
 ) -> Result<(), String> {
     let worktree_path = compute_worktree_path(repo_path, name)?;
 
@@ -1443,18 +1477,25 @@ fn add_worktree_local(
             .map_err(|e| format!("Failed to create worktree parent directory: {}", e))?;
     }
 
-    if !new_branch {
+    let args = if let Some(base) = base_branch {
+        // The chosen branch is already checked out elsewhere (git forbids a
+        // second checkout of the same branch), so derive a new branch from it.
+        let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
+        let base_exists = repo.find_branch(base, BranchType::Local).is_ok()
+            || repo.find_branch(base, BranchType::Remote).is_ok();
+        if !base_exists {
+            return Err(format!("Branch '{}' does not exist", base));
+        }
+        vec!["worktree", "add", "-b", branch, &worktree_path, base]
+    } else if new_branch {
+        vec!["worktree", "add", "-b", branch, &worktree_path]
+    } else {
         let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
         let branch_exists = repo.find_branch(branch, BranchType::Local).is_ok()
             || repo.find_branch(branch, BranchType::Remote).is_ok();
         if !branch_exists {
             return Err(format!("Branch '{}' does not exist", branch));
         }
-    }
-
-    let args = if new_branch {
-        vec!["worktree", "add", &worktree_path, "-b", branch]
-    } else {
         vec!["worktree", "add", &worktree_path, branch]
     };
     run_git_command(repo_path, &args)?;
@@ -1819,6 +1860,7 @@ async fn add_worktree_ssh(
     branch: &str,
     name: &str,
     new_branch: bool,
+    base_branch: Option<&str>,
     state: &AppState,
 ) -> Result<(), String> {
     let worktree_path = compute_worktree_path(repo_path, name)?;
@@ -1832,11 +1874,33 @@ async fn add_worktree_ssh(
         fs.mkdir_p(parent).await?;
     }
 
-    if new_branch {
-        run_git_command_ssh(project_id, repo_path, &["worktree", "add", &worktree_path, "-b", branch], state).await?;
+    let args: Vec<String> = if let Some(base) = base_branch {
+        vec![
+            "worktree".to_string(),
+            "add".to_string(),
+            "-b".to_string(),
+            branch.to_string(),
+            worktree_path.clone(),
+            base.to_string(),
+        ]
+    } else if new_branch {
+        vec![
+            "worktree".to_string(),
+            "add".to_string(),
+            "-b".to_string(),
+            branch.to_string(),
+            worktree_path.clone(),
+        ]
     } else {
-        run_git_command_ssh(project_id, repo_path, &["worktree", "add", &worktree_path, branch], state).await?;
-    }
+        vec![
+            "worktree".to_string(),
+            "add".to_string(),
+            worktree_path.clone(),
+            branch.to_string(),
+        ]
+    };
+    let args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    run_git_command_ssh(project_id, repo_path, &args, state).await?;
 
     Ok(())
 }
@@ -2032,6 +2096,7 @@ pub async fn cmd_git_worktree_add_async(
     branch: String,
     name: String,
     new_branch: Option<bool>,
+    base_branch: Option<String>,
 ) -> Result<(), String> {
     let projects = crate::commands::load_projects(state).await?;
     let project = projects
@@ -2040,12 +2105,24 @@ pub async fn cmd_git_worktree_add_async(
         .ok_or("Project not found")?;
 
     let new_branch = new_branch.unwrap_or(false);
+    let base_branch = base_branch.filter(|b| !b.trim().is_empty());
 
     match &project.connection {
-        Connection::Local { path: repo_path } => add_worktree_local(repo_path, &branch, &name, new_branch),
+        Connection::Local { path: repo_path } => {
+            add_worktree_local(repo_path, &branch, &name, new_branch, base_branch.as_deref())
+        }
         Connection::Ssh { .. } => {
             let repo_path = get_repo_path(project);
-            add_worktree_ssh(&project_id, &repo_path, &branch, &name, new_branch, state).await
+            add_worktree_ssh(
+                &project_id,
+                &repo_path,
+                &branch,
+                &name,
+                new_branch,
+                base_branch.as_deref(),
+                state,
+            )
+            .await
         }
     }
 }
@@ -2056,9 +2133,18 @@ async fn git_worktree_add_async(
     branch: String,
     name: String,
     new_branch: Option<bool>,
+    base_branch: Option<String>,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    crate::commands::git_worktree_add_async(state.inner().as_ref(), project_id, branch, name, new_branch).await
+    crate::commands::git_worktree_add_async(
+        state.inner().as_ref(),
+        project_id,
+        branch,
+        name,
+        new_branch,
+        base_branch,
+    )
+    .await
 }
 
 pub async fn cmd_git_worktree_remove_async(
@@ -3233,6 +3319,8 @@ pub fn run() {
             fs_search_files,
             check_agent_ready,
             check_agents_ready,
+            list_agent_models,
+            build_agent_command,
             pr_info::pr_for_branch,
             pr_info::pr_list_for_repo,
             lsp::lsp_start,

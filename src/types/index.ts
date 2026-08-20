@@ -22,6 +22,8 @@ export interface Project {
   connection: LocalConnection | SSHConnection;
   worktrees: Worktree[];
   activeWorktreeId: string | null;
+  preferredAgent?: string | null;
+  preferredModel?: string | null;
 }
 
 export interface Worktree {
@@ -107,6 +109,7 @@ export interface EditorTab {
 
 export type AgentId =
   | "claude"
+  | "omp"
   | "amp"
   | "codex"
   | "gemini"
@@ -153,4 +156,9 @@ export interface AgentStatus {
   enabled: boolean;
   installed: boolean;
   binaryPath: string | null;
+}
+
+export interface AgentModel {
+  id: string;
+  label: string;
 }

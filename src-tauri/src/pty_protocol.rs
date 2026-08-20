@@ -27,6 +27,10 @@ pub struct SessionMeta {
     pub pgid: Option<i32>,
     pub cols: u16,
     pub rows: u16,
+    /// Optional initial command argv. When present the daemon spawns this
+    /// program instead of a plain shell (local) or types it into the remote
+    /// shell after cd (ssh). Persisted so respawns keep the same command.
+    pub argv: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +55,7 @@ pub enum DaemonRequest {
         rows: u16,
         project_id: Option<String>,
         worktree_id: Option<String>,
+        argv: Option<Vec<String>>,
     },
     CreateRemote {
         session_id: String,
@@ -60,6 +65,7 @@ pub enum DaemonRequest {
         rows: u16,
         worktree_id: Option<String>,
         attach: bool,
+        argv: Option<Vec<String>>,
     },
     RegisterSshProject {
         project_id: String,
