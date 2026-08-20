@@ -44,7 +44,7 @@ export default function NewAgentSessionDialog({
   initialWorktreeId,
   onClose,
 }: NewAgentSessionDialogProps) {
-  const { projects, addWorktree, setActiveWorktree, fetchWorktrees } = useProjectStore();
+  const { projects, addWorktree, setActiveWorktree, fetchWorktrees, updateProject } = useProjectStore();
   const { addSession } = useTerminalStore();
   const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
@@ -87,7 +87,13 @@ const autoName = willCreate && !existingWorktree;
           (a) => a.installed && SUPPORTED_AGENTS.includes(a.id),
         );
         setAgents(available);
-        if (available.length > 0) {
+        const preferred = useProjectStore
+          .getState()
+          .projects.find((p) => p.id === projectId)?.preferredAgent;
+        const preferredAgent = available.find((a) => a.id === preferred);
+        if (preferredAgent) {
+          setSelectedAgentId(preferredAgent.id);
+        } else if (available.length > 0) {
           setSelectedAgentId(available[0].id);
         }
       })
@@ -100,7 +106,8 @@ const autoName = willCreate && !existingWorktree;
     return () => {
       cancelled = true;
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
 
   useEffect(() => {
     if (!selectedAgentId) {
@@ -108,13 +115,31 @@ const autoName = willCreate && !existingWorktree;
       setSelectedModel("");
       return;
     }
+    let cancelled = false;
     setModelsLoading(true);
     setSelectedModel("");
     listAgentModels(selectedAgentId)
-      .then((m) => setModels(m))
-      .catch(() => setModels([]))
-      .finally(() => setModelsLoading(false));
-  }, [selectedAgentId]);
+      .then((m) => {
+        if (cancelled) return;
+        setModels(m);
+        const preferred = useProjectStore
+          .getState()
+          .projects.find((p) => p.id === projectId)?.preferredModel;
+        if (preferred && m.some((x) => x.id === preferred)) {
+          setSelectedModel(preferred);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setModels([]);
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAgentId, projectId]);
 
   useEffect(() => {
     if (!project) return;
@@ -249,6 +274,10 @@ const autoName = willCreate && !existingWorktree;
       }
       const projectType = project?.type === "ssh" ? "ssh" : "local";
       await addSession(wt.path, projectType, projectId, worktreeId, argv);
+      updateProject(projectId, {
+        preferredAgent: selectedAgentId as AgentId,
+        preferredModel: selectedModel || null,
+      }).catch(() => {});
       onClose();
     } catch (e) {
       setError(String(e));

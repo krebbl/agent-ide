@@ -67,6 +67,13 @@ pub struct Project {
     pub connection: Connection,
     pub worktrees: Vec<Worktree>,
     pub active_worktree_id: Option<String>,
+    /// Last coding agent + model used for this project's agent sessions.
+    /// None when the user never started one; Default keeps old projects.json
+    /// (without these fields) loadable.
+    #[serde(default)]
+    pub preferred_agent: Option<String>,
+    #[serde(default)]
+    pub preferred_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -22,6 +22,8 @@ export interface Project {
   connection: LocalConnection | SSHConnection;
   worktrees: Worktree[];
   activeWorktreeId: string | null;
+  preferredAgent?: string | null;
+  preferredModel?: string | null;
 }
 
 export interface Worktree {
