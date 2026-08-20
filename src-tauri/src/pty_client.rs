@@ -8,13 +8,15 @@ use tracing::{info, warn};
 
 use crate::event_bus::EventBus;
 use crate::pty::{
-    PtyBusyEvent, PtyExitEvent, PtyIdleEvent, PtyOutputEvent, PtyTitleEvent,
+    PtyAgentEvent, PtyBusyEvent, PtyExitEvent, PtyIdleEvent, PtyOutputEvent,
+    PtyTitleEvent,
 };
-use crate::pty_protocol::{DaemonEvent, DaemonRequest, SessionMeta};
+use crate::pty_protocol::{DaemonEvent, DaemonRequest, ProcessInfo, SessionMeta};
 
 pub struct PtyClient {
     request_tx: mpsc::UnboundedSender<DaemonRequest>,
     list_waiter: Arc<Mutex<Option<tokio::sync::oneshot::Sender<Vec<SessionMeta>>>>>,
+    processes_waiter: Arc<Mutex<Option<tokio::sync::oneshot::Sender<Vec<ProcessInfo>>>>>,
     _daemon: Option<std::process::Child>,
     _read_task: tokio::task::JoinHandle<()>,
 }
@@ -39,6 +41,9 @@ impl PtyClient {
 
         let list_waiter = Arc::new(Mutex::new(None::<tokio::sync::oneshot::Sender<Vec<SessionMeta>>>));
         let list_waiter_read = Arc::clone(&list_waiter);
+        let processes_waiter =
+            Arc::new(Mutex::new(None::<tokio::sync::oneshot::Sender<Vec<ProcessInfo>>>));
+        let processes_waiter_read = Arc::clone(&processes_waiter);
         let event_bus_for_read = event_bus.clone();
         let read_task = tokio::spawn(async move {
             let mut reader = BufReader::new(read_half);
@@ -49,10 +54,18 @@ impl PtyClient {
                     Ok(0) => break,
                     Ok(_) => {
                         if let Ok(ev) = serde_json::from_str::<DaemonEvent>(line.trim()) {
-                            if let DaemonEvent::SessionList { sessions } = &ev {
-                                if let Some(tx) = list_waiter_read.lock().unwrap().take() {
-                                    let _ = tx.send(sessions.clone());
+                            match &ev {
+                                DaemonEvent::SessionList { sessions } => {
+                                    if let Some(tx) = list_waiter_read.lock().unwrap().take() {
+                                        let _ = tx.send(sessions.clone());
+                                    }
                                 }
+                                DaemonEvent::ProcessList { processes, .. } => {
+                                    if let Some(tx) = processes_waiter_read.lock().unwrap().take() {
+                                        let _ = tx.send(processes.clone());
+                                    }
+                                }
+                                _ => {}
                             }
                             Self::emit_event(&event_bus_for_read, ev);
                         }
@@ -70,6 +83,7 @@ impl PtyClient {
         Ok(Self {
             request_tx,
             list_waiter,
+            processes_waiter,
             _daemon: daemon,
             _read_task: read_task,
         })
@@ -95,6 +109,9 @@ impl PtyClient {
             DaemonEvent::Title { session_id, title } => {
                 event_bus.emit("pty_title", PtyTitleEvent { session_id, title });
             }
+            DaemonEvent::Agent { session_id, name } => {
+                event_bus.emit("pty_agent", PtyAgentEvent { session_id, name });
+            }
             DaemonEvent::Exit { session_id, exit_code } => {
                 event_bus.emit("pty_exit", PtyExitEvent { session_id, exit_code });
             }
@@ -114,6 +131,9 @@ impl PtyClient {
             }
             DaemonEvent::SessionList { sessions } => {
                 event_bus.emit("pty_session_list", PtySessionListEvent { sessions });
+            }
+            DaemonEvent::ProcessList { .. } => {
+                // request/response only; not broadcast as a frontend event
             }
             DaemonEvent::Error { session_id, message } => {
                 warn!("pty daemon error: {}", message);
@@ -228,6 +248,18 @@ impl PtyClient {
             .await
             .map_err(|_| "Timed out waiting for session list".to_string())?
             .map_err(|_| "Session list channel closed".to_string())
+    }
+
+    pub async fn session_processes(&self, session_id: String) -> Result<Vec<ProcessInfo>, String> {
+        let (tx, rx) = tokio::sync::oneshot::channel::<Vec<ProcessInfo>>();
+        *self.processes_waiter.lock().unwrap() = Some(tx);
+        self.request_tx
+            .send(DaemonRequest::ProcessList { session_id })
+            .map_err(|_| "pty daemon disconnected".to_string())?;
+        tokio::time::timeout(tokio::time::Duration::from_secs(5), rx)
+            .await
+            .map_err(|_| "Timed out waiting for session processes".to_string())?
+            .map_err(|_| "Session processes channel closed".to_string())
     }
 
     pub fn attach_all(&self) -> Result<(), String> {

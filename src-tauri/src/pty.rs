@@ -36,6 +36,13 @@ pub struct PtyTitleEvent {
     pub title: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyAgentEvent {
+    pub session_id: String,
+    pub name: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Osc133Event {
     Start,
@@ -444,6 +451,21 @@ pub async fn pty_list_sessions(
     state: tauri::State<'_, Arc<crate::AppState>>,
 ) -> Result<Vec<crate::pty_protocol::SessionMeta>, String> {
     crate::commands::pty_list_sessions(state.inner().as_ref()).await
+}
+
+pub async fn cmd_pty_session_processes(
+    state: &crate::AppState,
+    session_id: String,
+) -> Result<Vec<crate::pty_protocol::ProcessInfo>, String> {
+    require_pty_client(state)?.session_processes(session_id).await
+}
+
+#[tauri::command]
+pub async fn pty_session_processes(
+    session_id: String,
+    state: tauri::State<'_, Arc<crate::AppState>>,
+) -> Result<Vec<crate::pty_protocol::ProcessInfo>, String> {
+    crate::commands::pty_session_processes(state.inner().as_ref(), session_id).await
 }
 
 pub async fn cmd_pty_write(

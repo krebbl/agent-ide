@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, Mutex as TokioMutex};
 use tracing::{error, info, warn};
 
 use crate::pty_engine::{EngineEvent, LocalPtyEngine, PtyEngine};
-use crate::pty_protocol::{DaemonEvent, DaemonRequest, SessionMeta};
+use crate::pty_protocol::{DaemonEvent, DaemonRequest, ProcessInfo, SessionMeta};
 use crate::remote_ssh::{self, RemotePtyEngine, SessionHandle};
 
 struct DaemonSession {
@@ -252,6 +252,26 @@ impl PtyDaemon {
                     let _ = Self::send_to_client(&client_tx, event);
                     continue;
                 }
+                EngineEvent::Agent(name) => {
+                    // Once an agent is detected for a session, keep it in the
+                    // metadata: the session stays an agent session until it
+                    // closes, so the UI can show it in Active while idle too.
+                    if let Some(agent) = name.as_ref() {
+                        if let Some(session) = map.get_mut(&session_id) {
+                            if session.meta.agent_name != Some(agent.to_string()) {
+                                session.meta.agent_name = Some(agent.clone());
+                                dirty = true;
+                            }
+                        }
+                    }
+                    let event = DaemonEvent::Agent { session_id, name };
+                    drop(map);
+                    if dirty {
+                        Self::persist(&sessions, &persistence_path);
+                    }
+                    let _ = Self::send_to_client(&client_tx, event);
+                    continue;
+                }
                 EngineEvent::Idle => {
                     if let Some(session) = map.get_mut(&session_id) {
                         if session.meta.is_busy {
@@ -328,7 +348,7 @@ impl PtyDaemon {
                 }
 
                 let title = basename(cwd.as_deref().unwrap_or("~"));
-                let meta = SessionMeta {
+                let mut meta = SessionMeta {
                     session_id: session_id.clone(),
                     session_type: "local".to_string(),
                     cwd,
@@ -336,6 +356,8 @@ impl PtyDaemon {
                     is_busy: false,
                     project_id,
                     worktree_id,
+                    agent_name: None,
+                    pgid: None,
                     cols,
                     rows,
                 };
@@ -358,6 +380,7 @@ impl PtyDaemon {
                         return;
                     }
                 };
+                meta.pgid = engine.process_group_id();
 
                 let mut map = sessions.lock().unwrap();
                 map.insert(
@@ -401,6 +424,8 @@ impl PtyDaemon {
                     cwd,
                     title: title.clone(),
                     is_busy: false,
+                    agent_name: None,
+                    pgid: None,
                     cols,
                     rows,
                 };
@@ -570,6 +595,21 @@ impl PtyDaemon {
                     let _ = tx.send(DaemonEvent::SessionList { sessions: list });
                 }
             }
+            DaemonRequest::ProcessList { session_id } => {
+                let pgid = {
+                    let map = sessions.lock().unwrap();
+                    map.get(&session_id).map(|s| s.meta.pgid).unwrap_or_default()
+                };
+                let processes = pgid
+                    .map(|p| list_processes_for_pgid(p))
+                    .unwrap_or_default();
+                if let Some(tx) = client_tx {
+                    let _ = tx.send(DaemonEvent::ProcessList {
+                        session_id,
+                        processes,
+                    });
+                }
+            }
             DaemonRequest::Version { .. } => {
                 if let Some(tx) = client_tx {
                     let _ = tx.send(DaemonEvent::Version {
@@ -587,11 +627,14 @@ impl PtyDaemon {
         let content = std::fs::read_to_string(&self.persistence_path).unwrap_or_default();
         let persisted: Vec<SessionMeta> = serde_json::from_str(&content).unwrap_or_default();
         let mut map = self.sessions.lock().unwrap();
-        for meta in persisted {
+        for mut meta in persisted {
             let session_id = meta.session_id.clone();
             let engine: Option<Box<dyn PtyEngine>> = if meta.session_type == "local" {
                 match self.respawn_local_engine(&meta) {
-                    Ok(e) => Some(Box::new(e)),
+                    Ok(e) => {
+                        meta.pgid = e.process_group_id();
+                        Some(Box::new(e))
+                    }
                     Err(e) => {
                         error!(session_id = %session_id, error = %e, "failed to respawn persisted local pty session");
                         None
@@ -716,4 +759,84 @@ fn basename(path: &str) -> String {
         .last()
         .map(|s| s.to_string())
         .unwrap_or_else(|| path.to_string())
+}
+
+/// Parse `ps -A -o pgid=,pid=,comm=,args=` output, keeping only rows whose
+/// process group matches `pgid`.
+fn parse_processes_for_pgid(ps_output: &str, pgid: i32) -> Vec<ProcessInfo> {
+    let mut procs = Vec::new();
+    for line in ps_output.lines() {
+        let tokens: Vec<String> = line.split_whitespace().map(|t| t.to_string()).collect();
+        if tokens.len() < 3 {
+            continue;
+        }
+        let Ok(row_pgid) = tokens[0].parse::<i32>() else { continue };
+        let Ok(pid) = tokens[1].parse::<i32>() else { continue };
+        if row_pgid != pgid {
+            continue;
+        }
+        let comm = tokens[2].clone();
+        let args = tokens[3..].join(" ");
+        procs.push(ProcessInfo {
+            pid,
+            pgid: row_pgid,
+            comm,
+            args,
+        });
+    }
+    procs
+}
+
+/// Enumerate the live processes sharing a process group via `ps -A`,
+/// i.e. the shell and its jobs running in one terminal session.
+fn list_processes_for_pgid(pgid: i32) -> Vec<ProcessInfo> {
+    let Some(output) = std::process::Command::new("ps")
+        .args(["-A", "-o", "pgid=,pid=,comm=,args="])
+        .output()
+        .ok()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    parse_processes_for_pgid(&String::from_utf8_lossy(&output.stdout), pgid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_once(output: &str, pgid: i32) -> Vec<ProcessInfo> {
+        parse_processes_for_pgid(output, pgid)
+    }
+
+    #[test]
+    fn filters_to_requested_pgid() {
+        let output = "  42  100 zsh    -zsh\n  42  101 claude claude --dangerously-skip-permissions\n  43  102 vim    file.txt\n";
+        let procs = parse_once(output, 42);
+        assert_eq!(procs.len(), 2);
+        assert_eq!(procs[0].pid, 100);
+        assert_eq!(procs[0].comm, "zsh");
+        assert_eq!(procs[1].pid, 101);
+        assert_eq!(procs[1].comm, "claude");
+        assert_eq!(procs[1].args, "claude --dangerously-skip-permissions");
+    }
+
+    #[test]
+    fn joins_remaining_args() {
+        let output = "  7 8 node /usr/local/bin/claude --something\n";
+        let procs = parse_once(output, 7);
+        assert_eq!(procs.len(), 1);
+        assert_eq!(procs[0].comm, "node");
+        assert_eq!(procs[0].args, "/usr/local/bin/claude --something");
+    }
+
+    #[test]
+    fn ignores_unparseable_rows() {
+        let output = "   -    ?? ???\n  9 10 zsh -zsh\n";
+        let procs = parse_once(output, 9);
+        assert_eq!(procs.len(), 1);
+        assert_eq!(procs[0].pid, 10);
+    }
 }

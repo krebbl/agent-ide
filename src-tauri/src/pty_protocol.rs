@@ -10,8 +10,23 @@ pub struct SessionMeta {
     pub is_busy: bool,
     pub project_id: Option<String>,
     pub worktree_id: Option<String>,
+    /// Foreground coding-agent binary name (claude, omp, ...), when detected.
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    /// Local PTY process group id, used to enumerate the processes (shell +
+    /// jobs) running in this terminal session. `None` for remote sessions.
+    pub pgid: Option<i32>,
     pub cols: u16,
     pub rows: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessInfo {
+    pub pid: i32,
+    pub pgid: i32,
+    pub comm: String,
+    pub args: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +72,9 @@ pub enum DaemonRequest {
     },
     ListSessions,
     AttachAll,
+    ProcessList {
+        session_id: String,
+    },
     Version {
         token: String,
     },
@@ -85,8 +103,16 @@ pub enum DaemonEvent {
         session_id: String,
         title: String,
     },
+    Agent {
+        session_id: String,
+        name: Option<String>,
+    },
     SessionList {
         sessions: Vec<SessionMeta>,
+    },
+    ProcessList {
+        session_id: String,
+        processes: Vec<ProcessInfo>,
     },
     StateSnapshot {
         session_id: String,

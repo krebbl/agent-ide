@@ -26,6 +26,11 @@ interface PtyTitleEvent {
   title: string;
 }
 
+interface PtyAgentEvent {
+  sessionId: string;
+  name: string | null;
+}
+
 interface PtyStateSnapshotEvent {
   sessionId: string;
   isBusy: boolean;
@@ -101,6 +106,16 @@ export async function initTerminalEventListeners() {
     if (title) {
       useTerminalStore.getState().updateSessionByPtyId(event.payload.sessionId, {
         title,
+      });
+    }
+  });
+  await listen<PtyAgentEvent>("pty_agent", (event) => {
+    // Only ever set; never clear on idle. A session that has run a coding
+    // agent stays an agent session until it closes, so the Active section
+    // keeps showing it whether the agent is busy or idle.
+    if (event.payload.name) {
+      useTerminalStore.getState().updateSessionByPtyId(event.payload.sessionId, {
+        agentName: event.payload.name,
       });
     }
   });

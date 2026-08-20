@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge, BrushCleaning } from "lucide-react";
+import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Bot, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge, BrushCleaning } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import { useTerminalStore } from "../../stores/terminalStore";
@@ -726,7 +726,6 @@ export default function LeftSidebar() {
     activeProjectId,
     expandedProjectIds,
     setActiveProject,
-    setActiveWorktree,
     loadProjects,
     removeProject,
     toggleProjectExpanded,
@@ -806,26 +805,16 @@ export default function LeftSidebar() {
     });
   }, []);
 
-  const prCache = usePrStore((s) => s.cache);
   const sessions = useTerminalStore.getState().sessions;
-  const activeWorktrees = projects
-    .flatMap((project) =>
-      project.worktrees
-        .filter((wt) => {
-          const activity = getWorktreeActivity(sessions, project.id, wt.id);
-          return activity === "unseen" || activity === "busy";
-        })
-        .map((wt) => ({ project, worktree: wt })),
-    )
-    .sort((a, b) => {
-      if (a.worktree.isMain !== b.worktree.isMain) return a.worktree.isMain ? -1 : 1;
-      const aPr = prCache[`${a.project.id}:${a.worktree.branch}`]?.pr;
-      const bPr = prCache[`${b.project.id}:${b.worktree.branch}`]?.pr;
-      return (
-        getPrStatusRank(aPr) - getPrStatusRank(bPr) ||
-        a.worktree.branch.localeCompare(b.worktree.branch)
-      );
-    });
+  const projectNameById = new Map(projects.map((p) => [p.id, p.name]));
+  const agentSessions = sessions
+    .filter((s) => s.agentName)
+    .sort(
+      (a, b) =>
+        (projectNameById.get(a.projectId ?? "") ?? "").localeCompare(
+          projectNameById.get(b.projectId ?? "") ?? "",
+        ) || a.title.localeCompare(b.title),
+    );
   void sessionTick;
 
   return (
@@ -837,47 +826,49 @@ export default function LeftSidebar() {
       onDragEnd={handleDragEnd}
     >
       <div className="flex h-full flex-col">
-        {activeWorktrees.length > 0 && (
+        {agentSessions.length > 0 ? (
           <div className="border-b border-[var(--color-surface0)] py-1">
             <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-subtext1)]">
               Active
             </div>
-            {activeWorktrees.map(({ project, worktree }) => {
-              const activity = getWorktreeActivity(
-                useTerminalStore.getState().sessions,
-                project.id,
-                worktree.id,
-              );
+            {agentSessions.map((session) => {
+              const projectName =
+                projectNameById.get(session.projectId ?? "") ?? "";
               return (
                 <button
-                  key={`${project.id}:${worktree.id}`}
+                  key={`agent:${session.id}`}
                   onClick={() => {
                     const tStore = useTerminalStore.getState();
-                    tStore.sessions
-                      .filter((s) => s.worktreeId === worktree.id && s.hasUnseenActivity)
-                      .forEach((s) => tStore.markSessionSeen(s.id));
-                    setActiveProject(project.id);
-                    setActiveWorktree(project.id, worktree.id);
+                    if (session.hasUnseenActivity) {
+                      tStore.markSessionSeen(session.id);
+                    }
+                    tStore.focusSession(session.id);
                   }}
                   className="flex w-full items-center gap-2 px-3 py-1 text-left text-xs text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/50"
+                  title={`${session.agentName}${session.isBusy || session.processRunning ? " (busy)" : ""} — ${session.title}${projectName ? ` — ${projectName}` : ""}`}
                 >
-                  {activity === "busy" ? (
-                    <Loader2 size={10} className="animate-spin text-[var(--color-blue)]" />
-                  ) : activity === "unseen" ? (
-                    <span className="animate-blink text-[10px] font-bold text-[var(--color-green)]">!</span>
+                  {session.isBusy || session.processRunning ? (
+                    <Loader2
+                      size={10}
+                      className="shrink-0 animate-spin text-[var(--color-blue)]"
+                    />
                   ) : (
-                    <span className="text-[10px] font-bold text-[var(--color-blue)]">
-                      {useTerminalStore.getState().sessions.filter(
-                        (s) => s.projectId === project.id && s.worktreeId === worktree.id,
-                      ).length}
+                    <Bot
+                      size={10}
+                      className="shrink-0 text-[var(--color-mauve)]"
+                    />
+                  )}
+                  <span className="truncate">{session.title}</span>
+                  {projectName && (
+                    <span className="shrink-0 text-[10px] text-[var(--color-overlay1)]">
+                      {projectName}
                     </span>
                   )}
-                  <span className="truncate">{project.name} — {worktree.branch}</span>
                 </button>
               );
             })}
           </div>
-        )}
+        ) : null}
         <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-[var(--color-surface0)] px-3 min-w-0">
           <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-subtext1)] truncate">
             Projects

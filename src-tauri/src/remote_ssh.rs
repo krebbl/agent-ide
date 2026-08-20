@@ -249,6 +249,10 @@ impl crate::pty_engine::PtyEngine for RemotePtyEngine {
     fn kill(&self) -> Result<(), String> {
         Ok(())
     }
+
+    fn process_group_id(&self) -> Option<i32> {
+        None
+    }
 }
 
 impl Drop for RemotePtyEngine {

@@ -2,7 +2,7 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{info, trace};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -12,6 +12,9 @@ pub trait PtyEngine: Send + Sync {
     fn write(&self, data: &[u8]) -> Result<(), String>;
     fn resize(&self, cols: u16, rows: u16) -> Result<(), String>;
     fn kill(&self) -> Result<(), String>;
+    /// Process group id of the shell, when the backend can resolve one
+    /// (local PTYs). Used to enumerate the terminal's processes.
+    fn process_group_id(&self) -> Option<i32>;
 }
 
 impl PtyEngine for LocalPtyEngine {
@@ -44,6 +47,13 @@ impl PtyEngine for LocalPtyEngine {
         let mut child = self.child.lock().unwrap();
         child.kill().map_err(|e| format!("Failed to kill PTY: {}", e))
     }
+
+    fn process_group_id(&self) -> Option<i32> {
+        #[cfg(unix)]
+        { self.shell_pgid.map(|p| p as i32) }
+        #[cfg(not(unix))]
+        { None }
+    }
 }
 
 pub enum EngineEvent {
@@ -51,6 +61,9 @@ pub enum EngineEvent {
     Idle,
     Busy,
     Title(String),
+    /// Foreground coding-agent process name (claude, omp, ...), or `None`
+    /// when no known agent is in the foreground.
+    Agent(Option<String>),
     Exit(Option<i32>),
 }
 
@@ -172,6 +185,8 @@ impl LocalPtyEngine {
             info!(session_id = monitor_session_id, "daemon local pty monitor started");
             let mut child = monitor_child.lock().unwrap();
             let mut command_running = false;
+            let mut agent_name: Option<String> = None;
+            let mut last_agent_probe: Option<Instant> = None;
             loop {
                 match child.try_wait() {
                     Ok(Some(status)) => {
@@ -212,6 +227,14 @@ impl LocalPtyEngine {
                     } else if fg_pgid == pgid && command_running {
                         command_running = false;
                         info!(session_id = monitor_session_id, "foreground command finished");
+                        if agent_name.is_some() {
+                            agent_name = None;
+                            last_agent_probe = None;
+                            let _ = monitor_event_tx.blocking_send((
+                                monitor_session_id.clone(),
+                                EngineEvent::Agent(None),
+                            ));
+                        }
                         let _ = monitor_event_tx.blocking_send((
                             monitor_session_id.clone(),
                             EngineEvent::Idle,
@@ -224,6 +247,23 @@ impl LocalPtyEngine {
                             command_running,
                             "tcgetpgrp status"
                         );
+                    }
+
+                    // Probe the foreground process group for a known coding
+                    // agent at most every 500ms while a command is running.
+                    let probe_due = last_agent_probe
+                        .map(|t| t.elapsed() >= Duration::from_millis(500))
+                        .unwrap_or(true);
+                    if command_running && probe_due {
+                        last_agent_probe = Some(Instant::now());
+                        let probe = foreground_agent_name(fg_pgid, KNOWN_AGENT_BINARIES);
+                        if probe != agent_name {
+                            agent_name = probe;
+                            let _ = monitor_event_tx.blocking_send((
+                                monitor_session_id.clone(),
+                                EngineEvent::Agent(agent_name.clone()),
+                            ));
+                        }
                     }
                 }
 
@@ -243,6 +283,69 @@ impl LocalPtyEngine {
             _monitor_handle: monitor_handle,
         })
     }
+}
+
+/// Binary names of coding agents whose foreground presence makes a terminal
+/// session show up in the UI's Active section.
+const KNOWN_AGENT_BINARIES: &[&str] = &[
+    "claude",
+    "omp",
+    "opencode",
+    "codex",
+    "gemini",
+    "amp",
+    "mastracode",
+    "pi",
+    "copilot",
+    "cursor-agent",
+];
+
+fn matches_agent(comm: &str, argv0_base: &str, agents: &[&str]) -> Option<String> {
+    let argv0_base = argv0_base.rsplit('/').next().unwrap_or(argv0_base);
+    agents
+        .iter()
+        .find(|agent| comm == **agent || argv0_base == **agent)
+        .map(|name| name.to_string())
+}
+
+/// Scan `ps -e -o pgid=,comm=,args=` output for a known agent process whose
+/// process group matches `fg_pgid`. Matches on both `comm` (truncated to 16
+/// chars on macOS) and the basename of argv[0] (catches node-wrapped CLIs
+/// such as Claude Code).
+fn agent_name_from_ps_output(ps_output: &str, fg_pgid: i32, agents: &[&str]) -> Option<String> {
+    for line in ps_output.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(pgid_token) = fields.next() else { continue };
+        let Ok(pgid) = pgid_token.parse::<i32>() else { continue };
+        if pgid != fg_pgid {
+            continue;
+        }
+        let comm = fields.next().unwrap_or("");
+        let argv0 = fields.next().unwrap_or("");
+        let argv0_base = argv0.rsplit('/').next().unwrap_or(argv0);
+        if let Some(name) = matches_agent(comm, argv0_base, agents) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// Resolve the name of a known coding agent in the given foreground process
+/// group, or `None` when no known agent is running there.
+#[cfg(unix)]
+fn foreground_agent_name(fg_pgid: i32, agents: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .args(["-e", "-o", "pgid=,comm=,args="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    agent_name_from_ps_output(
+        &String::from_utf8_lossy(&output.stdout),
+        fg_pgid,
+        agents,
+    )
 }
 
 fn default_shell() -> String {
@@ -272,4 +375,128 @@ fn default_shell() -> String {
 fn command_exists(name: &str) -> bool {
     let path = std::env::var("PATH").unwrap_or_default();
     std::env::split_paths(&path).any(|dir| dir.join(name).is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches_agent_by_comm() {
+        assert_eq!(
+            matches_agent("claude", "", KNOWN_AGENT_BINARIES),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            matches_agent("omp", "-zsh", KNOWN_AGENT_BINARIES),
+            Some("omp".to_string())
+        );
+    }
+
+    #[test]
+    fn matches_agent_by_argv0_basename() {
+        // Node-wrapped CLI: comm is "node", argv0 points at the agent bin.
+        assert_eq!(
+            matches_agent("node", "/usr/local/bin/claude", KNOWN_AGENT_BINARIES),
+            Some("claude".to_string())
+        );
+    }
+
+    #[test]
+    fn ignores_non_agent_processes() {
+        assert_eq!(matches_agent("zsh", "zsh", KNOWN_AGENT_BINARIES), None);
+        assert_eq!(matches_agent("vim", "vim", KNOWN_AGENT_BINARIES), None);
+        assert_eq!(matches_agent("node", "npm", KNOWN_AGENT_BINARIES), None);
+    }
+
+    #[test]
+    fn parses_agent_from_ps_output() {
+        let output = "  1234 zsh    -zsh\n  4321 claude claude --dangerously-skip-permissions\n  4321 git   git status\n";
+        assert_eq!(
+            agent_name_from_ps_output(output, 4321, KNOWN_AGENT_BINARIES),
+            Some("claude".to_string())
+        );
+    }
+
+    #[test]
+    fn ps_output_other_pgid_ignored() {
+        let output = "  4321 claude claude\n  9999 zsh    -zsh\n";
+        assert_eq!(
+            agent_name_from_ps_output(output, 9999, KNOWN_AGENT_BINARIES),
+            None
+        );
+    }
+
+    #[test]
+    fn ps_output_missing_columns_tolerated() {
+        let output = "   -    ?? ???\n  4321 claude claude\n";
+        assert_eq!(
+            agent_name_from_ps_output(output, 4321, KNOWN_AGENT_BINARIES),
+            Some("claude".to_string())
+        );
+    }
+
+    /// End-to-end: spawn a real PTY, run a fake `claude` script in the
+    /// foreground, and assert the monitor emits Agent(Some("claude")) while
+    /// it runs and Agent(None) once it finishes.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn detects_agent_in_real_foreground_process() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::time::{Duration, Instant};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let claude_path = bin_dir.join("claude");
+        let mut f = std::fs::File::create(&claude_path).unwrap();
+        // Emulate the real-world shape of an agent CLI: a wrapper whose
+        // argv[0] basename is `claude` (Node-wrapped CLIs report comm=node
+        // but argv0=/path/to/claude). A plain shebang script would show up
+        // as /bin/sh ./bin/claude and match nothing.
+        f.write_all(b"#!/bin/sh\nexec -a claude sleep 3\n").unwrap();
+        std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(64);
+        let engine = LocalPtyEngine::spawn(
+            "agent-smoke-test".to_string(),
+            Some(tmp.path().to_string_lossy().to_string()),
+            80,
+            24,
+            event_tx,
+        )
+        .expect("spawn engine");
+
+        engine
+            .write(b"./bin/claude\n")
+            .expect("write command");
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut saw_agent = false;
+        let mut saw_clear = false;
+        while Instant::now() < deadline {
+            tokio::select! {
+                ev = event_rx.recv() => {
+                    let Some((session_id, event)) = ev else { break };
+                    if session_id != "agent-smoke-test" {
+                        continue;
+                    }
+                    match event {
+                        EngineEvent::Agent(Some(name)) if name == "claude" => saw_agent = true,
+                        EngineEvent::Agent(None) if saw_agent => saw_clear = true,
+                        _ => {}
+                    }
+                    if saw_agent && saw_clear {
+                        break;
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+            }
+        }
+
+        engine.kill().ok();
+
+        assert!(saw_agent, "expected Agent(Some(\"claude\")) while script ran");
+        assert!(saw_clear, "expected Agent(None) after script finished");
+    }
 }

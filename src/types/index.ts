@@ -42,6 +42,7 @@ export interface TerminalSession {
   ptyId: string;
   cwd: string;
   title: string;
+  agentName?: string;
   isBusy?: boolean;
   needsInput?: boolean;
   processRunning?: boolean;
@@ -80,8 +81,16 @@ export interface DaemonSessionMeta {
   isBusy: boolean;
   projectId?: string;
   worktreeId?: string;
+  agentName?: string;
   cols: number;
   rows: number;
+}
+
+export interface ProcessInfo {
+  pid: number;
+  pgid: number;
+  comm: string;
+  args: string;
 }
 
 export interface EditorTab {

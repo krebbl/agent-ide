@@ -3218,6 +3218,7 @@ pub fn run() {
             pty::pty_kill,
             pty::pty_set_active,
             pty::pty_list_sessions,
+            pty::pty_session_processes,
             pty::pty_register_ssh_project,
             util_open_url,
             fs_read_dir,

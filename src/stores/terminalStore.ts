@@ -98,6 +98,7 @@ export interface TerminalSession {
   ptyId: string;
   cwd: string;
   title: string;
+  agentName?: string;
   type: "local" | "ssh";
   projectId?: string;
   worktreeId?: string;
@@ -552,6 +553,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           worktreeId: meta.worktreeId,
           isBusy: meta.isBusy,
           needsInput: !meta.isBusy,
+          agentName: meta.agentName,
         }));
 
       if (toAdd.length === 0) return state;
