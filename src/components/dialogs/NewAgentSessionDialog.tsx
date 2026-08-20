@@ -64,12 +64,13 @@ export default function NewAgentSessionDialog({
 
   const existingWorktree = worktrees.find((w) => w.branch === selectedBranch);
   const willCreate = Boolean(selectedBranch) && (createNew || !existingWorktree);
-  // Auto-generate only for branches with no worktree yet. For the local/main
-  // branch or branches that already have a worktree the user picks the name.
+  // Auto-fill only for branches with no worktree yet. For the local/main
+  // branch or branches that already have a worktree the field stays empty
+  // and the name is generated on submit when left blank.
   const autoName = willCreate && !existingWorktree;
-  const effectiveWorktreeName = willCreate
-    ? worktreeName || (autoName ? generateWorktreeName(selectedBranch, existingNames) : "")
-    : "";
+  const effectiveWorktreeName = autoName
+    ? worktreeName || generateWorktreeName(selectedBranch, existingNames)
+    : worktreeName;
 
   useEffect(() => {
     let cancelled = false;
@@ -187,8 +188,7 @@ export default function NewAgentSessionDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [worktrees, availableBranches]);
 
-  const canSubmit =
-    selectedAgentId && prompt.trim() && selectedBranch && (!willCreate || effectiveWorktreeName);
+  const canSubmit = selectedAgentId && prompt.trim() && selectedBranch;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -203,24 +203,27 @@ export default function NewAgentSessionDialog({
 
       let worktreeId: string;
       if (willCreate) {
+        // Empty name falls back to the auto-generated (deduped) name; when
+        // the branch already has a worktree this becomes the derived branch.
+        const finalName = effectiveWorktreeName.trim() || generateWorktreeName(selectedBranch, existingNames);
         if (existingWorktree) {
           // Branch is checked out elsewhere; git forbids a second checkout of
           // the same branch, so derive a new branch from it.
           await addWorktree(
             projectId,
-            effectiveWorktreeName,
-            effectiveWorktreeName,
+            finalName,
+            finalName,
             false,
             selectedBranch,
           );
         } else {
-          await addWorktree(projectId, selectedBranch, effectiveWorktreeName, false);
+          await addWorktree(projectId, selectedBranch, finalName, false);
         }
         const refreshed = useProjectStore.getState().projects.find((p) => p.id === projectId);
-        const created = refreshed?.worktrees.find((w) => w.id === effectiveWorktreeName);
+        const created = refreshed?.worktrees.find((w) => w.id === finalName);
         if (!created) {
           throw new Error(
-            `Worktree "${effectiveWorktreeName}" was not found after creation`,
+            `Worktree "${finalName}" was not found after creation`,
           );
         }
         worktreeId = created.id;
