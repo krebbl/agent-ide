@@ -43,6 +43,7 @@ export interface TerminalSession {
   cwd: string;
   title: string;
   agentName?: string;
+  agentActive?: boolean;
   isBusy?: boolean;
   needsInput?: boolean;
   processRunning?: boolean;
@@ -82,6 +83,7 @@ export interface DaemonSessionMeta {
   projectId?: string;
   worktreeId?: string;
   agentName?: string;
+  agentActive?: boolean;
   cols: number;
   rows: number;
 }

@@ -98,14 +98,34 @@ export interface TerminalSession {
   ptyId: string;
   cwd: string;
   title: string;
-  agentName?: string;
   type: "local" | "ssh";
   projectId?: string;
   worktreeId?: string;
+  agentName?: string;
+  agentActive?: boolean;
   isBusy?: boolean;
   needsInput?: boolean;
   processRunning?: boolean;
   hasUnseenActivity?: boolean;
+  /** Epoch ms when this session last became busy; cleared when idle. Used to
+   *  decide whether the session is long-running enough to show in Active. */
+  busySince?: number;
+  /** Epoch ms when this session was added. Stable ordering key for the
+   *  Active list so sessions don't jump when the title/agent name changes. */
+  createdAt?: number;
+}
+
+/** Derive `busySince` for a session given an incoming update. Sets it on the
+ *  busy transition, clears it on idle, preserves it otherwise. */
+function applyBusyTiming(
+  session: TerminalSession,
+  updates: Partial<TerminalSession>,
+): Partial<TerminalSession> {
+  if (updates.isBusy === undefined) return updates;
+  if (updates.isBusy) {
+    return session.isBusy ? updates : { ...updates, busySince: Date.now() };
+  }
+  return session.busySince === undefined ? updates : { ...updates, busySince: undefined };
 }
 
 interface TerminalStore {
@@ -134,7 +154,7 @@ interface TerminalStore {
   focusSession: (sessionId: string) => void;
   setSessionActivity: (
     id: string,
-    activity: { isBusy: boolean; needsInput: boolean },
+    activity: { isBusy?: boolean; needsInput?: boolean },
   ) => void;
   setProcessRunning: (id: string, running: boolean) => void;
   setSessionUnseenActivity: (sessionId: string, value: boolean) => void;
@@ -434,6 +454,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           worktreeId: resolvedWorktreeId,
           isBusy: false,
           needsInput: true,
+          createdAt: Date.now(),
         },
       ],
       tabs: [...state.tabs, tab],
@@ -554,6 +575,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           isBusy: meta.isBusy,
           needsInput: !meta.isBusy,
           agentName: meta.agentName,
+          agentActive: meta.agentActive,
+          createdAt: Date.now(),
         }));
 
       if (toAdd.length === 0) return state;
@@ -635,21 +658,31 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   updateSessionByPtyId: (ptyId, updates) =>
     set((state) => ({
       sessions: state.sessions.map((s) =>
-        s.ptyId === ptyId ? { ...s, ...updates } : s,
+        s.ptyId === ptyId
+          ? { ...s, ...applyBusyTiming(s, updates) }
+          : s,
       ),
     })),
 
   setSessionActivity: (id, activity) =>
     set((state) => ({
       sessions: state.sessions.map((s) =>
-        s.id === id ? { ...s, ...activity } : s,
+        s.id === id
+          ? { ...s, ...applyBusyTiming(s, activity) }
+          : s,
       ),
     })),
 
   setProcessRunning: (id, running) =>
     set((state) => ({
       sessions: state.sessions.map((s) =>
-        s.id === id ? { ...s, processRunning: running } : s,
+        s.id === id
+          ? {
+              ...s,
+              processRunning: running,
+              ...applyBusyTiming(s, { isBusy: running, needsInput: s.needsInput }),
+            }
+          : s,
       ),
     })),
 
@@ -721,6 +754,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           worktreeId: session.worktreeId,
           isBusy: false,
           needsInput: true,
+          createdAt: Date.now(),
         },
       ],
       tabs: state.tabs.map((t) =>

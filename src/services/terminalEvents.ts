@@ -110,14 +110,15 @@ export async function initTerminalEventListeners() {
     }
   });
   await listen<PtyAgentEvent>("pty_agent", (event) => {
-    // Only ever set; never clear on idle. A session that has run a coding
-    // agent stays an agent session until it closes, so the Active section
-    // keeps showing it whether the agent is busy or idle.
-    if (event.payload.name) {
-      useTerminalStore.getState().updateSessionByPtyId(event.payload.sessionId, {
-        agentName: event.payload.name,
-      });
-    }
+    // name is the live foreground agent (null once it finishes). `agentName`
+    // is sticky history (set once); `agentActive` tracks the live state so
+    // the UI can show a Bot only while an agent is actually in the
+    // foreground.
+    const name = event.payload.name;
+    useTerminalStore.getState().updateSessionByPtyId(event.payload.sessionId, {
+      ...(name ? { agentName: name } : {}),
+      agentActive: Boolean(name),
+    });
   });
   await listen<PtyErrorEvent>("pty_error", (event) => {
     const { sessionId, message } = event.payload;

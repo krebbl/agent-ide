@@ -82,12 +82,20 @@ export default function TerminalView({
   const shouldNotify = () =>
     !isVisibleRef.current || !isWindowFocusedRef.current;
 
-  const setActivity = (activity: { isBusy: boolean; needsInput: boolean }) => {
+  const setActivity = (activity: {
+    isBusy?: boolean;
+    needsInput?: boolean;
+  }) => {
     useTerminalStore.getState().setSessionActivity(sessionId, activity);
   };
 
   const notifyIdle = (title: string) => {
-    setActivity({ isBusy: false, needsInput: true });
+    // The engine owns busy state (pty_busy / pty_idle). Don't clear isBusy
+    // here from the output-debounce path: a long-running command that goes
+    // quiet (e.g. npm run dev) must stay busy until the engine says it's
+    // finished. Only the notification bookkeeping and processRunning reset
+    // belong to this path.
+    setActivity({ needsInput: true });
     if (skipFirstIdleRef.current) {
       skipFirstIdleRef.current = false;
       notifiedForIdleRef.current = true;
