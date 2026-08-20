@@ -1,13 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
-import { Bot, ListTree, Terminal as TerminalIcon, X } from "lucide-react";
 import { invoke } from "../../services/ipc";
 import { openUrl } from "../../utils/openUrl";
-import { fetchSessionProcesses } from "../../services/processes";
-import { ProcessInfo } from "../../types";
 import {
   registerTerminal,
   registerTerminalIdle,
@@ -347,136 +344,13 @@ export default function TerminalView({
     };
   }, [isVisible]);
 
-  const [showProcesses, setShowProcesses] = useState(false);
-  const [processes, setProcesses] = useState<ProcessInfo[]>([]);
-  const [processesError, setProcessesError] = useState<string | null>(null);
-  const [processesLoading, setProcessesLoading] = useState(false);
-
-  useEffect(() => {
-    // Start fresh when switching to a different session.
-    setShowProcesses(false);
-    setProcesses([]);
-    setProcessesError(null);
-  }, [sessionId]);
-
-  useEffect(() => {
-    if (!showProcesses || !isVisible) {
-      setProcesses([]);
-      setProcessesError(null);
-      return;
-    }
-    let cancelled = false;
-    const poll = async () => {
-      if (cancelled) return;
-      setProcessesLoading(true);
-      try {
-        const procs = await fetchSessionProcesses(ptyId);
-        if (!cancelled) {
-          setProcesses(procs);
-          setProcessesError(null);
-        }
-      } catch (e) {
-        if (!cancelled) setProcessesError(String(e));
-      } finally {
-        if (!cancelled) setProcessesLoading(false);
-      }
-    };
-    void poll();
-    const id = setInterval(poll, 1000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [showProcesses, isVisible, ptyId]);
-
   return (
     <div className="flex h-full w-full flex-col">
-      <div className="flex h-7 shrink-0 items-center gap-1 border-b border-[var(--color-surface0)] px-2">
-        <button
-          onClick={() => setShowProcesses((v) => !v)}
-          className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] ${
-            showProcesses
-              ? "bg-[var(--color-surface0)] text-[var(--color-blue)]"
-              : "text-[var(--color-overlay0)] hover:bg-[var(--color-surface0)] hover:text-[var(--color-text)]"
-          }`}
-          title="Show processes in this terminal"
-        >
-          <ListTree size={11} />
-          Processes
-        </button>
-        <span className="text-[10px] text-[var(--color-overlay0)]">
-          {processes.length > 0 ? `${processes.length}` : ""}
-        </span>
-        {showProcesses && (
-          <button
-            onClick={() => setShowProcesses(false)}
-            className="shrink-0 text-[var(--color-overlay1)] hover:text-[var(--color-text)]"
-            title="Close processes panel"
-          >
-            <X size={11} />
-          </button>
-        )}
-      </div>
-      <div className="relative flex-1 overflow-hidden flex">
+      <div className="relative flex-1 overflow-hidden">
         <div
           ref={containerRef}
           className={`h-full min-w-0 flex-1 ${isVisible ? "" : "hidden"}`}
         />
-        {showProcesses && (
-          <div className="h-full w-72 shrink-0 border-l border-[var(--color-surface0)] bg-[var(--color-mantle)] overflow-y-auto">
-            <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-subtext1)]">
-              Processes
-            </div>
-            {processesLoading && processes.length === 0 && (
-              <div className="px-2 py-1 text-[10px] text-[var(--color-overlay0)]">
-                Loading...
-              </div>
-            )}
-            {processesError && (
-              <div className="px-2 py-1 text-[10px] text-[var(--color-red)]">
-                {processesError}
-              </div>
-            )}
-            {!processesLoading && processes.length === 0 && !processesError && (
-              <div className="px-2 py-1 text-[10px] text-[var(--color-overlay0)]">
-                {isVisible ? "No processes found" : "Terminal hidden"}
-              </div>
-            )}
-            <ul className="flex flex-col gap-0.5 px-2 py-1">
-              {processes.map((p) => (
-                <li
-                  key={p.pid}
-                  className="flex items-baseline gap-1.5 rounded-md px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-subtext0)]"
-                  title={`pid ${p.pid}\n${p.args || p.comm}`}
-                >
-                  {p.isAgent ? (
-                    <Bot
-                      size={10}
-                      className="shrink-0 self-center text-[var(--color-mauve)]"
-                      aria-label="Coding agent"
-                    />
-                  ) : (
-                    <TerminalIcon
-                      size={10}
-                      className="shrink-0 self-center text-[var(--color-overlay1)]"
-                    />
-                  )}
-                  <span className="shrink-0 text-[9px] text-[var(--color-overlay0)]">
-                    {p.pid}
-                  </span>
-                  <span className="font-semibold text-[var(--color-text)]">
-                    {p.comm}
-                  </span>
-                  {p.args && (
-                    <span className="min-w-0 flex-1 truncate text-[var(--color-overlay1)]">
-                      {p.args}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
       </div>
     </div>
   );
