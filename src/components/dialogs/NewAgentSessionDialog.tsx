@@ -29,6 +29,11 @@ function generateWorktreeName(branch: string, existingNames: string[]): string {
   return name;
 }
 
+function randomWorktreeName(): string {
+  const suffix = crypto.randomUUID().slice(0, 8);
+  return `wt-${suffix}`;
+}
+
 function worktreeLabel(w: { id: string; branch: string; path: string; isMain: boolean }): string {
   if (w.isMain) return "local";
   return w.path.split(/[\\/]/).filter(Boolean).pop() || w.id;
@@ -67,7 +72,7 @@ export default function NewAgentSessionDialog({
   // Auto-fill only for branches with no worktree yet. For the local/main
   // branch or branches that already have a worktree the field stays empty
   // and the name is generated on submit when left blank.
-  const autoName = willCreate && !existingWorktree;
+const autoName = willCreate && !existingWorktree;
   const effectiveWorktreeName = autoName
     ? worktreeName || generateWorktreeName(selectedBranch, existingNames)
     : worktreeName;
@@ -203,9 +208,9 @@ export default function NewAgentSessionDialog({
 
       let worktreeId: string;
       if (willCreate) {
-        // Empty name falls back to the auto-generated (deduped) name; when
-        // the branch already has a worktree this becomes the derived branch.
-        const finalName = effectiveWorktreeName.trim() || generateWorktreeName(selectedBranch, existingNames);
+        // Empty name falls back to a random name; when the branch already
+        // has a worktree this becomes the derived branch.
+        const finalName = effectiveWorktreeName.trim() || randomWorktreeName();
         if (existingWorktree) {
           // Branch is checked out elsewhere; git forbids a second checkout of
           // the same branch, so derive a new branch from it.
@@ -398,7 +403,7 @@ export default function NewAgentSessionDialog({
                       );
                     }}
                     pattern="[a-zA-Z0-9_-]*"
-                    placeholder="auto-generated from branch"
+                    placeholder="random name"
                     className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
                   />
                 </div>
@@ -428,7 +433,7 @@ export default function NewAgentSessionDialog({
                     );
                   }}
                   pattern="[a-zA-Z0-9_-]*"
-                  placeholder="auto-generated from branch"
+                  placeholder="random name"
                   className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
                 />
               </div>
