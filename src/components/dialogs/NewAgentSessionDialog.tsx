@@ -310,38 +310,6 @@ const autoName = willCreate && !existingWorktree;
       <div className="space-y-4">
         <div>
           <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">
-            Provider
-          </label>
-          <SearchableSelect
-            value={selectedAgentId}
-            options={agentOptions}
-            onChange={(v) => setSelectedAgentId(v as AgentId)}
-            placeholder="Select provider..."
-            searchPlaceholder="Search provider..."
-            emptyMessage="No coding agents installed (claude, omp, opencode)"
-            loading={agentsLoading}
-            loadingMessage="Searching coding agents..."
-          />
-        </div>
-
-        <div>
-          <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">
-            Model <span className="text-[var(--color-overlay0)]">(optional)</span>
-          </label>
-          <SearchableSelect
-            value={selectedModel}
-            options={modelOptions}
-            onChange={setSelectedModel}
-            placeholder="Default model..."
-            searchPlaceholder="Search model..."
-            emptyMessage="No models available"
-            loading={modelsLoading}
-            loadingMessage="Loading models..."
-          />
-        </div>
-
-        <div>
-          <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">
             Initial Prompt
           </label>
           <textarea
@@ -457,6 +425,38 @@ const autoName = willCreate && !existingWorktree;
               </div>
             </div>
           )}
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">
+            Provider
+          </label>
+          <SearchableSelect
+            value={selectedAgentId}
+            options={agentOptions}
+            onChange={(v) => setSelectedAgentId(v as AgentId)}
+            placeholder="Select provider..."
+            searchPlaceholder="Search provider..."
+            emptyMessage="No coding agents installed (claude, omp, opencode)"
+            loading={agentsLoading}
+            loadingMessage="Searching coding agents..."
+          />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">
+            Model <span className="text-[var(--color-overlay0)]">(optional)</span>
+          </label>
+          <SearchableSelect
+            value={selectedModel}
+            options={modelOptions}
+            onChange={setSelectedModel}
+            placeholder="Default model..."
+            searchPlaceholder="Search model..."
+            emptyMessage="No models available"
+            loading={modelsLoading}
+            loadingMessage="Loading models..."
+          />
         </div>
 
         {error && (
