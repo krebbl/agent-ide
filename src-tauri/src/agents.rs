@@ -193,16 +193,24 @@ pub fn check_agent_ready(id: &str) -> Option<AgentStatus> {
 }
 
 pub fn check_all_agents_ready() -> Vec<AgentStatus> {
-    builtin_agents()
-        .into_iter()
-        .map(|agent| {
-            let binary_path = agent
-                .command
-                .first()
-                .and_then(|name| find_real_binary(name));
-            agent_to_status(agent, binary_path)
-        })
-        .collect()
+    let agents = builtin_agents();
+    // Binary lookup can fall back to a login shell (~1.4s each). Run all
+    // lookups in parallel so N agents cost one shell latency worst case.
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = agents
+            .into_iter()
+            .map(|agent| {
+                scope.spawn(move || {
+                    let binary_path = agent
+                        .command
+                        .first()
+                        .and_then(|name| find_real_binary(name));
+                    agent_to_status(agent, binary_path)
+                })
+            })
+            .collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    })
 }
 
 fn agent_to_status(agent: AgentDefinition, binary_path: Option<PathBuf>) -> AgentStatus {
@@ -350,6 +358,16 @@ pub fn find_real_binary(name: &str) -> Option<PathBuf> {
 }
 
 fn find_binary_paths_unix(name: &str) -> Vec<PathBuf> {
+    // Fast path: direct PATH scan (sub-ms, no shell spawn). This is all the
+    // dev app ever needs — the terminal inherits the full shell PATH.
+    let from_path = find_binary_paths_in_path(name);
+    if !from_path.is_empty() {
+        return from_path;
+    }
+
+    // Slow fallback: the GUI-launched app (Finder/Dock) inherits launchd's
+    // minimal PATH, so binaries in shell-only dirs (~/.local/bin, custom
+    // homebrew) are missed above. Source a login shell as the final check.
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     let quoted = shlex::try_quote(name).unwrap_or_else(|_| std::borrow::Cow::Borrowed(name));
     let delimiter = "__AGENT_IDE_WHICH_DELIMITER__";
@@ -360,7 +378,7 @@ fn find_binary_paths_unix(name: &str) -> Vec<PathBuf> {
 
     let output = match Command::new(&shell).args(["-il", "-c", &script]).output() {
         Ok(out) if out.status.success() => out.stdout,
-        _ => return find_binary_paths_in_path(name),
+        _ => return Vec::new(),
     };
 
     let text = String::from_utf8_lossy(&output);
@@ -369,9 +387,6 @@ fn find_binary_paths_unix(name: &str) -> Vec<PathBuf> {
 
     let paths = parse_which_output(raw.as_bytes());
     let filtered = filter_wrapper_paths(paths);
-    if filtered.is_empty() {
-        return find_binary_paths_in_path(name);
-    }
     filtered
 }
 
