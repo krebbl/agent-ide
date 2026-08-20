@@ -3,7 +3,8 @@ import { invoke } from "../../services/ipc";
 import { Loader2, AlertCircle, Bot, GitBranch } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore } from "../../stores/terminalStore";
-import { checkAgentsReady, listAgentModels, buildAgentCommand } from "../../services/agents";
+import { useAgentStore } from "../../stores/agentStore";
+import { listAgentModels, buildAgentCommand } from "../../services/agents";
 import { AgentId, AgentModel, AgentStatus } from "../../types";
 import SearchableSelect from "../ui/SearchableSelect";
 import Dialog from "../ui/Dialog";
@@ -46,8 +47,8 @@ export default function NewAgentSessionDialog({
 }: NewAgentSessionDialogProps) {
   const { projects, addWorktree, setActiveWorktree, fetchWorktrees, updateProject } = useProjectStore();
   const { addSession } = useTerminalStore();
+  const agentsLoading = useAgentStore((s) => s.isLoading);
   const [agents, setAgents] = useState<AgentStatus[]>([]);
-  const [agentsLoading, setAgentsLoading] = useState(true);
   const [selectedAgentId, setSelectedAgentId] = useState<AgentId | "">("");
   const [models, setModels] = useState<AgentModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -78,34 +79,22 @@ const autoName = willCreate && !existingWorktree;
     : worktreeName;
 
   useEffect(() => {
-    let cancelled = false;
-    setAgentsLoading(true);
-    checkAgentsReady()
-      .then((all) => {
-        if (cancelled) return;
-        const available = all.filter(
-          (a) => a.installed && SUPPORTED_AGENTS.includes(a.id),
-        );
-        setAgents(available);
-        const preferred = useProjectStore
-          .getState()
-          .projects.find((p) => p.id === projectId)?.preferredAgent;
-        const preferredAgent = available.find((a) => a.id === preferred);
-        if (preferredAgent) {
-          setSelectedAgentId(preferredAgent.id);
-        } else if (available.length > 0) {
-          setSelectedAgentId(available[0].id);
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) setError(String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setAgentsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    // Installed agents are loaded once at app startup (main.tsx) and cached
+    // in the agent store; pick the stored preference or the first available.
+    const all = useAgentStore.getState().agents;
+    const available = all.filter(
+      (a) => a.installed && SUPPORTED_AGENTS.includes(a.id),
+    );
+    setAgents(available);
+    const preferred = useProjectStore
+      .getState()
+      .projects.find((p) => p.id === projectId)?.preferredAgent;
+    const preferredAgent = available.find((a) => a.id === preferred);
+    if (preferredAgent) {
+      setSelectedAgentId(preferredAgent.id);
+    } else if (available.length > 0) {
+      setSelectedAgentId(available[0].id);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 

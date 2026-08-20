@@ -7,9 +7,11 @@ import { initTerminalEventListeners } from "./services/terminalEvents";
 import { initNotificationClickListener } from "./services/notifications";
 import { initFaviconBadge } from "./services/faviconBadge";
 import { useTerminalStore } from "./stores/terminalStore";
+import { useAgentStore } from "./stores/agentStore";
 initConnectionStatusListener();
 initNotificationClickListener();
 initFaviconBadge();
+useAgentStore.getState().checkAll();
 initTerminalEventListeners()
   .then(() => useTerminalStore.getState().restoreSessions())
   .catch(() => {});
