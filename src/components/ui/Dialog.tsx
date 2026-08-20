@@ -10,6 +10,7 @@ interface DialogProps {
   closeOnBackdrop?: boolean;
   placement?: "center" | "top";
   onClose: () => void;
+  onCmdEnter?: () => void;
   children: ReactNode;
   footer?: ReactNode;
 }
@@ -23,16 +24,22 @@ export default function Dialog({
   closeOnBackdrop = true,
   placement = "center",
   onClose,
+  onCmdEnter,
   children,
   footer,
 }: DialogProps) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        onClose();
+      } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        onCmdEnter?.();
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  }, [onClose, onCmdEnter]);
 
   const borderStyle = danger
     ? "1px solid color-mix(in srgb, var(--color-red) 30%, transparent)"

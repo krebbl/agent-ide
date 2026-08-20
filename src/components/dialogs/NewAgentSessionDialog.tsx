@@ -282,6 +282,7 @@ const autoName = willCreate && !existingWorktree;
       width="520px"
       scrollable
       onClose={onClose}
+      onCmdEnter={handleSubmit}
       footer={
         <>
           <button
