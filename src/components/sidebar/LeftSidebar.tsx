@@ -807,13 +807,34 @@ export default function LeftSidebar() {
 
   const sessions = useTerminalStore.getState().sessions;
   const projectNameById = new Map(projects.map((p) => [p.id, p.name]));
-  const agentSessions = sessions
-    .filter((s) => s.agentName)
+
+  // React to new busy/agent store updates AND to time passing: a session
+  // that stays busy crosses the long-running threshold without any store
+  // mutation, so re-evaluate while any candidate session exists.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const s = useTerminalStore.getState().sessions;
+      const hasCandidate = s.some(
+        (x) => x.projectId && (x.agentActive || x.isBusy || x.processRunning),
+      );
+      if (hasCandidate) setSessionTick((t) => t + 1);
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const ACTIVE_BUSY_THRESHOLD_MS = 5000;
+  const activeSessions = sessions
+    .filter((s) => s.projectId)
+    .filter((s) => {
+      if (s.agentActive) return true;
+      if (!s.isBusy && !s.processRunning) return false;
+      const since = s.busySince ?? 0;
+      return Date.now() - since >= ACTIVE_BUSY_THRESHOLD_MS;
+    })
     .sort(
       (a, b) =>
-        (projectNameById.get(a.projectId ?? "") ?? "").localeCompare(
-          projectNameById.get(b.projectId ?? "") ?? "",
-        ) || a.title.localeCompare(b.title),
+        (a.createdAt ?? 0) - (b.createdAt ?? 0) ||
+        a.title.localeCompare(b.title),
     );
   void sessionTick;
 
@@ -826,14 +847,15 @@ export default function LeftSidebar() {
       onDragEnd={handleDragEnd}
     >
       <div className="flex h-full flex-col">
-        {agentSessions.length > 0 ? (
+        {activeSessions.length > 0 ? (
           <div className="border-b border-[var(--color-surface0)] py-1">
             <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-subtext1)]">
               Active
             </div>
-            {agentSessions.map((session) => {
+            {activeSessions.map((session) => {
               const projectName =
                 projectNameById.get(session.projectId ?? "") ?? "";
+              const isAgent = session.agentActive === true;
               return (
                 <button
                   key={`agent:${session.id}`}
@@ -845,17 +867,17 @@ export default function LeftSidebar() {
                     tStore.focusSession(session.id);
                   }}
                   className="flex w-full items-center gap-2 px-3 py-1 text-left text-xs text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/50"
-                  title={`${session.agentName}${session.isBusy || session.processRunning ? " (busy)" : ""} — ${session.title}${projectName ? ` — ${projectName}` : ""}`}
+                  title={`${isAgent ? session.agentName ?? "agent" : "terminal"} — ${session.title}${projectName ? ` — ${projectName}` : ""}${session.isBusy || session.processRunning ? " (busy)" : ""}`}
                 >
-                  {session.isBusy || session.processRunning ? (
-                    <Loader2
-                      size={10}
-                      className="shrink-0 animate-spin text-[var(--color-blue)]"
-                    />
-                  ) : (
+                  {isAgent ? (
                     <Bot
                       size={10}
                       className="shrink-0 text-[var(--color-mauve)]"
+                    />
+                  ) : (
+                    <Terminal
+                      size={10}
+                      className={`shrink-0 ${session.isBusy || session.processRunning ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"}`}
                     />
                   )}
                   <span className="truncate">{session.title}</span>
