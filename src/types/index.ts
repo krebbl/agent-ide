@@ -107,6 +107,7 @@ export interface EditorTab {
 
 export type AgentId =
   | "claude"
+  | "omp"
   | "amp"
   | "codex"
   | "gemini"
@@ -153,4 +154,9 @@ export interface AgentStatus {
   enabled: boolean;
   installed: boolean;
   binaryPath: string | null;
+}
+
+export interface AgentModel {
+  id: string;
+  label: string;
 }

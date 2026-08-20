@@ -157,6 +157,7 @@ impl PtyClient {
         rows: u16,
         project_id: Option<String>,
         worktree_id: Option<String>,
+        argv: Option<Vec<String>>,
     ) -> Result<(), String> {
         self.request_tx
             .send(DaemonRequest::CreateLocal {
@@ -166,6 +167,7 @@ impl PtyClient {
                 rows,
                 project_id,
                 worktree_id,
+                argv,
             })
             .map_err(|_| "pty daemon disconnected".to_string())
     }
@@ -179,6 +181,7 @@ impl PtyClient {
         rows: u16,
         worktree_id: Option<String>,
         attach: bool,
+        argv: Option<Vec<String>>,
     ) -> Result<(), String> {
         self.request_tx
             .send(DaemonRequest::CreateRemote {
@@ -189,6 +192,7 @@ impl PtyClient {
                 rows,
                 worktree_id,
                 attach,
+                argv,
             })
             .map_err(|_| "pty daemon disconnected".to_string())
     }
@@ -373,7 +377,7 @@ async fn kill_existing_daemon(socket_path: &PathBuf) {
 }
 
 async fn connect_with_retry(socket_path: &PathBuf) -> Result<UnixStream, String> {
-    for _ in 0..10 {
+    for _ in 0..50 {
         match UnixStream::connect(socket_path).await {
             Ok(s) => return Ok(s),
             Err(_) => tokio::time::sleep(tokio::time::Duration::from_millis(100)).await,
@@ -408,7 +412,29 @@ pub fn daemon_config_dir() -> PathBuf {
 }
 
 pub fn daemon_socket_path() -> PathBuf {
-    daemon_config_dir().join("pty_daemon.sock")
+    let path = daemon_config_dir().join("pty_daemon.sock");
+    // Unix domain socket paths are capped (SUN_LEN, typically 104–108
+    // bytes including the NUL terminator). Long config dirs (deep worktree
+    // paths, long branch names) can exceed this; fall back to a short
+    // temp-dir path derived from a stable hash of the config dir so client
+    // and daemon still agree on the same socket.
+    if path.as_os_str().len() >= 100 {
+        let digest = fnv1a_hash(daemon_config_dir().to_string_lossy().as_bytes());
+        std::env::temp_dir().join(format!("agent-ide-{digest:016x}.sock"))
+    } else {
+        path
+    }
+}
+
+/// FNV-1a 64-bit hash. Deterministic across processes and builds, so the
+/// client and daemon derive the identical fallback socket path.
+fn fnv1a_hash(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in bytes {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 pub fn daemon_pid_path() -> PathBuf {

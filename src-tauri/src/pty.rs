@@ -416,15 +416,16 @@ pub async fn cmd_pty_spawn(
     project_id: Option<String>,
     worktree_id: Option<String>,
     session_type: Option<String>,
+    argv: Option<Vec<String>>,
 ) -> Result<String, String> {
     let pty_client = require_pty_client(state)?;
     let is_remote = session_type.as_deref() == Some("ssh")
         || (project_id.is_some() && session_type.as_deref() != Some("local"));
     let session_id = uuid::Uuid::new_v4().to_string();
     if is_remote {
-        pty_client.create_remote(session_id.clone(), project_id.unwrap_or_default(), cwd, cols, rows, worktree_id, false)?;
+        pty_client.create_remote(session_id.clone(), project_id.unwrap_or_default(), cwd, cols, rows, worktree_id, false, argv)?;
     } else {
-        pty_client.spawn(session_id.clone(), cwd, cols, rows, project_id, worktree_id)?;
+        pty_client.spawn(session_id.clone(), cwd, cols, rows, project_id, worktree_id, argv)?;
     }
     Ok(session_id)
 }
@@ -437,9 +438,10 @@ pub async fn pty_spawn(
     project_id: Option<String>,
     worktree_id: Option<String>,
     session_type: Option<String>,
+    argv: Option<Vec<String>>,
     state: tauri::State<'_, Arc<crate::AppState>>,
 ) -> Result<String, String> {
-    crate::commands::pty_spawn(state.inner().as_ref(), cwd, cols, rows, project_id, worktree_id, session_type).await
+    crate::commands::pty_spawn(state.inner().as_ref(), cwd, cols, rows, project_id, worktree_id, session_type, argv).await
 }
 
 pub async fn cmd_pty_list_sessions(state: &crate::AppState) -> Result<Vec<crate::pty_protocol::SessionMeta>, String> {

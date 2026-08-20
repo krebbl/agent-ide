@@ -13,6 +13,7 @@ interface SearchableSelectProps {
   options: SearchableSelectOption[];
   onChange: (value: string) => void;
   placeholder?: string;
+  searchPlaceholder?: string;
   emptyMessage?: string;
   loading?: boolean;
   loadingMessage?: string;
@@ -23,6 +24,7 @@ export default function SearchableSelect({
   options,
   onChange,
   placeholder = "Select...",
+  searchPlaceholder = "Search...",
   emptyMessage = "No matches",
   loading = false,
   loadingMessage = "Loading...",
@@ -145,7 +147,7 @@ export default function SearchableSelect({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Search branches..."
+          placeholder={searchPlaceholder}
           className="w-full rounded bg-[var(--color-base)] px-2 py-1 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:outline-none"
         />
       </div>

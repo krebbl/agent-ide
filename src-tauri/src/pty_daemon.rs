@@ -355,6 +355,7 @@ impl PtyDaemon {
                 rows,
                 project_id,
                 worktree_id,
+                argv,
             } => {
                 if sessions.lock().unwrap().contains_key(&session_id) {
                     warn!(session_id, "session already exists");
@@ -376,6 +377,7 @@ impl PtyDaemon {
                     pgid: None,
                     cols,
                     rows,
+                    argv,
                 };
 
                 let engine = match LocalPtyEngine::spawn(
@@ -384,6 +386,7 @@ impl PtyDaemon {
                     cols,
                     rows,
                     event_tx.clone(),
+                    meta.argv.clone(),
                 ) {
                     Ok(e) => e,
                     Err(e) => {
@@ -425,6 +428,7 @@ impl PtyDaemon {
                 rows,
                 worktree_id,
                 attach,
+                argv,
             } => {
                 if sessions.lock().unwrap().contains_key(&session_id) {
                     warn!(session_id, "session already exists");
@@ -446,6 +450,7 @@ impl PtyDaemon {
                     pgid: None,
                     cols,
                     rows,
+                    argv,
                 };
 
                 // Insert the session immediately (without an engine) so Resize,
@@ -497,6 +502,7 @@ impl PtyDaemon {
                         ssh_session,
                         event_tx.clone(),
                         attach,
+                        meta.argv.clone(),
                     )
                     .await
                     {
@@ -684,6 +690,7 @@ impl PtyDaemon {
             meta.cols,
             meta.rows,
             self.event_tx.clone(),
+            meta.argv.clone(),
         )
     }
 
@@ -730,7 +737,8 @@ impl PtyDaemon {
                     meta.rows,
                     ssh_session,
                     event_tx.clone(),
-                    true,
+                    meta.argv.is_none(),
+                    meta.argv.clone(),
                 )
                 .await
                 {

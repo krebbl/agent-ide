@@ -864,6 +864,32 @@ async fn check_agents_ready() -> Result<Vec<agents::AgentStatus>, String> {
     crate::commands::check_agents_ready().await
 }
 
+pub async fn cmd_list_agent_models(id: String) -> Result<Vec<agents::AgentModel>, String> {
+    Ok(agents::list_agent_models(&id))
+}
+
+#[tauri::command]
+async fn list_agent_models(id: String) -> Result<Vec<agents::AgentModel>, String> {
+    crate::commands::list_agent_models(id).await
+}
+
+pub async fn cmd_build_agent_command(
+    agent_id: String,
+    model: Option<String>,
+    prompt: String,
+) -> Result<Vec<String>, String> {
+    agents::launch_command(&agent_id, model.as_deref(), &prompt)
+}
+
+#[tauri::command]
+async fn build_agent_command(
+    agent_id: String,
+    model: Option<String>,
+    prompt: String,
+) -> Result<Vec<String>, String> {
+    crate::commands::build_agent_command(agent_id, model, prompt).await
+}
+
 use remote_ssh::ClientHandler;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -3233,6 +3259,8 @@ pub fn run() {
             fs_search_files,
             check_agent_ready,
             check_agents_ready,
+            list_agent_models,
+            build_agent_command,
             pr_info::pr_for_branch,
             pr_info::pr_list_for_repo,
             lsp::lsp_start,

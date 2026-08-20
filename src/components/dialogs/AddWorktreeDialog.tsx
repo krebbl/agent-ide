@@ -145,6 +145,7 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
                 options={branchOptions}
                 onChange={(v) => setSelectedBranch(v)}
                 placeholder="Select a branch..."
+                searchPlaceholder="Search branches..."
                 emptyMessage="No branches found"
                 loading={branchesLoading}
                 loadingMessage="Loading branches..."

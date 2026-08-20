@@ -112,6 +112,7 @@ impl LocalPtyEngine {
         cols: u16,
         rows: u16,
         event_tx: tokio::sync::mpsc::Sender<(String, EngineEvent)>,
+        argv: Option<Vec<String>>,
     ) -> Result<Self, String> {
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -123,8 +124,18 @@ impl LocalPtyEngine {
             })
             .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
-        let shell = default_shell();
-        let mut cmd = CommandBuilder::new(&shell);
+        let (cmd, cmd_label) = match &argv {
+            Some(argv) if !argv.is_empty() => {
+                let mut builder = CommandBuilder::new(&argv[0]);
+                builder.args(&argv[1..]);
+                (builder, argv[0].clone())
+            }
+            _ => {
+                let shell = default_shell();
+                (CommandBuilder::new(&shell), shell)
+            }
+        };
+        let mut cmd = cmd;
         if let Some(ref cwd) = cwd {
             cmd.cwd(cwd);
         }
@@ -132,7 +143,7 @@ impl LocalPtyEngine {
         let child = pair
             .slave
             .spawn_command(cmd)
-            .map_err(|e| format!("Failed to spawn shell '{}': {}", shell, e))?;
+            .map_err(|e| format!("Failed to spawn '{}': {}", cmd_label, e))?;
 
         let master_reader = pair
             .master

@@ -189,6 +189,7 @@ impl RemotePtyEngine {
         ssh_session: SessionHandle,
         event_tx: tokio::sync::mpsc::Sender<(String, crate::pty_engine::EngineEvent)>,
         attach: bool,
+        argv: Option<Vec<String>>,
     ) -> Result<Self, String> {
         let channel = {
             let handle = ssh_session.lock().await;
@@ -210,7 +211,19 @@ impl RemotePtyEngine {
             .map_err(|_| "request_shell timed out".to_string())?
             .map_err(|e| format!("request_shell failed: {}", e))?;
 
-        if attach {
+        if let Some(argv) = &argv {
+            // Agent sessions never attach to tmux: cd into the worktree, then
+            // type the launch command. argv elements are shell-escaped so the
+            // prompt (which may contain quotes/newlines) arrives intact.
+            if let Some(ref dir) = cwd {
+                let cmd = format!("cd {}\n", shell_escape(dir));
+                let _ = channel.data(std::io::Cursor::new(cmd.into_bytes())).await;
+            }
+            let quoted: Vec<String> = argv.iter().map(|a| shell_escape(a)).collect();
+            let mut line = quoted.join(" ");
+            line.push('\n');
+            let _ = channel.data(std::io::Cursor::new(line.into_bytes())).await;
+        } else if attach {
             let tmux_cmd = format!(
                 "exec tmux set -g status off \\; new-session -A -s {} 2>/dev/null || exec ${{SHELL:-/bin/sh}} -l\n",
                 shell_escape(&session_id)

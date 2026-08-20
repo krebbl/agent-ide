@@ -2,11 +2,18 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PromptTransport {
     Argv,
     Stdin,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModel {
+    pub id: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +26,14 @@ pub struct AgentDefinition {
     pub prompt_transport: PromptTransport,
     pub enabled: bool,
     pub include_in_default_presets: bool,
+    /// Flag used to select the model, e.g. "--model".
+    pub model_flag: String,
+    /// When set, the initial prompt is passed via this flag instead of as a
+    /// positional argument (e.g. opencode's "--prompt").
+    pub prompt_flag: Option<String>,
+    /// Curated model catalogue. `list_agent_models` may enrich this list at
+    /// runtime (e.g. `opencode models`).
+    pub models: Vec<AgentModel>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +59,31 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
             prompt_transport: PromptTransport::Argv,
             enabled: true,
             include_in_default_presets: true,
+            model_flag: "--model".to_string(),
+            prompt_flag: None,
+            models: vec![
+                AgentModel { id: "opus".to_string(), label: "Claude Opus 4.5".to_string() },
+                AgentModel { id: "sonnet".to_string(), label: "Claude Sonnet 4.5".to_string() },
+                AgentModel { id: "haiku".to_string(), label: "Claude Haiku 4.5".to_string() },
+            ],
+        },
+        AgentDefinition {
+            id: "omp".to_string(),
+            label: "OMP".to_string(),
+            description: "Oh My Pi — the terminal-native coding agent harness (omp).".to_string(),
+            command: vec!["omp".to_string()],
+            prompt_transport: PromptTransport::Argv,
+            enabled: true,
+            include_in_default_presets: true,
+            model_flag: "--model".to_string(),
+            prompt_flag: None,
+            models: vec![
+                AgentModel { id: "opus".to_string(), label: "Opus (fuzzy)".to_string() },
+                AgentModel { id: "sonnet".to_string(), label: "Sonnet (fuzzy)".to_string() },
+                AgentModel { id: "haiku".to_string(), label: "Haiku (fuzzy)".to_string() },
+                AgentModel { id: "gpt-5.2".to_string(), label: "GPT-5.2 (fuzzy)".to_string() },
+                AgentModel { id: "deepseek-v4-flash".to_string(), label: "DeepSeek V4 Flash (fuzzy)".to_string() },
+            ],
         },
         AgentDefinition {
             id: "amp".to_string(),
@@ -53,6 +93,9 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
             prompt_transport: PromptTransport::Stdin,
             enabled: true,
             include_in_default_presets: false,
+            model_flag: "--model".to_string(),
+            prompt_flag: None,
+            models: vec![],
         },
         AgentDefinition {
             id: "codex".to_string(),
@@ -62,6 +105,9 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
             prompt_transport: PromptTransport::Argv,
             enabled: true,
             include_in_default_presets: true,
+            model_flag: "--model".to_string(),
+            prompt_flag: None,
+            models: vec![],
         },
         AgentDefinition {
             id: "gemini".to_string(),
@@ -71,6 +117,9 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
             prompt_transport: PromptTransport::Argv,
             enabled: true,
             include_in_default_presets: true,
+            model_flag: "--model".to_string(),
+            prompt_flag: None,
+            models: vec![],
         },
         AgentDefinition {
             id: "mastracode".to_string(),
@@ -80,6 +129,9 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
             prompt_transport: PromptTransport::Stdin,
             enabled: true,
             include_in_default_presets: false,
+            model_flag: "--model".to_string(),
+            prompt_flag: None,
+            models: vec![],
         },
         AgentDefinition {
             id: "opencode".to_string(),
@@ -89,6 +141,10 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
             prompt_transport: PromptTransport::Argv,
             enabled: true,
             include_in_default_presets: false,
+            model_flag: "--model".to_string(),
+            prompt_flag: Some("--prompt".to_string()),
+            // The model catalogue is fetched live via `opencode models`.
+            models: vec![],
         },
         AgentDefinition {
             id: "pi".to_string(),
@@ -98,6 +154,9 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
             prompt_transport: PromptTransport::Argv,
             enabled: true,
             include_in_default_presets: false,
+            model_flag: "--model".to_string(),
+            prompt_flag: None,
+            models: vec![],
         },
         AgentDefinition {
             id: "copilot".to_string(),
@@ -107,6 +166,9 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
             prompt_transport: PromptTransport::Argv,
             enabled: true,
             include_in_default_presets: false,
+            model_flag: "--model".to_string(),
+            prompt_flag: None,
+            models: vec![],
         },
         AgentDefinition {
             id: "cursor-agent".to_string(),
@@ -116,6 +178,9 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
             prompt_transport: PromptTransport::Argv,
             enabled: true,
             include_in_default_presets: false,
+            model_flag: "--model".to_string(),
+            prompt_flag: None,
+            models: vec![],
         },
     ]
 }
@@ -154,6 +219,120 @@ fn agent_to_status(agent: AgentDefinition, binary_path: Option<PathBuf>) -> Agen
         installed: binary_path.is_some(),
         binary_path: binary_path.map(|p| p.to_string_lossy().to_string()),
     }
+}
+
+/// Build the full argv for launching an agent with an optional model and the
+/// initial prompt. For Stdin-transport agents the prompt is omitted; the
+/// caller is responsible for delivering it via stdin.
+pub fn launch_command(
+    agent_id: &str,
+    model: Option<&str>,
+    prompt: &str,
+) -> Result<Vec<String>, String> {
+    let agent = builtin_agents()
+        .into_iter()
+        .find(|a| a.id == agent_id)
+        .ok_or_else(|| format!("Unknown agent: {}", agent_id))?;
+
+    let mut argv = agent.command;
+    if let Some(m) = model {
+        if !m.trim().is_empty() {
+            argv.push(agent.model_flag);
+            argv.push(m.to_string());
+        }
+    }
+    if agent.prompt_transport == PromptTransport::Argv {
+        if let Some(flag) = agent.prompt_flag {
+            argv.push(flag);
+            argv.push(prompt.to_string());
+        } else {
+            argv.push(prompt.to_string());
+        }
+    }
+    Ok(argv)
+}
+
+/// Model catalogue for an agent. Curated defaults, enriched at runtime where
+/// the CLI exposes the authoritative list (`opencode models`) or the user's
+/// config (`~/.omp/agent/config.yml` modelRoles).
+pub fn list_agent_models(agent_id: &str) -> Vec<AgentModel> {
+    let agent = match builtin_agents().into_iter().find(|a| a.id == agent_id) {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    match agent.id.as_str() {
+        "opencode" => opencode_models().unwrap_or_default(),
+        "omp" => {
+            let mut models = Vec::new();
+            if let Some(default) = omp_config_default_model() {
+                models.push(AgentModel {
+                    label: format!("{} (config default)", default),
+                    id: default,
+                });
+            }
+            models.extend(agent.models);
+            models
+        }
+        _ => agent.models,
+    }
+}
+
+fn opencode_models() -> Option<Vec<AgentModel>> {
+    let output = Command::new("opencode").arg("models").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let models: Vec<AgentModel> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter(|line| line.contains('/'))
+        .map(|line| AgentModel {
+            id: line.to_string(),
+            label: line.to_string(),
+        })
+        .collect();
+    if models.is_empty() {
+        None
+    } else {
+        Some(models)
+    }
+}
+
+/// Read the `default` model role from `~/.omp/agent/config.yml`, if present.
+fn omp_config_default_model() -> Option<String> {
+    let home = std::env::var_os("HOME")?;
+    let path = PathBuf::from(home)
+        .join(".omp")
+        .join("agent")
+        .join("config.yml");
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut in_model_roles = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("modelRoles:") {
+            in_model_roles = true;
+            continue;
+        }
+        if in_model_roles {
+            if trimmed.starts_with("symbolPreset:")
+                || trimmed.starts_with("theme:")
+                || trimmed.starts_with("setupVersion:")
+            {
+                break;
+            }
+            if let Some(rest) = trimmed.strip_prefix("default:") {
+                let value = rest
+                    .trim()
+                    .trim_matches(|c| c == '\'' || c == '"')
+                    .to_string();
+                if !value.is_empty() {
+                    return Some(value);
+                }
+            }
+        }
+    }
+    None
 }
 
 pub fn find_real_binary(name: &str) -> Option<PathBuf> {

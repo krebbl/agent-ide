@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::{AppState, Project, WorktreeTabs};
 
 pub use crate::{
+    cmd_build_agent_command as build_agent_command,
     cmd_check_agent_ready as check_agent_ready,
     cmd_check_agents_ready as check_agents_ready,
     cmd_check_is_git_repo as check_is_git_repo,
@@ -27,6 +28,7 @@ pub use crate::{
     cmd_load_editor_tabs as load_editor_tabs,
     cmd_load_expanded_projects as load_expanded_projects,
     cmd_load_projects as load_projects,
+    cmd_list_agent_models as list_agent_models,
     cmd_save_editor_tabs as save_editor_tabs,
     cmd_save_expanded_projects as save_expanded_projects,
     cmd_save_projects as save_projects,
@@ -110,6 +112,8 @@ pub async fn dispatch(
             let res = check_agents_ready().await?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "list_agent_models" => cmd_plain!(ListAgentModelsReq, list_agent_models, [id: String]),
+        "build_agent_command" => cmd_plain!(BuildAgentCommandReq, build_agent_command, [agent_id: String, model: Option<String>, prompt: String]),
         "save_projects" => cmd_state!(SaveProjectsReq, save_projects, [projects: Vec<Project>]),
         "load_projects" => {
             let res = load_projects(state).await?;
@@ -146,7 +150,7 @@ pub async fn dispatch(
         "ssh_get_password" => cmd_plain!(SshGetPasswordReq, ssh_get_password, [project_id: String]),
         "ssh_delete_password" => cmd_plain!(SshDeletePasswordReq, ssh_delete_password, [project_id: String]),
         "notification_show" => cmd_plain!(NotificationShowReq, notification_show, [title: String, body: String, session_id: Option<String>]),
-        "pty_spawn" => cmd_state!(PtySpawnReq, pty_spawn, [cwd: Option<String>, cols: u16, rows: u16, project_id: Option<String>, worktree_id: Option<String>, session_type: Option<String>]),
+        "pty_spawn" => cmd_state!(PtySpawnReq, pty_spawn, [cwd: Option<String>, cols: u16, rows: u16, project_id: Option<String>, worktree_id: Option<String>, session_type: Option<String>, argv: Option<Vec<String>>]),
         "pty_list_sessions" => {
             let res = pty_list_sessions(state).await?;
             serde_json::to_value(res).map_err(|e| e.to_string())

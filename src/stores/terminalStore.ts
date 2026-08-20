@@ -143,6 +143,7 @@ interface TerminalStore {
     type?: "local" | "ssh",
     projectId?: string,
     worktreeId?: string,
+    argv?: string[],
   ) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
   restoreSessions: () => Promise<void>;
@@ -403,7 +404,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }
   },
 
-  addSession: async (cwd, type, projectId, worktreeId) => {
+  addSession: async (cwd, type, projectId, worktreeId, argv) => {
     const store = useProjectStore.getState();
     const activeProject =
       store.projects.find((p) => p.id === (projectId ?? store.activeProjectId));
@@ -420,6 +421,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       projectId: resolvedProjectId,
       worktreeId: resolvedWorktreeId,
       sessionType: resolvedType,
+      argv: argv ?? null,
     });
 
     const sessionId = crypto.randomUUID();
