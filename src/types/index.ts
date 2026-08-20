@@ -91,6 +91,7 @@ export interface ProcessInfo {
   pgid: number;
   comm: string;
   args: string;
+  isAgent?: boolean;
 }
 
 export interface EditorTab {

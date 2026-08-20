@@ -3,7 +3,7 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
-import { ListTree, X } from "lucide-react";
+import { Bot, ListTree, Terminal as TerminalIcon, X } from "lucide-react";
 import { invoke } from "../../services/ipc";
 import { openUrl } from "../../utils/openUrl";
 import { fetchSessionProcesses } from "../../services/processes";
@@ -441,6 +441,18 @@ export default function TerminalView({
                   className="flex items-baseline gap-1.5 rounded-md px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-subtext0)]"
                   title={`pid ${p.pid}\n${p.args || p.comm}`}
                 >
+                  {p.isAgent ? (
+                    <Bot
+                      size={10}
+                      className="shrink-0 self-center text-[var(--color-mauve)]"
+                      aria-label="Coding agent"
+                    />
+                  ) : (
+                    <TerminalIcon
+                      size={10}
+                      className="shrink-0 self-center text-[var(--color-overlay1)]"
+                    />
+                  )}
                   <span className="shrink-0 text-[9px] text-[var(--color-overlay0)]">
                     {p.pid}
                   </span>

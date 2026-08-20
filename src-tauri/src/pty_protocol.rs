@@ -27,6 +27,9 @@ pub struct ProcessInfo {
     pub pgid: i32,
     pub comm: String,
     pub args: String,
+    /// True when this process row was identified as a coding agent.
+    #[serde(default)]
+    pub is_agent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

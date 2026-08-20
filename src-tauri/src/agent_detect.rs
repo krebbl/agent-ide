@@ -27,7 +27,7 @@ pub fn matches_agent(comm: &str, argv0: &str, agents: &[&str]) -> Option<String>
 }
 
 /// Parse `ps -A -o pgid=,pid=,comm=,args=` output, keeping only rows whose
-/// process group matches `pgid`.
+/// process group matches `pgid`, annotating agent rows.
 pub fn parse_processes(ps_output: &str, pgid: i32) -> Vec<ProcessInfo> {
     let mut procs = Vec::new();
     for line in ps_output.lines() {
@@ -42,11 +42,13 @@ pub fn parse_processes(ps_output: &str, pgid: i32) -> Vec<ProcessInfo> {
         }
         let comm = tokens[2].clone();
         let args = tokens[3..].join(" ");
+        let is_agent = is_agent_process(&comm, &args);
         procs.push(ProcessInfo {
             pid,
             pgid: row_pgid,
             comm,
             args,
+            is_agent,
         });
     }
     procs
@@ -65,6 +67,12 @@ pub fn detect_agent_in_processes(procs: &[ProcessInfo]) -> Option<String> {
         let argv0 = p.args.split_whitespace().next().unwrap_or("");
         matches_agent(&p.comm, argv0, KNOWN_AGENT_BINARIES)
     })
+}
+
+/// True when a single process row was identified as a coding agent.
+pub fn is_agent_process(comm: &str, args: &str) -> bool {
+    let argv0 = args.split_whitespace().next().unwrap_or("");
+    matches_agent(comm, argv0, KNOWN_AGENT_BINARIES).is_some()
 }
 
 /// Scan a stream for an invisible identity marker
@@ -159,11 +167,13 @@ pub fn parse_processes_by_tty(ps_output: &str, tty: &str) -> Vec<ProcessInfo> {
         let Ok(pid) = tokens[1].parse::<i32>() else { continue };
         let comm = tokens[2].clone();
         let args = tokens[3..].join(" ");
+        let is_agent = is_agent_process(&comm, &args);
         procs.push(ProcessInfo {
             pid,
             pgid: 0,
             comm,
             args,
+            is_agent,
         });
     }
     procs
