@@ -1,6 +1,7 @@
 [package]
 name = "agent-ide"
 version = "0.1.0"
+default-run = "agent-ide"
 description = "Agent IDE - A lightweight cross-platform IDE"
 authors = ["krebbl"]
 edition = "2021"
