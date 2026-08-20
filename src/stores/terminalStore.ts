@@ -576,7 +576,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           needsInput: !meta.isBusy,
           agentName: meta.agentName,
           agentActive: meta.agentActive,
-          createdAt: Date.now(),
+          createdAt: meta.createdAt ?? Date.now(),
         }));
 
       if (toAdd.length === 0) return state;

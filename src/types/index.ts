@@ -84,6 +84,7 @@ export interface DaemonSessionMeta {
   worktreeId?: string;
   agentName?: string;
   agentActive?: boolean;
+  createdAt?: number;
   cols: number;
   rows: number;
 }

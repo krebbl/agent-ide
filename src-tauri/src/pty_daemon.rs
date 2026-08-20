@@ -372,6 +372,7 @@ impl PtyDaemon {
                     worktree_id,
                     agent_name: None,
                     agent_active: false,
+                    created_at: Self::now_ms(),
                     pgid: None,
                     cols,
                     rows,
@@ -441,6 +442,7 @@ impl PtyDaemon {
                     is_busy: false,
                     agent_name: None,
                     agent_active: false,
+                    created_at: Self::now_ms(),
                     pgid: None,
                     cols,
                     rows,
@@ -648,7 +650,14 @@ impl PtyDaemon {
         let content = std::fs::read_to_string(&self.persistence_path).unwrap_or_default();
         let persisted: Vec<SessionMeta> = serde_json::from_str(&content).unwrap_or_default();
         let mut map = self.sessions.lock().unwrap();
+        let mut backfill = Self::now_ms();
         for mut meta in persisted {
+            // Legacy rows (created before this field existed) lack a
+            // timestamp; give each a distinct value so ordering stays stable.
+            if meta.created_at == 0 {
+                backfill += 1;
+                meta.created_at = backfill;
+            }
             let session_id = meta.session_id.clone();
             let engine: Option<Arc<dyn PtyEngine>> = if meta.session_type == "local" {
                 match self.respawn_local_engine(&meta) {
@@ -780,4 +789,14 @@ fn basename(path: &str) -> String {
         .last()
         .map(|s| s.to_string())
         .unwrap_or_else(|| path.to_string())
+}
+
+impl PtyDaemon {
+    /// Current epoch time in milliseconds (coarse-grained creation clock).
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
 }

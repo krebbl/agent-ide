@@ -18,6 +18,10 @@ pub struct SessionMeta {
     /// agent finishes.
     #[serde(default)]
     pub agent_active: bool,
+    /// Epoch ms when the session was created. Persisted, so it survives daemon
+    /// restarts and gives the frontend a stable creation-order sort key.
+    #[serde(default)]
+    pub created_at: u64,
     /// Local PTY process group id, used to enumerate the processes (shell +
     /// jobs) running in this terminal session. `None` for remote sessions.
     pub pgid: Option<i32>,
