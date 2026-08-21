@@ -133,7 +133,7 @@ pub async fn dispatch(
         "git_init" => cmd_plain!(GitInitReq, git_init, [path: String]),
         "git_worktree_list" => cmd_state!(GitWorktreeListReq, git_worktree_list, [project_id: String]),
         "git_worktree_list_async" => cmd_state!(GitWorktreeListAsyncReq, git_worktree_list_async, [project_id: String]),
-        "git_worktree_add_async" => cmd_state!(GitWorktreeAddAsyncReq, git_worktree_add_async, [project_id: String, branch: String, name: String, new_branch: Option<bool>, base_branch: Option<String>]),
+        "git_worktree_add_async" => cmd_state!(GitWorktreeAddAsyncReq, git_worktree_add_async, [project_id: String, branch: String, name: String, new_branch: Option<bool>, base_branch: Option<String>, command: Option<String>]),
         "git_worktree_remove_async" => cmd_state!(GitWorktreeRemoveAsyncReq, git_worktree_remove_async, [project_id: String, worktree_path: String, force: Option<bool>, delete_branch: Option<bool>]),
         "git_branches_list_async" => cmd_state!(GitBranchesListAsyncReq, git_branches_list_async, [project_id: String]),
         "git_branches_available_for_worktrees_async" => cmd_state!(GitBranchesAvailableForWorktreesAsyncReq, git_branches_available_for_worktrees_async, [project_id: String]),

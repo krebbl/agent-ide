@@ -61,6 +61,7 @@ export default function NewAgentSessionDialog({
   const [worktreeName, setWorktreeName] = useState("");
   const [worktreeNameDirty, setWorktreeNameDirty] = useState(false);
   const [createNew, setCreateNew] = useState(false);
+  const [setupCommand, setSetupCommand] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -234,9 +235,10 @@ const autoName = willCreate && !existingWorktree;
             finalName,
             false,
             selectedBranch,
+            setupCommand,
           );
         } else {
-          await addWorktree(projectId, selectedBranch, finalName, false);
+          await addWorktree(projectId, selectedBranch, finalName, false, undefined, setupCommand);
         }
         const refreshed = useProjectStore.getState().projects.find((p) => p.id === projectId);
         const created = refreshed?.worktrees.find((w) => w.id === finalName);
@@ -424,6 +426,24 @@ const autoName = willCreate && !existingWorktree;
                   className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
                 />
               </div>
+            </div>
+          )}
+          {willCreate && (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">
+                Post-create command{" "}
+                <span className="text-[var(--color-overlay0)]">(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={setupCommand}
+                onChange={(e) => setSetupCommand(e.target.value)}
+                placeholder="e.g. npm install"
+                className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
+              />
+              <p className="mt-1 text-xs text-[var(--color-overlay0)]">
+                Runs in the new worktree before the agent session starts.
+              </p>
             </div>
           )}
         </div>

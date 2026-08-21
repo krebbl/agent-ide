@@ -30,6 +30,7 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
   const [newBranchName, setNewBranchName] = useState("");
   const [worktreeName, setWorktreeName] = useState("");
   const [worktreeNameDirty, setWorktreeNameDirty] = useState(false);
+  const [setupCommand, setSetupCommand] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [branchesError, setBranchesError] = useState<string | null>(null);
   const [branchesLoading, setBranchesLoading] = useState(false);
@@ -76,7 +77,7 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
     setLoading(true);
     setError(null);
     try {
-      await addWorktree(projectId, branch, effectiveName, isNew);
+      await addWorktree(projectId, branch, effectiveName, isNew, undefined, setupCommand);
       onClose();
     } catch (e) {
       setError(String(e));
@@ -183,6 +184,22 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
             placeholder="auto-generated from branch"
             className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
           />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">
+            Post-create command <span className="text-[var(--color-overlay0)]">(optional)</span>
+          </label>
+          <input
+            type="text"
+            value={setupCommand}
+            onChange={(e) => setSetupCommand(e.target.value)}
+            placeholder="e.g. npm install"
+            className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
+          />
+          <p className="mt-1 text-xs text-[var(--color-overlay0)]">
+            Runs in the new worktree after it is created.
+          </p>
         </div>
 
         {error && (

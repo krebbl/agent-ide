@@ -1185,6 +1185,25 @@ fn run_git_command(worktree_path: &str, args: &[&str]) -> Result<String, String>
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Run an arbitrary setup command with cwd set to a freshly-created worktree.
+/// Blocking: returns only after the command completes. A non-zero exit
+/// propagates as an error so the caller can abort (e.g. not starting an agent
+/// session in an unprepared worktree).
+fn run_setup_command_local(worktree_path: &str, command: &str) -> Result<(), String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let output = Command::new(&shell)
+        .arg("-c")
+        .arg(command)
+        .current_dir(worktree_path)
+        .output()
+        .map_err(|e| format!("Failed to run setup command: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Setup command failed: {}", stderr.trim()));
+    }
+    Ok(())
+}
+
 /// Shell-escape a string: wrap in single quotes, escape any embedded single quotes
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\"'\"'"))
@@ -1443,6 +1462,46 @@ mod worktree_id_tests {
 
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    #[test]
+    fn runs_post_create_command_in_new_worktree_cwd() {
+        let base = std::env::temp_dir().join(format!(
+            "agent-ide-setup-cmd-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let main_path = base.join("repo");
+        let wt_path = base.join("worktrees").join("repo").join("feat");
+        std::fs::create_dir_all(&main_path).unwrap();
+
+        let repo = main_path.to_str().unwrap();
+        let run = |args: &[&str], dir: &str| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .status()
+                .expect("git command failed");
+            assert!(status.success(), "git {:?} failed", args);
+        };
+        run(&["init", "-b", "main"], repo);
+        std::fs::write(main_path.join("file.txt"), "hello").unwrap();
+        run(&["add", "file.txt"], repo);
+        run(&["commit", "-m", "init"], repo);
+
+        let worktree_path = compute_worktree_path(&repo, "feat").unwrap();
+        add_worktree_local(&repo, "feat", "feat", true, None).unwrap();
+
+        // Command completes in the new worktree's cwd and writes a marker there.
+        let marker = format!("{}/SETUP_OK", wt_path.clone().to_str().unwrap());
+        run_setup_command_local(&worktree_path, "touch SETUP_OK").unwrap();
+        assert!(std::path::Path::new(&marker).exists(), "marker not created in worktree");
+        std::fs::remove_file(&marker).unwrap();
+
+        // Non-zero exit propagates as an error.
+        let err = run_setup_command_local(&worktree_path, "exit 3").unwrap_err();
+        assert!(err.contains("Setup command failed"), "unexpected error: {}", err);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 fn compute_worktree_path(repo_path: &str, name: &str) -> Result<String, String> {
@@ -1573,11 +1632,11 @@ fn list_branches_local(repo_path: &str) -> Result<Vec<BranchInfo>, String> {
     Ok(branches)
 }
 
-async fn run_git_command_ssh(
+async fn run_ssh_command(
     project_id: &str,
-    worktree_path: &str,
-    args: &[&str],
+    script: String,
     state: &AppState,
+    label: &str,
 ) -> Result<String, String> {
     ensure_ssh_connection(project_id, state).await?;
     let connections = state.ssh_connections.lock().await;
@@ -1585,21 +1644,7 @@ async fn run_git_command_ssh(
         .get(project_id)
         .ok_or("No SSH connection found for this project")?;
 
-    let worktree_quoted = shlex::try_quote(worktree_path)
-        .map_err(|_| "Repository path contains invalid characters".to_string())?
-        .into_owned();
-    let args_quoted = args
-        .iter()
-        .map(|a| {
-            shlex::try_quote(a)
-                .map_err(|_| format!("Git argument contains invalid characters: {}", a))
-                .map(|q| q.into_owned())
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .join(" ");
-    let cmd = format!("cd {} && git {}", worktree_quoted, args_quoted);
-
-    info!("run_git_command_ssh: executing '{}'", cmd);
+    info!("run_ssh_command: executing '{}'", script);
 
     let mut channel = conn.session.lock().await
         .channel_open_session()
@@ -1607,7 +1652,7 @@ async fn run_git_command_ssh(
         .map_err(|e| format!("Failed to open channel: {}", e))?;
 
     channel
-        .exec(false, cmd.as_str())
+        .exec(false, script.as_str())
         .await
         .map_err(|e| format!("Failed to execute command: {}", e))?;
 
@@ -1643,9 +1688,34 @@ async fn run_git_command_ssh(
 
     match exit_status {
         Some(0) => Ok(stdout.trim().to_string()),
-        Some(code) => Err(format!("git command failed (exit {}): {}", code, stderr.trim())),
-        None => Err("git command: no exit status received".to_string()),
+        Some(code) => Err(format!("{} failed (exit {}): {}", label, code, stderr.trim())),
+        None => Err(format!("{}: no exit status received", label)),
     }
+}
+
+async fn run_git_command_ssh(
+    project_id: &str,
+    worktree_path: &str,
+    args: &[&str],
+    state: &AppState,
+) -> Result<String, String> {
+    let worktree_quoted = shlex::try_quote(worktree_path)
+        .map_err(|_| "Repository path contains invalid characters".to_string())?
+        .into_owned();
+    let args_quoted = args
+        .iter()
+        .map(|a| {
+            shlex::try_quote(a)
+                .map_err(|_| format!("Git argument contains invalid characters: {}", a))
+                .map(|q| q.into_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .join(" ");
+    let cmd = format!("cd {} && git {}", worktree_quoted, args_quoted);
+
+    info!("run_git_command_ssh: executing '{}'", cmd);
+
+    run_ssh_command(project_id, cmd, state, "git command").await
 }
 
 async fn list_worktrees_ssh(
@@ -2097,6 +2167,7 @@ pub async fn cmd_git_worktree_add_async(
     name: String,
     new_branch: Option<bool>,
     base_branch: Option<String>,
+    command: Option<String>,
 ) -> Result<(), String> {
     let projects = crate::commands::load_projects(state).await?;
     let project = projects
@@ -2106,13 +2177,19 @@ pub async fn cmd_git_worktree_add_async(
 
     let new_branch = new_branch.unwrap_or(false);
     let base_branch = base_branch.filter(|b| !b.trim().is_empty());
+    let command = command.filter(|c| !c.trim().is_empty());
 
     match &project.connection {
         Connection::Local { path: repo_path } => {
-            add_worktree_local(repo_path, &branch, &name, new_branch, base_branch.as_deref())
+            let worktree_path = compute_worktree_path(repo_path, &name)?;
+            add_worktree_local(repo_path, &branch, &name, new_branch, base_branch.as_deref())?;
+            if let Some(cmd) = &command {
+                run_setup_command_local(&worktree_path, cmd)?;
+            }
         }
         Connection::Ssh { .. } => {
             let repo_path = get_repo_path(project);
+            let worktree_path = compute_worktree_path(&repo_path, &name)?;
             add_worktree_ssh(
                 &project_id,
                 &repo_path,
@@ -2122,9 +2199,23 @@ pub async fn cmd_git_worktree_add_async(
                 base_branch.as_deref(),
                 state,
             )
-            .await
+            .await?;
+            if let Some(cmd) = &command {
+                let worktree_quoted = shlex::try_quote(worktree_path.as_str())
+                    .map_err(|_| "Worktree path contains invalid characters".to_string())?
+                    .into_owned();
+                run_ssh_command(
+                    &project_id,
+                    format!("cd {} && {}", worktree_quoted, cmd),
+                    state,
+                    "Setup command",
+                )
+                .await?;
+            }
         }
     }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -2134,6 +2225,7 @@ async fn git_worktree_add_async(
     name: String,
     new_branch: Option<bool>,
     base_branch: Option<String>,
+    command: Option<String>,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     crate::commands::git_worktree_add_async(
@@ -2143,6 +2235,7 @@ async fn git_worktree_add_async(
         name,
         new_branch,
         base_branch,
+        command,
     )
     .await
 }
