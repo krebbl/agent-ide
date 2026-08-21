@@ -87,6 +87,10 @@ const autoName = willCreate && !existingWorktree;
       (a) => a.installed && SUPPORTED_AGENTS.includes(a.id),
     );
     setAgents(available);
+    setSetupCommand(
+      useProjectStore.getState().projects.find((p) => p.id === projectId)
+        ?.preferredSetupCommand ?? "",
+    );
     const preferred = useProjectStore
       .getState()
       .projects.find((p) => p.id === projectId)?.preferredAgent;
@@ -268,6 +272,7 @@ const autoName = willCreate && !existingWorktree;
       updateProject(projectId, {
         preferredAgent: selectedAgentId as AgentId,
         preferredModel: selectedModel || null,
+        preferredSetupCommand: setupCommand || null,
       }).catch(() => {});
       onClose();
     } catch (e) {

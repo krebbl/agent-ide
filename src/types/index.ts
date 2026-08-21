@@ -24,6 +24,7 @@ export interface Project {
   activeWorktreeId: string | null;
   preferredAgent?: string | null;
   preferredModel?: string | null;
+  preferredSetupCommand?: string | null;
 }
 
 export interface Worktree {

@@ -22,7 +22,7 @@ function generateWorktreeName(branch: string, existingNames: string[]): string {
 }
 
 export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDialogProps) {
-  const { projects, addWorktree } = useProjectStore();
+  const { projects, addWorktree, updateProject } = useProjectStore();
   const [branches, setBranches] = useState<{ name: string; isRemote: boolean }[]>([]);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<"existing" | "new">("existing");
@@ -41,6 +41,10 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
   const branch = mode === "existing" ? selectedBranch : newBranchName;
   const isNew = mode === "new";
   const effectiveName = worktreeName || generateWorktreeName(branch, existingNames);
+
+  useEffect(() => {
+    setSetupCommand(project?.preferredSetupCommand ?? "");
+  }, [projectId]);
 
   useEffect(() => {
     setBranchesLoading(true);
@@ -78,6 +82,7 @@ export default function AddWorktreeDialog({ projectId, onClose }: AddWorktreeDia
     setError(null);
     try {
       await addWorktree(projectId, branch, effectiveName, isNew, undefined, setupCommand);
+      updateProject(projectId, { preferredSetupCommand: setupCommand || null }).catch(() => {});
       onClose();
     } catch (e) {
       setError(String(e));

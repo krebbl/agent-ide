@@ -74,6 +74,11 @@ pub struct Project {
     pub preferred_agent: Option<String>,
     #[serde(default)]
     pub preferred_model: Option<String>,
+    /// Last post-create setup command used for this project's worktrees.
+    /// None when the user never set one; Default keeps old projects.json
+    /// loadable.
+    #[serde(default)]
+    pub preferred_setup_command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
