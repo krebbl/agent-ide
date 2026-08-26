@@ -1,9 +1,11 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "../../services/ipc";
 import { Loader2, AlertCircle, Bot, GitBranch } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { useAgentStore } from "../../stores/agentStore";
+import { useAgentDraftStore, EMPTY_DRAFT } from "../../stores/agentDraftStore";
+import type { AgentSessionDraft } from "../../stores/agentDraftStore";
 import { listAgentModels, buildAgentCommand } from "../../services/agents";
 import { AgentId, AgentModel, AgentStatus } from "../../types";
 import SearchableSelect from "../ui/SearchableSelect";
@@ -48,33 +50,39 @@ export default function NewAgentSessionDialog({
   const { projects, addWorktree, setActiveWorktree, fetchWorktrees, updateProject } = useProjectStore();
   const { addSession } = useTerminalStore();
   const agentsLoading = useAgentStore((s) => s.isLoading);
+  const draft = useAgentDraftStore((s) => s.drafts[projectId] ?? EMPTY_DRAFT);
+  const updateDraft = (patch: Partial<AgentSessionDraft>) =>
+    useAgentDraftStore.getState().update(projectId, patch);
   const [agents, setAgents] = useState<AgentStatus[]>([]);
-  const [selectedAgentId, setSelectedAgentId] = useState<AgentId | "">("");
   const [models, setModels] = useState<AgentModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
-  const [selectedModel, setSelectedModel] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [selectedBranch, setSelectedBranch] = useState("");
   const [availableBranches, setAvailableBranches] = useState<{ name: string; isRemote: boolean }[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchesError, setBranchesError] = useState<string | null>(null);
-  const [worktreeName, setWorktreeName] = useState("");
-  const [worktreeNameDirty, setWorktreeNameDirty] = useState(false);
-  const [createNew, setCreateNew] = useState(false);
-  const [setupCommand, setSetupCommand] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const {
+    selectedAgentId,
+    selectedModel,
+    prompt,
+    selectedBranch,
+    worktreeName,
+    worktreeNameDirty,
+    createNew,
+    setupCommand,
+  } = draft;
 
   const project = projects.find((p) => p.id === projectId);
   const worktrees = project?.worktrees ?? [];
   const existingNames = worktrees.map((w) => w.id);
+  const prevBranchRef = useRef(selectedBranch);
 
   const existingWorktree = worktrees.find((w) => w.branch === selectedBranch);
   const willCreate = Boolean(selectedBranch) && (createNew || !existingWorktree);
   // Auto-fill only for branches with no worktree yet. For the local/main
   // branch or branches that already have a worktree the field stays empty
   // and the name is generated on submit when left blank.
-const autoName = willCreate && !existingWorktree;
+  const autoName = willCreate && !existingWorktree;
   const effectiveWorktreeName = autoName
     ? worktreeName || generateWorktreeName(selectedBranch, existingNames)
     : worktreeName;
@@ -82,46 +90,42 @@ const autoName = willCreate && !existingWorktree;
   useEffect(() => {
     // Installed agents are loaded once at app startup (main.tsx) and cached
     // in the agent store; pick the stored preference or the first available.
+    // When a temporary draft exists for this project (dialog was canceled
+    // with input), keep its values instead of re-deriving defaults.
     const all = useAgentStore.getState().agents;
     const available = all.filter(
       (a) => a.installed && SUPPORTED_AGENTS.includes(a.id),
     );
     setAgents(available);
-    setSetupCommand(
-      useProjectStore.getState().projects.find((p) => p.id === projectId)
-        ?.preferredSetupCommand ?? "",
-    );
-    const preferred = useProjectStore
-      .getState()
-      .projects.find((p) => p.id === projectId)?.preferredAgent;
-    const preferredAgent = available.find((a) => a.id === preferred);
-    if (preferredAgent) {
-      setSelectedAgentId(preferredAgent.id);
-    } else if (available.length > 0) {
-      setSelectedAgentId(available[0].id);
-    }
+    if (useAgentDraftStore.getState().drafts[projectId]) return;
+    const project = useProjectStore.getState().projects.find((p) => p.id === projectId);
+    const preferred = project?.preferredAgent;
+    updateDraft({
+      setupCommand: project?.preferredSetupCommand ?? "",
+      selectedAgentId: available.find((a) => a.id === preferred)?.id ?? available[0]?.id ?? "",
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   useEffect(() => {
     if (!selectedAgentId) {
       setModels([]);
-      setSelectedModel("");
       return;
     }
     let cancelled = false;
     setModelsLoading(true);
-    setSelectedModel("");
     listAgentModels(selectedAgentId)
       .then((m) => {
         if (cancelled) return;
         setModels(m);
+        const current = useAgentDraftStore.getState().drafts[projectId]?.selectedModel;
+        if (current && m.some((x) => x.id === current)) return;
         const preferred = useProjectStore
           .getState()
           .projects.find((p) => p.id === projectId)?.preferredModel;
-        if (preferred && m.some((x) => x.id === preferred)) {
-          setSelectedModel(preferred);
-        }
+        updateDraft({
+          selectedModel: preferred && m.some((x) => x.id === preferred) ? preferred : "",
+        });
       })
       .catch(() => {
         if (!cancelled) setModels([]);
@@ -137,6 +141,7 @@ const autoName = willCreate && !existingWorktree;
 
   useEffect(() => {
     if (!project) return;
+    if (useAgentDraftStore.getState().drafts[projectId]?.selectedBranch) return;
     let branch = "";
     const byId = worktrees.find((w) => w.id === initialWorktreeId);
     if (byId) {
@@ -145,7 +150,7 @@ const autoName = willCreate && !existingWorktree;
       const active = worktrees.find((w) => w.id === project.activeWorktreeId);
       branch = (active ?? worktrees.find((w) => w.isMain) ?? worktrees[0])?.branch ?? "";
     }
-    if (branch) setSelectedBranch(branch);
+    if (branch) updateDraft({ selectedBranch: branch });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -167,15 +172,16 @@ const autoName = willCreate && !existingWorktree;
   }, [projectId]);
 
   useEffect(() => {
-    setCreateNew(false);
-    setWorktreeNameDirty(false);
-    setWorktreeName("");
+    if (prevBranchRef.current === selectedBranch) return;
+    prevBranchRef.current = selectedBranch;
+    updateDraft({ createNew: false, worktreeNameDirty: false, worktreeName: "" });
   }, [selectedBranch]);
 
   useEffect(() => {
     if (autoName && !worktreeNameDirty) {
-      setWorktreeName(generateWorktreeName(selectedBranch, existingNames));
+      updateDraft({ worktreeName: generateWorktreeName(selectedBranch, existingNames) });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBranch, autoName, worktreeNameDirty, existingNames]);
 
   const agentOptions = agents.map((a) => ({
@@ -274,6 +280,8 @@ const autoName = willCreate && !existingWorktree;
         preferredModel: selectedModel || null,
         preferredSetupCommand: setupCommand || null,
       }).catch(() => {});
+      // Session started successfully — drop the draft for this project.
+      useAgentDraftStore.getState().clear(projectId);
       onClose();
     } catch (e) {
       setError(String(e));
@@ -322,7 +330,7 @@ const autoName = willCreate && !existingWorktree;
           </label>
           <textarea
             value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
+            onChange={(e) => updateDraft({ prompt: e.target.value })}
             rows={4}
             placeholder="Describe the task for the agent..."
             className="w-full resize-y rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
@@ -336,7 +344,7 @@ const autoName = willCreate && !existingWorktree;
           <SearchableSelect
             value={selectedBranch}
             options={branchOptions}
-            onChange={setSelectedBranch}
+            onChange={(v: string) => updateDraft({ selectedBranch: v })}
             placeholder="Select a branch..."
             searchPlaceholder="Search branch..."
             emptyMessage="No branches found"
@@ -353,7 +361,7 @@ const autoName = willCreate && !existingWorktree;
             <div className="mt-3 space-y-3 rounded-md border border-[var(--color-surface0)] bg-[var(--color-surface0)]/30 p-3">
               <div className="flex gap-2">
                 <button
-                  onClick={() => setCreateNew(false)}
+                  onClick={() => updateDraft({ createNew: false })}
                   className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                     !createNew
                       ? "bg-[var(--color-blue)]/20 text-[var(--color-blue)]"
@@ -363,7 +371,7 @@ const autoName = willCreate && !existingWorktree;
                   Use existing worktree
                 </button>
                 <button
-                  onClick={() => setCreateNew(true)}
+                  onClick={() => updateDraft({ createNew: true })}
                   className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                     createNew
                       ? "bg-[var(--color-blue)]/20 text-[var(--color-blue)]"
@@ -391,10 +399,10 @@ const autoName = willCreate && !existingWorktree;
                     type="text"
                     value={worktreeName}
                     onChange={(e) => {
-                      setWorktreeNameDirty(true);
-                      setWorktreeName(
-                        e.target.value.replace(/\s/g, "-").replace(/[^a-zA-Z0-9_-]/g, ""),
-                      );
+                      updateDraft({
+                        worktreeNameDirty: true,
+                        worktreeName: e.target.value.replace(/\s/g, "-").replace(/[^a-zA-Z0-9_-]/g, ""),
+                      });
                     }}
                     pattern="[a-zA-Z0-9_-]*"
                     placeholder="random name"
@@ -421,10 +429,10 @@ const autoName = willCreate && !existingWorktree;
                   type="text"
                   value={worktreeName}
                   onChange={(e) => {
-                    setWorktreeNameDirty(true);
-                    setWorktreeName(
-                      e.target.value.replace(/\s/g, "-").replace(/[^a-zA-Z0-9_-]/g, ""),
-                    );
+                    updateDraft({
+                      worktreeNameDirty: true,
+                      worktreeName: e.target.value.replace(/\s/g, "-").replace(/[^a-zA-Z0-9_-]/g, ""),
+                    });
                   }}
                   pattern="[a-zA-Z0-9_-]*"
                   placeholder="random name"
@@ -442,7 +450,7 @@ const autoName = willCreate && !existingWorktree;
               <input
                 type="text"
                 value={setupCommand}
-                onChange={(e) => setSetupCommand(e.target.value)}
+                onChange={(e) => updateDraft({ setupCommand: e.target.value })}
                 placeholder="e.g. npm install"
                 className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
               />
@@ -461,7 +469,7 @@ const autoName = willCreate && !existingWorktree;
             <SearchableSelect
               value={selectedAgentId}
               options={agentOptions}
-              onChange={(v) => setSelectedAgentId(v as AgentId)}
+              onChange={(v) => updateDraft({ selectedAgentId: v as AgentId })}
               placeholder="Select provider..."
               searchPlaceholder="Search provider..."
               emptyMessage="No coding agents installed (claude, omp, opencode)"
@@ -476,7 +484,7 @@ const autoName = willCreate && !existingWorktree;
             <SearchableSelect
               value={selectedModel}
               options={modelOptions}
-              onChange={setSelectedModel}
+              onChange={(v: string) => updateDraft({ selectedModel: v })}
               placeholder="Default model..."
               searchPlaceholder="Search model..."
               emptyMessage="No models available"
