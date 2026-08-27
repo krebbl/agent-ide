@@ -867,14 +867,16 @@ export default function LeftSidebar() {
     return () => clearInterval(id);
   }, []);
 
-  const ACTIVE_BUSY_THRESHOLD_MS = 5000;
   const activeSessions = sessions
     .filter((s) => s.projectId)
     .filter((s) => {
-      if (s.agentActive) return true;
-      if (!s.isBusy && !s.processRunning) return false;
-      const since = s.busySince ?? 0;
-      return Date.now() - since >= ACTIVE_BUSY_THRESHOLD_MS;
+      if (s.agentName == null) return false;
+      return (
+        s.agentActive ||
+        s.isBusy === true ||
+        s.processRunning === true ||
+        s.needsInput
+      );
     })
     .sort((a, b) => {
       const aBranch =
@@ -906,7 +908,8 @@ export default function LeftSidebar() {
             {activeSessions.map((session) => {
               const projectName =
                 projectNameById.get(session.projectId ?? "") ?? "";
-              const isAgent = session.agentActive === true;
+              const isAgent =
+                session.agentActive === true || session.agentName != null;
               const branch =
                 branchById.get(
                   `${session.projectId}:${session.worktreeId}`,
@@ -925,7 +928,16 @@ export default function LeftSidebar() {
                   title={`${isAgent ? session.agentName ?? "agent" : "terminal"} — ${session.title}${projectName ? ` — ${projectName}` : ""}${session.isBusy || session.processRunning ? " (busy)" : ""}`}
                 >
                   {isAgent ? (
-                    <Bot size={10} className="mt-0.5 shrink-0 text-[var(--color-mauve)]" />
+                    <Bot
+                      size={10}
+                      className={`mt-0.5 shrink-0 ${
+                        session.isBusy || session.processRunning
+                          ? "animate-blink text-[var(--color-mauve)]"
+                          : session.hasUnseenActivity
+                            ? "text-[var(--color-green)]"
+                            : "text-[var(--color-mauve)]"
+                      }`}
+                    />
                   ) : (
                     <Terminal size={10} className={`mt-0.5 shrink-0 ${session.isBusy || session.processRunning ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"}`} />
                   )}
