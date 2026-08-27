@@ -369,7 +369,7 @@ async fn run_remote_terminal(
     // shells never emit OSC-133 markers, so output activity — not the Busy
     // event — is the trigger. Idle sessions produce no output and thus no
     // probes: zero SSH overhead when nothing is running.
-    let mut schedule_probe = |last: &mut Option<Instant>,
+    let schedule_probe = |last: &mut Option<Instant>,
                               in_flight: &mut bool,
                               key: Option<String>| {
         let due = last
