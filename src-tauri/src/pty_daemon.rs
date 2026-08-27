@@ -679,6 +679,11 @@ impl PtyDaemon {
             } else {
                 None
             };
+            // A freshly respawned session is idle: the persisted is_busy
+            // flag belongs to the previous daemon run and is not evidence
+            // of current activity. The respawned engine re-reports Busy only
+            // once a real process runs in the foreground.
+            meta.is_busy = false;
             map.insert(session_id, DaemonSession { meta, engine });
         }
     }
