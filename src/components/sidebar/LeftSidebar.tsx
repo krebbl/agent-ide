@@ -847,6 +847,11 @@ export default function LeftSidebar() {
 
   const sessions = useTerminalStore.getState().sessions;
   const projectNameById = new Map(projects.map((p) => [p.id, p.name]));
+  const branchById = new Map(
+    projects.flatMap((p) =>
+      p.worktrees.map((w) => [`${p.id}:${w.id}`, w.branch]),
+    ),
+  );
 
   // React to new busy/agent store updates AND to time passing: a session
   // that stays busy crosses the long-running threshold without any store
@@ -871,11 +876,17 @@ export default function LeftSidebar() {
       const since = s.busySince ?? 0;
       return Date.now() - since >= ACTIVE_BUSY_THRESHOLD_MS;
     })
-    .sort(
-      (a, b) =>
+    .sort((a, b) => {
+      const aBranch =
+        branchById.get(`${a.projectId}:${a.worktreeId}`) ?? "";
+      const bBranch =
+        branchById.get(`${b.projectId}:${b.worktreeId}`) ?? "";
+      return (
+        aBranch.localeCompare(bBranch) ||
         (a.createdAt ?? 0) - (b.createdAt ?? 0) ||
-        a.title.localeCompare(b.title),
-    );
+        a.title.localeCompare(b.title)
+      );
+    });
   void sessionTick;
 
   return (
@@ -896,6 +907,10 @@ export default function LeftSidebar() {
               const projectName =
                 projectNameById.get(session.projectId ?? "") ?? "";
               const isAgent = session.agentActive === true;
+              const branch =
+                branchById.get(
+                  `${session.projectId}:${session.worktreeId}`,
+                ) ?? "";
               return (
                 <button
                   key={`agent:${session.id}`}
@@ -906,26 +921,29 @@ export default function LeftSidebar() {
                     }
                     tStore.focusSession(session.id);
                   }}
-                  className="flex w-full items-center gap-2 px-3 py-1 text-left text-xs text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/50"
+                  className="flex w-full items-start gap-2 px-3 py-1 text-left text-xs text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/50"
                   title={`${isAgent ? session.agentName ?? "agent" : "terminal"} — ${session.title}${projectName ? ` — ${projectName}` : ""}${session.isBusy || session.processRunning ? " (busy)" : ""}`}
                 >
                   {isAgent ? (
-                    <Bot
-                      size={10}
-                      className="shrink-0 text-[var(--color-mauve)]"
-                    />
+                    <Bot size={10} className="mt-0.5 shrink-0 text-[var(--color-mauve)]" />
                   ) : (
-                    <Terminal
-                      size={10}
-                      className={`shrink-0 ${session.isBusy || session.processRunning ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"}`}
-                    />
+                    <Terminal size={10} className={`mt-0.5 shrink-0 ${session.isBusy || session.processRunning ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"}`} />
                   )}
-                  <span className="truncate">{session.title}</span>
-                  {projectName && (
-                    <span className="shrink-0 text-[10px] text-[var(--color-overlay1)]">
-                      {projectName}
+                  <span className="min-w-0 flex-1">
+                    <span className="flex w-full items-center gap-2">
+                      <span className="truncate">{session.title}</span>
+                      {projectName && (
+                        <span className="shrink-0 text-[10px] text-[var(--color-overlay1)]">
+                          {projectName}
+                        </span>
+                      )}
                     </span>
-                  )}
+                    {branch && (
+                      <span className="block truncate text-[10px] text-[var(--color-overlay1)]">
+                        {branch}
+                      </span>
+                    )}
+                  </span>
                 </button>
               );
             })}
