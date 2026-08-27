@@ -1,9 +1,11 @@
 mod agents;
 mod agent_detect;
+mod badge;
 pub mod commands;
 pub mod config;
 pub mod event_bus;
 pub mod lsp;
+mod mac_badge;
 mod notification;
 mod pr_info;
 mod pty;
@@ -3352,6 +3354,9 @@ pub fn run() {
             app.manage(state.clone());
             crate::notification::set_event_bus(event_bus.clone());
 
+            let dock_badge = Arc::new(crate::badge::DockBadge::new(app.handle().clone()));
+            app.manage(dock_badge.clone());
+
             let state_clone = state.clone();
             tauri::async_runtime::spawn(async move {
                 start_health_check(state_clone).await;
@@ -3363,6 +3368,7 @@ pub fn run() {
                         pty_client::daemon_socket_path(),
                         event_bus.clone(),
                         true,
+                        Some(dock_badge.clone()),
                     )
                     .await
                 })
@@ -3428,9 +3434,19 @@ pub fn run() {
             lsp::lsp_list,
             lsp::lsp_server_available,
         ])
-        .on_window_event(|_window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
+        .on_window_event(|window, event| {
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                }
+                tauri::WindowEvent::Focused(true) => {
+                    if let Some(badge) =
+                        window.app_handle().try_state::<Arc<crate::badge::DockBadge>>()
+                    {
+                        badge.clear();
+                    }
+                }
+                _ => {}
             }
         })
         .build(context)

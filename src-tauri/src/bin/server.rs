@@ -132,7 +132,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let app_state = AppState::new(event_bus.clone(), lsp_manager);
 
     let pty_client = Arc::new(
-        pty_client::PtyClient::new(pty_client::daemon_socket_path(), event_bus.clone(), false).await?,
+        pty_client::PtyClient::new(pty_client::daemon_socket_path(), event_bus.clone(), false, None).await?,
     );
     let _ = app_state.pty_client.set(pty_client);
 

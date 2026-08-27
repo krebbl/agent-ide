@@ -22,7 +22,12 @@ pub struct PtyClient {
 }
 
 impl PtyClient {
-    pub async fn new(socket_path: PathBuf, event_bus: EventBus, daemonize: bool) -> Result<Self, String> {
+    pub async fn new(
+        socket_path: PathBuf,
+        event_bus: EventBus,
+        daemonize: bool,
+        badge: Option<Arc<crate::badge::DockBadge>>,
+    ) -> Result<Self, String> {
         let daemon = ensure_daemon_running(&socket_path, daemonize).await?;
         let stream = connect_with_retry(&socket_path).await?;
         let (read_half, write_half) = stream.into_split();
@@ -45,6 +50,7 @@ impl PtyClient {
             Arc::new(Mutex::new(None::<tokio::sync::oneshot::Sender<Vec<ProcessInfo>>>));
         let processes_waiter_read = Arc::clone(&processes_waiter);
         let event_bus_for_read = event_bus.clone();
+        let badge_for_read = badge.clone();
         let read_task = tokio::spawn(async move {
             let mut reader = BufReader::new(read_half);
             let mut line = String::new();
@@ -66,6 +72,17 @@ impl PtyClient {
                                     }
                                 }
                                 _ => {}
+                            }
+                            // A finished agent run (`Agent { name: None }` —
+                            // only ever emitted after a tracked agent) or a
+                            // finished terminal session (`Exit`) ticks the
+                            // dock badge.
+                            if let Some(badge) = badge_for_read.as_ref() {
+                                match &ev {
+                                    DaemonEvent::Agent { name: None, .. }
+                                    | DaemonEvent::Exit { .. } => badge.increment(),
+                                    _ => {}
+                                }
                             }
                             Self::emit_event(&event_bus_for_read, ev);
                         }
