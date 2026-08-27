@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../services/ipc";
 import Dialog from "../ui/Dialog";
 import { useEditorStore } from "../../stores/editorStore";
 import { useFileTreeStore } from "../../stores/fileTreeStore";
