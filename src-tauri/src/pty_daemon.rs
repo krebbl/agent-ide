@@ -14,6 +14,10 @@ use crate::remote_ssh::{self, RemotePtyEngine, SessionHandle};
 struct DaemonSession {
     meta: SessionMeta,
     engine: Option<Arc<dyn PtyEngine>>,
+    /// Set when `is_busy` was raised by a spinner title rather than the
+    /// foreground/OSC-133 signals; a later non-spinner title change may
+    /// then clear it.
+    title_busy: bool,
 }
 
 struct SshProject {
@@ -244,18 +248,54 @@ impl PtyDaemon {
                     continue;
                 }
                 EngineEvent::Title(title) => {
-                    if let Some(session) = map.get_mut(&session_id) {
-                        if session.meta.title != title {
+                    // Deduplicate: shells rewrite an identical title on every
+                    // prompt. A changed title is also activity evidence:
+                    // coding agents animate a spinner glyph in the title while
+                    // working, which is the one busy signal that reaches us
+                    // from remote shells and tmux panes that emit no OSC-133
+                    // markers. Clearing stays owned by the regular signals
+                    // unless this session's busy was raised by a title.
+                    let event = match map.get_mut(&session_id) {
+                        Some(session) if session.meta.title != title => {
                             session.meta.title = title.clone();
                             dirty = true;
+                            if title_has_spinner(&title) {
+                                if !session.meta.is_busy {
+                                    session.meta.is_busy = true;
+                                    session.title_busy = true;
+                                    Some(DaemonEvent::Busy {
+                                        session_id: session_id.clone(),
+                                        title,
+                                    })
+                                } else {
+                                    Some(DaemonEvent::Title {
+                                        session_id: session_id.clone(),
+                                        title,
+                                    })
+                                }
+                            } else if session.title_busy {
+                                session.meta.is_busy = false;
+                                session.title_busy = false;
+                                Some(DaemonEvent::Idle {
+                                    session_id: session_id.clone(),
+                                    title,
+                                })
+                            } else {
+                                Some(DaemonEvent::Title {
+                                    session_id: session_id.clone(),
+                                    title,
+                                })
+                            }
                         }
-                    }
-                    let event = DaemonEvent::Title { session_id, title };
+                        _ => None,
+                    };
                     drop(map);
                     if dirty {
                         Self::persist(&sessions, &persistence_path);
                     }
-                    let _ = Self::send_to_client(&client_tx, event);
+                    if let Some(event) = event {
+                        let _ = Self::send_to_client(&client_tx, event);
+                    }
                     continue;
                 }
                 EngineEvent::Agent(name) => {
@@ -292,6 +332,7 @@ impl PtyDaemon {
                             session.meta.is_busy = false;
                             dirty = true;
                         }
+                        session.title_busy = false;
                     }
                     let title = map
                         .get(&session_id)
@@ -407,6 +448,7 @@ impl PtyDaemon {
                     DaemonSession {
                         meta,
                         engine: Some(Arc::new(engine)),
+                        title_busy: false,
                     },
                 );
                 drop(map);
@@ -464,6 +506,7 @@ impl PtyDaemon {
                         DaemonSession {
                             meta: meta.clone(),
                             engine: None,
+                            title_busy: false,
                         },
                     );
                     drop(map);
@@ -684,7 +727,7 @@ impl PtyDaemon {
             // of current activity. The respawned engine re-reports Busy only
             // once a real process runs in the foreground.
             meta.is_busy = false;
-            map.insert(session_id, DaemonSession { meta, engine });
+            map.insert(session_id, DaemonSession { meta, engine, title_busy: false });
         }
     }
 
@@ -771,6 +814,7 @@ impl PtyDaemon {
                         DaemonSession {
                             meta,
                             engine: Some(Arc::new(engine)),
+                            title_busy: false,
                         },
                     );
                 }
@@ -804,6 +848,7 @@ fn basename(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+
 impl PtyDaemon {
     /// Current epoch time in milliseconds (coarse-grained creation clock).
     fn now_ms() -> u64 {
@@ -811,5 +856,155 @@ impl PtyDaemon {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64
+    }
+}
+/// True when the title contains a spinner glyph. Coding agents animate
+/// braille or dingbat spinner frames in the terminal title while working.
+fn title_has_spinner(title: &str) -> bool {
+    title.chars().any(|c| {
+        matches!(
+            c,
+            '\u{2800}'..='\u{28FF}' | '\u{25D0}'..='\u{25D3}' | '\u{2733}'..='\u{273D}'
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spinner_detection() {
+        assert!(title_has_spinner("⠋ fix login bug"));
+        assert!(title_has_spinner("✳ refactor terminal store"));
+        assert!(!title_has_spinner("marcus@host: ~/Projects/agent-ide"));
+        assert!(!title_has_spinner("lib.rs — agent-ide"));
+    }
+
+    #[tokio::test]
+    async fn spinner_title_drives_busy_state() {
+        let (event_tx, event_rx) = mpsc::channel(16);
+        let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+        let client_cell = Arc::new(std::sync::Mutex::new(Some(client_tx)));
+        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        sessions.lock().unwrap().insert(
+            "s1".to_string(),
+            DaemonSession {
+                meta: SessionMeta {
+                    session_id: "s1".to_string(),
+                    session_type: "ssh".to_string(),
+                    cwd: None,
+                    title: "shell".to_string(),
+                    is_busy: false,
+                    project_id: None,
+                    worktree_id: None,
+                    agent_name: None,
+                    agent_active: false,
+                    created_at: 0,
+                    pgid: None,
+                    cols: 80,
+                    rows: 24,
+                    argv: None,
+                },
+                engine: None,
+                title_busy: false,
+            },
+        );
+        let persistence = tempfile::tempdir().unwrap().path().join("persist.json");
+
+        let broadcaster = tokio::spawn(PtyDaemon::event_broadcaster(
+            event_rx,
+            sessions,
+            client_cell,
+            persistence,
+        ));
+
+        // Spinner title raises busy.
+        event_tx
+            .send(("s1".into(), EngineEvent::Title("✳ fix bug".into())))
+            .await
+            .unwrap();
+        // Further spinner frames while busy are plain title updates.
+        event_tx
+            .send(("s1".into(), EngineEvent::Title("⠋ fix bug".into())))
+            .await
+            .unwrap();
+        // A non-spinner title change clears busy only because the busy was
+        // raised by a title.
+        event_tx
+            .send(("s1".into(), EngineEvent::Title("host:~".into())))
+            .await
+            .unwrap();
+        drop(event_tx);
+        broadcaster.await.unwrap();
+
+        let busy = client_rx.recv().await.unwrap();
+        assert!(matches!(busy, DaemonEvent::Busy { ref title, .. } if title == "✳ fix bug"));
+        let frame = client_rx.recv().await.unwrap();
+        assert!(matches!(frame, DaemonEvent::Title { ref title, .. } if title == "⠋ fix bug"));
+        let idle = client_rx.recv().await.unwrap();
+        assert!(matches!(idle, DaemonEvent::Idle { ref title, .. } if title == "host:~"));
+        assert!(client_rx.recv().await.is_none());
+    }
+
+
+    #[tokio::test]
+    async fn fg_busy_is_not_cleared_by_title_change() {
+        // When busy was raised by the foreground/OSC-133 signal (not a
+        // title), a non-spinner title change (e.g. vim setting its title)
+        // must NOT clear busy.
+        let (event_tx, event_rx) = mpsc::channel(16);
+        let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+        let client_cell = Arc::new(std::sync::Mutex::new(Some(client_tx)));
+        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        sessions.lock().unwrap().insert(
+            "s2".to_string(),
+            DaemonSession {
+                meta: SessionMeta {
+                    session_id: "s2".to_string(),
+                    session_type: "local".to_string(),
+                    cwd: None,
+                    title: "shell".to_string(),
+                    is_busy: false,
+                    project_id: None,
+                    worktree_id: None,
+                    agent_name: None,
+                    agent_active: false,
+                    created_at: 0,
+                    pgid: None,
+                    cols: 80,
+                    rows: 24,
+                    argv: None,
+                },
+                engine: None,
+                title_busy: false,
+            },
+        );
+        let persistence = tempfile::tempdir().unwrap().path().join("persist.json");
+
+        let broadcaster = tokio::spawn(PtyDaemon::event_broadcaster(
+            event_rx,
+            sessions,
+            client_cell,
+            persistence,
+        ));
+
+        event_tx
+            .send(("s2".into(), EngineEvent::Busy))
+            .await
+            .unwrap();
+        event_tx
+            .send(("s2".into(), EngineEvent::Title("main.rs — vim".into())))
+            .await
+            .unwrap();
+        drop(event_tx);
+        broadcaster.await.unwrap();
+
+        let busy = client_rx.recv().await.unwrap();
+        assert!(matches!(busy, DaemonEvent::Busy { .. }));
+        let title = client_rx.recv().await.unwrap();
+        assert!(matches!(title, DaemonEvent::Title { ref title, .. } if title == "main.rs — vim"));
+        // No Idle event follows: busy stays with the foreground signal.
+        assert!(client_rx.recv().await.is_none());
     }
 }
