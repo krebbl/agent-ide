@@ -932,7 +932,7 @@ export default function LeftSidebar() {
                       size={10}
                       className={`mt-0.5 shrink-0 ${
                         session.isBusy || session.processRunning
-                          ? "animate-blink text-[var(--color-mauve)]"
+                          ? "animate-blink text-[var(--color-green)]"
                           : session.hasUnseenActivity
                             ? "text-[var(--color-green)]"
                             : "text-[var(--color-mauve)]"
