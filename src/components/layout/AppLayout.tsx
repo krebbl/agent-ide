@@ -6,13 +6,14 @@ import RightSidebar from "../sidebar/RightSidebar";
 import MainArea from "../main/MainArea";
 import DevNotificationContainer from "../ui/DevNotificationContainer";
 import FileSearchDialog from "../dialogs/FileSearchDialog";
+import AgentSearchDialog from "../dialogs/AgentSearchDialog";
 import { useUiStore } from "../../stores/uiStore";
 import { useFileTreeStore } from "../../stores/fileTreeStore";
 
 export default function AppLayout() {
   const { rightSidebarVisible } = useUiStore();
   const [fileSearchOpen, setFileSearchOpen] = useState(false);
-
+  const [agentSearchOpen, setAgentSearchOpen] = useState(false);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "o") {
@@ -21,6 +22,10 @@ export default function AppLayout() {
           e.preventDefault();
           setFileSearchOpen(true);
         }
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        setAgentSearchOpen(true);
       }
     };
     window.addEventListener("keydown", handler);
@@ -65,6 +70,7 @@ export default function AppLayout() {
       <StatusBar />
       <DevNotificationContainer />
       <FileSearchDialog isOpen={fileSearchOpen} onClose={() => setFileSearchOpen(false)} />
+      <AgentSearchDialog isOpen={agentSearchOpen} onClose={() => setAgentSearchOpen(false)} />
     </div>
   );
 }

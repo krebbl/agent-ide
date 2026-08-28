@@ -113,6 +113,9 @@ export interface TerminalSession {
   /** Epoch ms when this session was added. Stable ordering key for the
    *  Active list so sessions don't jump when the title/agent name changes. */
   createdAt?: number;
+  /** Epoch ms when this session was last focused (tab click, Active click,
+   *  agent search jump). Recency key for the agent search default selection. */
+  lastActiveAt?: number;
 }
 
 /** Derive `busySince` for a session given an incoming update. Sets it on the
@@ -343,8 +346,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     set({ isCollapsed: false });
     set((state) => ({
       sessions: state.sessions.map((s) =>
-        s.id === sessionId && s.hasUnseenActivity
-          ? { ...s, hasUnseenActivity: false }
+        s.id === sessionId
+          ? { ...s, hasUnseenActivity: false, lastActiveAt: Date.now() }
           : s,
       ),
     }));
@@ -457,6 +460,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           isBusy: false,
           needsInput: true,
           createdAt: Date.now(),
+          lastActiveAt: Date.now(),
         },
       ],
       tabs: [...state.tabs, tab],
