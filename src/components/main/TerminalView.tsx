@@ -271,6 +271,10 @@ export default function TerminalView({
         useTerminalStore.getState().removeSession(sessionId).catch(() => {});
       },
     });
+    // A restored terminal mounts with an empty buffer: any output printed
+    // before this handler existed (daemon respawn prompt, tmux pane content)
+    // never reached the frontend. Ask the daemon to force a repaint.
+    invoke("pty_nudge", { sessionId: ptyId }).catch(() => {});
     registerTerminalIdle(ptyId, (title) => {
       handleIdle(title);
     });

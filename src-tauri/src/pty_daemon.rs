@@ -630,6 +630,37 @@ impl PtyDaemon {
                 drop(map);
                 Self::persist(sessions, persistence_path);
             }
+            DaemonRequest::Nudge { session_id } => {
+                // A freshly attached frontend starts with an empty xterm
+                // buffer; output printed before the client connected is gone.
+                // Force the session's programs to repaint by resizing to a
+                // different size and back: SIGWINCH / window-change fires even
+                // when the persisted dimensions already match, so the shell
+                // (or tmux pane) redraws into the live client.
+                let (engine, cols, rows) = {
+                    let map = sessions.lock().unwrap();
+                    match map.get(&session_id) {
+                        Some(session) => (
+                            session.engine.as_ref().map(Arc::clone),
+                            session.meta.cols,
+                            session.meta.rows,
+                        ),
+                        None => (None, 0, 0),
+                    }
+                };
+                if let Some(engine) = engine {
+                    if rows > 1 {
+                        let _ = engine.resize(cols, rows - 1);
+                    } else if cols > 1 {
+                        let _ = engine.resize(cols - 1, rows);
+                    }
+                    // Give the remote side a moment to observe the
+                    // intermediate size: a zero-gap dance lets a program
+                    // read the winsize after the restore and see no change.
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    let _ = engine.resize(cols, rows);
+                }
+            }
             DaemonRequest::Kill { session_id } => {
                 let mut map = sessions.lock().unwrap();
                 if let Some(session) = map.get_mut(&session_id) {
@@ -1007,4 +1038,192 @@ mod tests {
         // No Idle event follows: busy stays with the foreground signal.
         assert!(client_rx.recv().await.is_none());
     }
+    struct RecordingEngine {
+        resizes: std::sync::Mutex<Vec<(u16, u16)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl PtyEngine for RecordingEngine {
+        fn write(&self, _data: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
+            self.resizes.lock().unwrap().push((cols, rows));
+            Ok(())
+        }
+        fn kill(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn process_group_id(&self) -> Option<i32> {
+            None
+        }
+    }
+
+    fn nudge_test_meta(session_id: &str) -> SessionMeta {
+        SessionMeta {
+            session_id: session_id.to_string(),
+            session_type: "local".to_string(),
+            cwd: None,
+            title: "shell".to_string(),
+            is_busy: false,
+            project_id: None,
+            worktree_id: None,
+            agent_name: None,
+            agent_active: false,
+            created_at: 0,
+            pgid: None,
+            cols: 80,
+            rows: 24,
+            argv: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn nudge_resizes_away_and_back_to_force_repaint() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = PtyDaemon::new(
+            dir.path().join("sock"),
+            dir.path().join("persist.json"),
+        );
+        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let (event_tx, _event_rx) = mpsc::channel(16);
+        let engine = Arc::new(RecordingEngine {
+            resizes: std::sync::Mutex::new(Vec::new()),
+        });
+        sessions.lock().unwrap().insert(
+            "s1".to_string(),
+            DaemonSession {
+                meta: nudge_test_meta("s1"),
+                engine: Some(engine.clone()),
+                title_busy: false,
+            },
+        );
+        let ssh_manager = Arc::new(SshManager::new());
+
+        daemon
+            .handle_request(
+                DaemonRequest::Nudge {
+                    session_id: "s1".to_string(),
+                },
+                &sessions,
+                &dir.path().join("persist.json"),
+                &event_tx,
+                None,
+                &ssh_manager,
+            )
+            .await;
+
+        // Same-size resizes generate no SIGWINCH, so the nudge must step the
+        // size away and back to force the shell/tmux to repaint.
+        assert_eq!(*engine.resizes.lock().unwrap(), vec![(80, 23), (80, 24)]);
+    }
+
+    #[tokio::test]
+    async fn nudge_delivers_sigwinch_to_live_session() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = PtyDaemon::new(
+            dir.path().join("sock"),
+            dir.path().join("persist.json"),
+        );
+        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let (event_tx, mut event_rx) = mpsc::channel(256);
+        let ssh_manager = Arc::new(SshManager::new());
+        let persistence = dir.path().join("persist.json");
+
+        daemon
+            .handle_request(
+                DaemonRequest::CreateLocal {
+                    session_id: "s1".to_string(),
+                    cwd: None,
+                    cols: 80,
+                    rows: 24,
+                    project_id: None,
+                    worktree_id: None,
+                    argv: Some(vec![
+                        "/bin/sh".to_string(),
+                        "-c".to_string(),
+                        "while :; do stty size; done".to_string(),
+                    ]),
+                },
+                &sessions,
+                &persistence,
+                &event_tx,
+                None,
+                &ssh_manager,
+            )
+            .await;
+
+        // Let the shell boot and start polling; SIGWINCH is not queued.
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        daemon
+            .handle_request(
+                DaemonRequest::Nudge {
+                    session_id: "s1".to_string(),
+                },
+                &sessions,
+                &persistence,
+                &event_tx,
+                None,
+                &ssh_manager,
+            )
+            .await;
+
+        let deadline = tokio::time::Duration::from_secs(5);
+        let mut saw_marker = false;
+        while let Ok(ev) = tokio::time::timeout(deadline, event_rx.recv()).await {
+            match ev {
+                Some((sid, EngineEvent::Output(data))) => {
+                    let bytes = STANDARD.decode(&data).unwrap_or_default();
+                    // stty size prints "ROWS COLS"; the nudge shrinks the pty
+                    // to 23 rows (and restores it), which the shell observes.
+                    if String::from_utf8_lossy(&bytes).contains("23 80") {
+                        saw_marker = true;
+                        break;
+                    }
+                }
+                Some((_, _)) => {}
+                None => break,
+            }
+        }
+        assert!(saw_marker, "nudge must resize the live pty so its programs can observe it");
+
+        daemon
+            .handle_request(
+                DaemonRequest::Kill {
+                    session_id: "s1".to_string(),
+                },
+                &sessions,
+                &persistence,
+                &event_tx,
+                None,
+                &ssh_manager,
+            )
+            .await;
+    }
+    #[tokio::test]
+    async fn nudge_without_engine_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = PtyDaemon::new(
+            dir.path().join("sock"),
+            dir.path().join("persist.json"),
+        );
+        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let (event_tx, _event_rx) = mpsc::channel(16);
+        let ssh_manager = Arc::new(SshManager::new());
+
+        daemon
+            .handle_request(
+                DaemonRequest::Nudge {
+                    session_id: "missing".to_string(),
+                },
+                &sessions,
+                &dir.path().join("persist.json"),
+                &event_tx,
+                None,
+                &ssh_manager,
+            )
+            .await;
+    }
 }
+

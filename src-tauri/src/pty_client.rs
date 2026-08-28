@@ -253,6 +253,12 @@ impl PtyClient {
             .map_err(|_| "pty daemon disconnected".to_string())
     }
 
+    pub fn nudge(&self, session_id: String) -> Result<(), String> {
+        self.request_tx
+            .send(DaemonRequest::Nudge { session_id })
+            .map_err(|_| "pty daemon disconnected".to_string())
+    }
+
     pub fn kill(&self, session_id: String) -> Result<(), String> {
         self.request_tx
             .send(DaemonRequest::Kill { session_id })

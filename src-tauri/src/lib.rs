@@ -3406,6 +3406,7 @@ pub fn run() {
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
+            pty::pty_nudge,
             pty::pty_kill,
             pty::pty_set_active,
             pty::pty_list_sessions,

@@ -57,6 +57,7 @@ pub use crate::notification::{cmd_notification_show as notification_show};
 pub use crate::pty::{
     cmd_pty_kill as pty_kill,
     cmd_pty_list_sessions as pty_list_sessions,
+    cmd_pty_nudge as pty_nudge,
     cmd_pty_register_ssh_project as pty_register_ssh_project,
     cmd_pty_resize as pty_resize,
     cmd_pty_session_processes as pty_session_processes,
@@ -157,6 +158,7 @@ pub async fn dispatch(
         }
         "pty_write" => cmd_state!(PtyWriteReq, pty_write, [session_id: String, data: String]),
         "pty_resize" => cmd_state!(PtyResizeReq, pty_resize, [session_id: String, cols: u16, rows: u16]),
+        "pty_nudge" => cmd_state!(PtyNudgeReq, pty_nudge, [session_id: String]),
         "pty_kill" => cmd_state!(PtyKillReq, pty_kill, [session_id: String]),
         "pty_session_processes" => cmd_state!(PtySessionProcessesReq, pty_session_processes, [session_id: String]),
         "pty_set_active" => cmd_state!(PtySetActiveReq, pty_set_active, [pty_id: Option<String>]),

@@ -506,6 +506,21 @@ pub async fn pty_resize(
     crate::commands::pty_resize(state.inner().as_ref(), session_id, cols, rows).await
 }
 
+pub async fn cmd_pty_nudge(
+    state: &crate::AppState,
+    session_id: String,
+) -> Result<(), String> {
+    require_pty_client(state)?.nudge(session_id)
+}
+
+#[tauri::command]
+pub async fn pty_nudge(
+    session_id: String,
+    state: tauri::State<'_, Arc<crate::AppState>>,
+) -> Result<(), String> {
+    crate::commands::pty_nudge(state.inner().as_ref(), session_id).await
+}
+
 pub async fn cmd_pty_kill(
     state: &crate::AppState,
     session_id: String,

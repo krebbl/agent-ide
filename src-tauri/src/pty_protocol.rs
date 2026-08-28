@@ -85,6 +85,9 @@ pub enum DaemonRequest {
         cols: u16,
         rows: u16,
     },
+    Nudge {
+        session_id: String,
+    },
     Kill {
         session_id: String,
     },
