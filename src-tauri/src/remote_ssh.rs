@@ -199,9 +199,27 @@ impl RemotePtyEngine {
                 .map_err(|e| format!("Failed to open SSH channel: {}", e))?
         };
 
+        // Plain remote sessions create the PTY with echo disabled: the typed
+        // setup line never appears, so no `clear` is needed and the login
+        // banner/MOTD stays visible. The setup line re-enables echo via
+        // `stty echo` before the user interacts. Agent (argv) and tmux
+        // (attach) sessions keep the default echo.
+        let pty_modes: &[(russh::Pty, u32)] = if argv.is_none() && !attach {
+            &[(russh::Pty::ECHO, 0)]
+        } else {
+            &[]
+        };
         tokio::time::timeout(
             Duration::from_secs(15),
-            channel.request_pty(false, "xterm-256color", cols as u32, rows as u32, 0, 0, &[]),
+            channel.request_pty(
+                false,
+                "xterm-256color",
+                cols as u32,
+                rows as u32,
+                0,
+                0,
+                pty_modes,
+            ),
         )
         .await
         .map_err(|_| "request_pty timed out".to_string())?
@@ -230,17 +248,21 @@ impl RemotePtyEngine {
             );
             let _ = channel.data(std::io::Cursor::new(tmux_cmd.into_bytes())).await;
         } else {
-            if let Some(ref dir) = cwd {
-                let cmd = format!("cd {}\n", shell_escape(dir));
-                let _ = channel.data(std::io::Cursor::new(cmd.into_bytes())).await;
-            }
             // Invisible identity marker: ask the fresh remote shell for its
             // controlling terminal. `ps` reports that tty for every process
             // attached to this terminal (shell, foreground and background
-            // jobs). OSC 1338 is ignored by real terminals.
-            let marker = b"printf '\\033]1338;AI_TTY=%s\\033\\\\' \"$(tty)\"\n";
+            // jobs). OSC 1338 is ignored by real terminals. Echo is off at
+            // the PTY level, so this line never appears; `stty echo` restores
+            // interactive echo afterwards. The leading space keeps the line
+            // out of the remote history under bash HISTCONTROL=ignorespace /
+            // zsh HIST_IGNORE_SPACE.
+            let mut setup = String::from(" ");
+            if let Some(dir) = &cwd {
+                setup.push_str(&format!("cd {}; ", shell_escape(dir)));
+            }
+            setup.push_str("printf '\\033]1338;AI_TTY=%s\\033\\\\' \"$(tty)\"; stty echo\n");
             let _ = channel
-                .data(std::io::Cursor::new(marker.to_vec()))
+                .data(std::io::Cursor::new(setup.into_bytes()))
                 .await;
         }
 
