@@ -6,6 +6,7 @@ import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
 import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import "./erbLanguage";
+import "./hamlLanguage";
 
 self.MonacoEnvironment = {
   getWorker(_workerId: string, label: string) {

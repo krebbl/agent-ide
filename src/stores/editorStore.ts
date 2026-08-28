@@ -72,6 +72,8 @@ export function languageFromPath(path: string): string {
       return "ruby";
     case "erb":
       return "erb";
+    case "haml":
+      return "haml";
     default:
       return "plaintext";
   }
