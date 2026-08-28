@@ -70,6 +70,8 @@ export function languageFromPath(path: string): string {
       return "lua";
     case "rb":
       return "ruby";
+    case "erb":
+      return "erb";
     default:
       return "plaintext";
   }
