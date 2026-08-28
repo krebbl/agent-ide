@@ -12,6 +12,10 @@ fn main() {
             .compile("agent_ide_notification");
         println!("cargo:rustc-link-lib=framework=UserNotifications");
     }
+    // Refresh AGENT_IDE_DAEMON_TOKEN whenever Rust code changes, so the
+    // running app replaces stale PTY daemons built from older sources.
+    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=Cargo.toml");
     let token = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
