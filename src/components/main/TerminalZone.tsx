@@ -171,6 +171,12 @@ export default function TerminalZone({
         return;
       }
 
+      if (e.key.toLowerCase() === "f" && !e.altKey && activeSessionId) {
+        e.preventDefault();
+        useTerminalStore.getState().setSearchOpen(activeSessionId);
+        return;
+      }
+
       if (e.altKey) {
         switch (e.key) {
           case "ArrowLeft":

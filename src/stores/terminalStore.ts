@@ -137,6 +137,7 @@ interface TerminalStore {
   activeTabId: string | null;
   activeSessionId: string | null;
   isCollapsed: boolean;
+  searchOpenSessionId: string | null;
   worktreeTabMap: Record<string, string>;
 
   getWorktreeTabId: (projectId: string, worktreeId: string) => string | null;
@@ -155,6 +156,7 @@ interface TerminalStore {
   updateSessionTitle: (id: string, title: string) => void;
   updateSessionByPtyId: (ptyId: string, updates: Partial<TerminalSession>) => void;
   setCollapsed: (collapsed: boolean) => void;
+  setSearchOpen: (id: string | null) => void;
   focusSession: (sessionId: string) => void;
   setSessionActivity: (
     id: string,
@@ -334,6 +336,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   activeTabId: null,
   activeSessionId: null,
   isCollapsed: false,
+  searchOpenSessionId: null,
   worktreeTabMap: loadWorktreeTabMap(),
 
   getWorktreeTabId: (projectId, worktreeId) => {
@@ -342,6 +345,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
   setCollapsed: (collapsed) => set({ isCollapsed: collapsed }),
 
+  setSearchOpen: (id) => set({ searchOpenSessionId: id }),
   focusSession: (sessionId) => {
     set({ isCollapsed: false });
     set((state) => ({
@@ -535,7 +539,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         sessions: state.sessions.filter((s) => s.id !== id),
         tabs,
         activeTabId,
-        activeSessionId,
+        searchOpenSessionId:
+          state.searchOpenSessionId === id ? null : state.searchOpenSessionId,
         worktreeTabMap: (() => {
           if (!tab.projectId || !tab.worktreeId) return state.worktreeTabMap;
           const key = worktreeKey(tab.projectId, tab.worktreeId);

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { invoke } from "../../services/ipc";
@@ -12,6 +13,7 @@ import {
   registerTerminalError,
   unregisterTerminal,
 } from "../../services/terminalEvents";
+import TerminalSearchBar from "./TerminalSearchBar";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { notify } from "../../services/notifications";
 import "@xterm/xterm/css/xterm.css";
@@ -32,6 +34,7 @@ export default function TerminalView({
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const searchAddonRef = useRef<SearchAddon | null>(null);
   const rafRef = useRef<number | null>(null);
   const processTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isVisible = !isCollapsed;
@@ -246,6 +249,9 @@ export default function TerminalView({
         await openUrl(uri);
       }),
     );
+    const searchAddon = new SearchAddon();
+    terminal.loadAddon(searchAddon);
+    searchAddonRef.current = searchAddon;
 
     terminal.open(container);
 
@@ -301,9 +307,17 @@ export default function TerminalView({
     };
     const dataDisposable = terminal.onData(handleInput);
     const binaryDisposable = terminal.onBinary(handleInput);
-
     terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
       if (event.type !== "keydown") return true;
+      if (event.key === "Escape") {
+        if (useTerminalStore.getState().searchOpenSessionId === sessionId) {
+          event.preventDefault();
+          useTerminalStore.getState().setSearchOpen(null);
+          terminal.focus();
+          return false;
+        }
+        return true;
+      }
       if (event.key.toLowerCase() !== "c") return true;
       if (!event.ctrlKey && !event.metaKey) return true;
       if (!terminal.hasSelection()) return true;
@@ -337,6 +351,7 @@ export default function TerminalView({
       terminal.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;
+      searchAddonRef.current = null;
     };
   }, [sessionId, ptyId]);
 
@@ -348,6 +363,16 @@ export default function TerminalView({
     };
   }, [isVisible]);
 
+  const searchOpen =
+    useTerminalStore((s) => s.searchOpenSessionId) === sessionId;
+
+  const closeSearch = () => {
+    useTerminalStore.getState().setSearchOpen(null);
+    searchAddonRef.current?.clearDecorations();
+    xtermRef.current?.clearSelection();
+    xtermRef.current?.focus();
+  };
+
   return (
     <div className="flex h-full w-full flex-col">
       <div className="relative flex-1 overflow-hidden">
@@ -355,6 +380,12 @@ export default function TerminalView({
           ref={containerRef}
           className={`h-full min-w-0 flex-1 ${isVisible ? "" : "hidden"}`}
         />
+        {searchOpen && searchAddonRef.current && (
+          <TerminalSearchBar
+            searchAddon={searchAddonRef.current}
+            onClose={closeSearch}
+          />
+        )}
       </div>
     </div>
   );
