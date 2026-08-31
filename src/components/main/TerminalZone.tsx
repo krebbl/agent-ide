@@ -5,8 +5,11 @@ import {
   ChevronUp,
   ChevronRight,
   Loader2,
+  Bot,
 } from "lucide-react";
 import { useEffect, useMemo, useCallback } from "react";
+import type { TerminalTab } from "../../types";
+import type { TerminalSession } from "../../stores/terminalStore";
 import { invoke } from "../../services/ipc";
 import { useTerminalStore, collectLeaves, findLeaf } from "../../stores/terminalStore";
 import { useProjectStore } from "../../stores/projectStore";
@@ -34,6 +37,17 @@ function tabHasUnseenActivity(
   return leaves.some((leaf) => {
     const session = sessions.find((s) => s.id === leaf.sessionId);
     return session?.hasUnseenActivity === true;
+  });
+}
+
+function tabHasAgentSession(
+  tab: TerminalTab,
+  sessions: TerminalSession[],
+): boolean {
+  const leaves = collectLeaves(tab.rootPane);
+  return leaves.some((leaf) => {
+    const session = sessions.find((s) => s.id === leaf.sessionId);
+    return session?.agentActive === true;
   });
 }
 
@@ -218,13 +232,20 @@ export default function TerminalZone({
             const isActive = tab.id === effectiveActiveId;
             const isBusy = tabHasBusySession(tab, sessions);
             const hasUnseen = tabHasUnseenActivity(tab, sessions);
+            const hasAgent = tabHasAgentSession(tab, sessions);
             const title = getFocusedSessionTitle(tab, sessions);
             const leafCount = collectLeaves(tab.rootPane).length;
             return {
               id: tab.id,
               title,
               tooltip: title,
-              icon: isBusy ? (
+              icon: hasAgent ? (
+                <Bot
+                  size={12}
+                  className="animate-pulse text-[var(--color-mauve)]"
+                  aria-label="Agent running"
+                />
+              ) : isBusy ? (
                 <Loader2
                   size={12}
                   className="animate-spin text-[var(--color-blue)]"
