@@ -10,6 +10,8 @@ use tracing::{error, info, warn};
 use crate::pty_engine::{EngineEvent, LocalPtyEngine, PtyEngine};
 use crate::pty_protocol::{DaemonEvent, DaemonRequest, SessionMeta};
 use crate::remote_ssh::{self, RemotePtyEngine, SessionHandle};
+use crate::agent_detect;
+use crate::agents;
 
 struct DaemonSession {
     meta: SessionMeta,
@@ -18,6 +20,25 @@ struct DaemonSession {
     /// foreground/OSC-133 signals; a later non-spinner title change may
     /// then clear it.
     title_busy: bool,
+}
+
+/// Augment a persisted agent-session command with the agent's continue flag
+/// so a reboot restores the last conversation instead of a fresh one.
+/// Non-agent argv and agents without resume support pass through unchanged.
+fn restore_argv(argv: &[String]) -> Vec<String> {
+    let Some(binary) = argv.first() else {
+        return argv.to_vec();
+    };
+    let agent =
+        agent_detect::matches_agent(binary, binary, agent_detect::KNOWN_AGENT_BINARIES);
+    match agent.as_deref().and_then(agents::resume_flag) {
+        Some(flag) if !argv.iter().any(|arg| arg == flag) => {
+            let mut out = argv.to_vec();
+            out.push(flag.to_string());
+            out
+        }
+        _ => argv.to_vec(),
+    }
 }
 
 struct SshProject {
@@ -754,10 +775,12 @@ impl PtyDaemon {
                 None
             };
             // A freshly respawned session is idle: the persisted is_busy
-            // flag belongs to the previous daemon run and is not evidence
-            // of current activity. The respawned engine re-reports Busy only
-            // once a real process runs in the foreground.
+            // and agent_active flags belong to the previous daemon run and
+            // are not evidence of current activity. The respawned engine
+            // re-reports Busy and a foreground agent only once a real
+            // process runs. `agent_name` stays sticky as session history.
             meta.is_busy = false;
+            meta.agent_active = false;
             map.insert(session_id, DaemonSession { meta, engine, title_busy: false });
         }
     }
@@ -769,7 +792,7 @@ impl PtyDaemon {
             meta.cols,
             meta.rows,
             self.event_tx.clone(),
-            meta.argv.clone(),
+            meta.argv.clone().map(|argv| restore_argv(&argv)),
         )
     }
 
@@ -817,7 +840,7 @@ impl PtyDaemon {
                     ssh_session,
                     event_tx.clone(),
                     meta.argv.is_none(),
-                    meta.argv.clone(),
+                    meta.argv.clone().map(|argv| restore_argv(&argv)),
                 )
                 .await
                 {
@@ -1200,6 +1223,52 @@ mod tests {
                 &ssh_manager,
             )
             .await;
+    }
+    #[tokio::test]
+    async fn load_sessions_resets_live_flags_keeps_agent_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let persistence = dir.path().join("persist.json");
+        let meta = nudge_test_meta("s1");
+        let mut stale = serde_json::to_value(&meta).unwrap();
+        stale["isBusy"] = serde_json::Value::Bool(true);
+        stale["agentActive"] = serde_json::Value::Bool(true);
+        stale["agentName"] = serde_json::Value::String("claude".to_string());
+        stale["sessionType"] = serde_json::Value::String("ssh".to_string());
+        std::fs::write(
+            &persistence,
+            serde_json::to_string(&vec![stale]).unwrap(),
+        )
+        .unwrap();
+
+        let daemon = PtyDaemon::new(dir.path().join("sock"), persistence.clone());
+        daemon.load_sessions();
+
+        let map = daemon.sessions.lock().unwrap();
+        let restored = map.get("s1").expect("restored session");
+        // Live flags belong to the previous daemon run; agent_name is
+        // sticky session history.
+        assert!(!restored.meta.is_busy);
+        assert!(!restored.meta.agent_active);
+        assert_eq!(restored.meta.agent_name.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn restore_argv_appends_continue_flag_for_known_agent() {
+        let argv = vec![
+            "claude".to_string(),
+            "--model".to_string(),
+            "opus".to_string(),
+        ];
+        assert_eq!(restore_argv(&argv), vec!["claude", "--model", "opus", "-c"]);
+    }
+
+    #[test]
+    fn restore_argv_is_idempotent_and_passes_through_unknowns() {
+        let resumed = vec!["omp".to_string(), "-c".to_string()];
+        assert_eq!(restore_argv(&resumed), resumed);
+        let shell = vec!["/bin/zsh".to_string(), "-l".to_string()];
+        assert_eq!(restore_argv(&shell), shell);
+        assert!(restore_argv(&[]).is_empty());
     }
     #[tokio::test]
     async fn nudge_without_engine_is_noop() {

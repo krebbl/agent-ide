@@ -260,6 +260,16 @@ pub fn launch_command(
     Ok(argv)
 }
 
+/// Flag that resumes an agent's most recent conversation in its working
+/// directory, for agents whose CLI supports it (verified per `--help`).
+/// Agents without resume support return `None`.
+pub fn resume_flag(agent_id: &str) -> Option<&'static str> {
+    match agent_id {
+        "claude" | "omp" | "opencode" => Some("-c"),
+        _ => None,
+    }
+}
+
 /// Model catalogue for an agent. Curated defaults, enriched at runtime where
 /// the CLI exposes the authoritative list (`opencode models`, `omp models`).
 pub fn list_agent_models(agent_id: &str) -> Vec<AgentModel> {
@@ -567,5 +577,14 @@ mod tests {
         let parsed: OmpModelsResponse = serde_json::from_str(json).unwrap();
         let count = parsed.models.iter().filter(|m| !m.selector.trim().is_empty()).count();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn resume_flag_covers_agents_with_continue_support() {
+        assert_eq!(resume_flag("claude"), Some("-c"));
+        assert_eq!(resume_flag("omp"), Some("-c"));
+        assert_eq!(resume_flag("opencode"), Some("-c"));
+        assert_eq!(resume_flag("codex"), None);
+        assert_eq!(resume_flag("unknown"), None);
     }
 }
