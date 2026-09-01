@@ -469,13 +469,15 @@ async fn run_remote_terminal(
             }
             Some(procs) = probe_result_rx.recv() => {
                 probe_in_flight = false;
-                match agent_detect::detect_agent_in_processes(&procs) {
-                    Some(name) => {
+                match agent_detect::detect_agent_sighting_in_processes(&procs) {
+                    Some((name, command)) => {
                         if detected_agent.as_deref() != Some(name.as_str()) {
                             detected_agent = Some(name.clone());
                             let _ = event_tx.send((
                                 session_id.clone(),
-                                crate::pty_engine::EngineEvent::Agent(Some(name)),
+                                crate::pty_engine::EngineEvent::Agent(Some(
+                                    crate::pty_engine::AgentSighting { name, command },
+                                )),
                             )).await;
                         }
                     }

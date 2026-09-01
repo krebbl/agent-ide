@@ -270,6 +270,95 @@ pub fn resume_flag(agent_id: &str) -> Option<&'static str> {
     }
 }
 
+
+/// Agents whose CLI can force the session id of a new conversation
+/// (`--session-id`). Only these get a per-terminal PATH shim; the others
+/// keep the `-c` (continue-latest) restore fallback.
+const SESSION_ID_SHIM_AGENTS: &[&str] = &["claude"];
+
+/// True when the user already pins or resumes a conversation, so nothing
+/// may be injected.
+pub(crate) fn pins_conversation(argv: &[String]) -> bool {
+    argv.iter().any(|a| {
+        matches!(
+            a.as_str(),
+            "-r" | "--resume" | "-c" | "--continue" | "--session-id"
+        ) || a.starts_with("--resume=")
+            || a.starts_with("--session-id=")
+    })
+}
+
+/// Pin a directly-spawned agent command to the terminal session's id with
+/// `--session-id`, so a reboot can resume that exact conversation. No-op
+/// for non-agent argv, agents without forced-id support, and commands that
+/// already pin or resume a conversation.
+pub fn with_forced_session_id(agent_argv: &[String], session_id: &str) -> Vec<String> {
+    let mut out = agent_argv.to_vec();
+    let Some(binary) = out.first() else {
+        return out;
+    };
+    let known = crate::agent_detect::matches_agent(
+        binary,
+        binary,
+        crate::agent_detect::KNOWN_AGENT_BINARIES,
+    );
+    if known.as_deref() == Some("claude") && !pins_conversation(&out) {
+        out.push("--session-id".to_string());
+        out.push(session_id.to_string());
+    }
+    out
+}
+
+/// Create (once) a directory of PATH shims that run the real binary with
+/// `--session-id $AGENT_IDE_CONV_ID` unless the user already pins or resumes
+/// a conversation. Only agents whose CLI supports forced session ids get a
+/// shim.
+pub fn ensure_session_id_shims(dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    for agent in SESSION_ID_SHIM_AGENTS {
+        let shim = dir.join(agent);
+        if shim.exists() {
+            continue;
+        }
+        let Some(real) = find_real_binary(agent) else {
+            continue;
+        };
+        let script = format!(
+            "#!/bin/sh\n# agent-ide per-terminal wrapper: pin the conversation to this\n# terminal's session id unless the user already resumes or pins one.\nfor arg in \"$@\"; do\n    case \"$arg\" in\n        -r|--resume|-c|--continue|--session-id|--resume=*|--session-id=*)\n            exec \"{real}\" \"$@\"\n            ;;\n    esac\ndone\nif [ -n \"$AGENT_IDE_CONV_ID\" ]; then\n    exec \"{real}\" --session-id \"$AGENT_IDE_CONV_ID\" \"$@\"\nfi\nexec \"{real}\" \"$@\"\n",
+            real = real.display()
+        );
+        std::fs::write(&shim, script)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    // A ZDOTDIR wrapper sources the user's own zsh config and then defines
+    // per-agent wrapper functions. Functions take precedence over PATH
+    // lookup, so rc files or plugins that rebuild PATH cannot bypass them.
+    let zdotdir = dir.join("zdotdir");
+    std::fs::create_dir_all(&zdotdir)?;
+    let shim_dir = dir.display();
+    let zshenv = format!(
+        "# agent-ide: chain the user's zshenv while terminal shims are active.\nif [ -n \"$AGENT_IDE_ORIG_ZDOTDIR\" ] && [ -f \"$AGENT_IDE_ORIG_ZDOTDIR/.zshenv\" ]; then\n    . \"$AGENT_IDE_ORIG_ZDOTDIR/.zshenv\"\nelif [ -f \"$HOME/.zshenv\" ]; then\n    . \"$HOME/.zshenv\"\nfi\n"
+    );
+    let mut wrappers = String::new();
+    for agent in SESSION_ID_SHIM_AGENTS {
+        wrappers.push_str(&format!(
+            "{agent}() {{\n    local arg\n    for arg in \"$@\"; do\n        case \"$arg\" in\n            -r|--resume|-c|--continue|--session-id|--resume=*|--session-id=*)\n                command {agent} \"$@\"; return ;;\n        esac\n    done\n    if [ -n \"$AGENT_IDE_CONV_ID\" ]; then\n        command {agent} --session-id \"$AGENT_IDE_CONV_ID\" \"$@\"\n    else\n        command {agent} \"$@\"\n    fi\n}}\n",
+            agent = agent
+        ));
+    }
+    let zshrc = format!(
+        "# agent-ide: chain the user's zshrc, then put terminal shims on PATH\n# and pin agent conversations to this terminal's session id.\nif [ -n \"$AGENT_IDE_ORIG_ZDOTDIR\" ] && [ -f \"$AGENT_IDE_ORIG_ZDOTDIR/.zshrc\" ]; then\n    . \"$AGENT_IDE_ORIG_ZDOTDIR/.zshrc\"\nelif [ -f \"$HOME/.zshrc\" ]; then\n    . \"$HOME/.zshrc\"\nfi\ncase \":$PATH:\" in\n    *\":{shim_dir}:\"*) ;;\n    *) export PATH=\"{shim_dir}:$PATH\" ;;\nesac\n{wrappers}",
+        shim_dir = shim_dir,
+        wrappers = wrappers
+    );
+    std::fs::write(zdotdir.join(".zshenv"), zshenv)?;
+    std::fs::write(zdotdir.join(".zshrc"), zshrc)?;
+    Ok(())
+}
 /// Model catalogue for an agent. Curated defaults, enriched at runtime where
 /// the CLI exposes the authoritative list (`opencode models`, `omp models`).
 pub fn list_agent_models(agent_id: &str) -> Vec<AgentModel> {

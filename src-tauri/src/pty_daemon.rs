@@ -22,13 +22,31 @@ struct DaemonSession {
     title_busy: bool,
 }
 
-/// Augment a persisted agent-session command with the agent's continue flag
-/// so a reboot restores the last conversation instead of a fresh one.
-/// Non-agent argv and agents without resume support pass through unchanged.
+/// Augment a persisted agent-session command so a reboot restores the
+/// conversation: an injected `--session-id <id>` pins the exact conversation
+/// and maps to `--resume <id>`; otherwise the agent's continue flag is
+/// appended. Non-agent argv and agents without resume support pass through
+/// unchanged.
 fn restore_argv(argv: &[String]) -> Vec<String> {
+    if let Some(pos) = argv.iter().position(|a| a == "--session-id") {
+        if let Some(id) = argv.get(pos + 1) {
+            let mut out: Vec<String> = argv
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != pos && *i != pos + 1)
+                .map(|(_, a)| a.clone())
+                .collect();
+            out.push("--resume".to_string());
+            out.push(id.clone());
+            return out;
+        }
+    }
     let Some(binary) = argv.first() else {
         return argv.to_vec();
     };
+    if agents::pins_conversation(argv) {
+        return argv.to_vec();
+    }
     let agent =
         agent_detect::matches_agent(binary, binary, agent_detect::KNOWN_AGENT_BINARIES);
     match agent.as_deref().and_then(agents::resume_flag) {
@@ -133,6 +151,9 @@ pub struct PtyDaemon {
     socket_path: PathBuf,
     sessions: Arc<Mutex<HashMap<String, DaemonSession>>>,
     persistence_path: PathBuf,
+    /// PATH-shim directory that pins agent conversations to terminal
+    /// session ids; `None`-equivalent when unwritable.
+    shim_dir: Option<PathBuf>,
     client_tx: Arc<Mutex<Option<mpsc::UnboundedSender<DaemonEvent>>>>,
     event_tx: mpsc::Sender<(String, EngineEvent)>,
     _event_rx_handle: Option<tokio::task::JoinHandle<()>>,
@@ -154,17 +175,23 @@ impl PtyDaemon {
             })
         };
 
+        let shim_dir = persistence_path
+            .parent()
+            .map(|p| p.join("agent-shims"))
+            .unwrap_or_else(|| persistence_path.with_extension("shims"));
+        let _ = agents::ensure_session_id_shims(&shim_dir);
+
         Self {
             socket_path,
             sessions,
             persistence_path,
+            shim_dir: Some(shim_dir),
             client_tx,
             event_tx,
             _event_rx_handle: Some(event_rx_handle),
             ssh_manager: Arc::new(SshManager::new()),
         }
     }
-
     pub async fn run(self) -> Result<(), String> {
         let _ = std::fs::remove_file(&self.socket_path);
         let listener = UnixListener::bind(&self.socket_path)
@@ -245,6 +272,7 @@ impl PtyDaemon {
                 }
             }
         }
+        Ok(())
     }
 
     async fn event_broadcaster(
@@ -319,19 +347,29 @@ impl PtyDaemon {
                     }
                     continue;
                 }
-                EngineEvent::Agent(name) => {
-                    // `name` is the live foreground agent (None once it
+                EngineEvent::Agent(sighting) => {
+                    // `sighting` is the live foreground agent (None once it
                     // finishes). Keep `agent_name` sticky (session history)
                     // and `agent_active` live so the UI can pick the icon.
+                    // The first agent seen in a shell session also records
+                    // its command line as the session's argv, so a reboot
+                    // restores the agent (with resume) instead of a bare
+                    // shell. Explicitly spawned sessions keep their argv.
                     if let Some(session) = map.get_mut(&session_id) {
                         let mut changed = false;
-                        if session.meta.agent_active != name.is_some() {
-                            session.meta.agent_active = name.is_some();
+                        if session.meta.agent_active != sighting.is_some() {
+                            session.meta.agent_active = sighting.is_some();
                             changed = true;
                         }
-                        if let Some(agent) = name.as_ref() {
-                            if session.meta.agent_name.as_deref() != Some(agent.as_str()) {
-                                session.meta.agent_name = Some(agent.clone());
+                        if let Some(s) = sighting.as_ref() {
+                            if session.meta.agent_name.as_deref() != Some(s.name.as_str()) {
+                                session.meta.agent_name = Some(s.name.clone());
+                                changed = true;
+                            }
+                            if session.meta.argv.is_none() {
+                                session.meta.argv = Some(
+                                    s.command.split_whitespace().map(str::to_string).collect(),
+                                );
                                 changed = true;
                             }
                         }
@@ -339,7 +377,10 @@ impl PtyDaemon {
                             dirty = true;
                         }
                     }
-                    let event = DaemonEvent::Agent { session_id, name };
+                    let event = DaemonEvent::Agent {
+                        session_id,
+                        name: sighting.map(|s| s.name),
+                    };
                     drop(map);
                     if dirty {
                         Self::persist(&sessions, &persistence_path);
@@ -439,7 +480,7 @@ impl PtyDaemon {
                     pgid: None,
                     cols,
                     rows,
-                    argv,
+                    argv: argv.map(|a| agents::with_forced_session_id(&a, &session_id)),
                 };
 
                 let engine = match LocalPtyEngine::spawn(
@@ -449,6 +490,7 @@ impl PtyDaemon {
                     rows,
                     event_tx.clone(),
                     meta.argv.clone(),
+                    self.shim_dir.clone(),
                 ) {
                     Ok(e) => e,
                     Err(e) => {
@@ -793,9 +835,9 @@ impl PtyDaemon {
             meta.rows,
             self.event_tx.clone(),
             meta.argv.clone().map(|argv| restore_argv(&argv)),
+            self.shim_dir.clone(),
         )
     }
-
     fn respawn_remote_sessions(
         &self,
         project_id: &str,
@@ -1242,7 +1284,6 @@ mod tests {
 
         let daemon = PtyDaemon::new(dir.path().join("sock"), persistence.clone());
         daemon.load_sessions();
-
         let map = daemon.sessions.lock().unwrap();
         let restored = map.get("s1").expect("restored session");
         // Live flags belong to the previous daemon run; agent_name is
@@ -1263,12 +1304,109 @@ mod tests {
     }
 
     #[test]
+    fn restore_argv_maps_session_id_to_exact_resume() {
+        let argv = vec![
+            "claude".to_string(),
+            "--model".to_string(),
+            "opus".to_string(),
+            "--session-id".to_string(),
+            "8b1f0e42-1111-2222-3333-444455556666".to_string(),
+        ];
+        assert_eq!(
+            restore_argv(&argv),
+            vec![
+                "claude",
+                "--model",
+                "opus",
+                "--resume",
+                "8b1f0e42-1111-2222-3333-444455556666"
+            ]
+        );
+        // An explicitly resumed conversation re-runs verbatim.
+        let manual = vec![
+            "claude".to_string(),
+            "--resume".to_string(),
+            "abc".to_string(),
+        ];
+        assert_eq!(restore_argv(&manual), manual);
+    }
+
+    #[test]
     fn restore_argv_is_idempotent_and_passes_through_unknowns() {
         let resumed = vec!["omp".to_string(), "-c".to_string()];
         assert_eq!(restore_argv(&resumed), resumed);
         let shell = vec!["/bin/zsh".to_string(), "-l".to_string()];
         assert_eq!(restore_argv(&shell), shell);
         assert!(restore_argv(&[]).is_empty());
+    }
+
+    #[test]
+    fn forced_session_id_pins_claude_only_once() {
+        let argv = vec!["claude".to_string(), "--model".to_string()];
+        assert_eq!(
+            agents::with_forced_session_id(&argv, "sid"),
+            vec!["claude", "--model", "--session-id", "sid"]
+        );
+        // Already pinned or resumed: untouched.
+        let pinned = vec!["claude".to_string(), "--session-id".to_string(), "x".to_string()];
+        assert_eq!(agents::with_forced_session_id(&pinned, "sid"), pinned);
+        let resumed = vec!["claude".to_string(), "--resume".to_string(), "x".to_string()];
+        assert_eq!(agents::with_forced_session_id(&resumed, "sid"), resumed);
+        // omp cannot force ids: untouched.
+        let omp = vec!["omp".to_string()];
+        assert_eq!(agents::with_forced_session_id(&omp, "sid"), omp);
+    }
+
+    #[tokio::test]
+    async fn first_agent_sighting_stores_command_as_argv() {
+        let (event_tx, event_rx) = mpsc::channel(16);
+        let (client_tx, _client_rx) = mpsc::unbounded_channel();
+        let client_cell = Arc::new(std::sync::Mutex::new(Some(client_tx)));
+        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        sessions.lock().unwrap().insert(
+            "s3".to_string(),
+            DaemonSession {
+                meta: nudge_test_meta("s3"),
+                engine: None,
+                title_busy: false,
+            },
+        );
+        let persistence = tempfile::tempdir().unwrap().path().join("persist.json");
+
+        let broadcaster = tokio::spawn(PtyDaemon::event_broadcaster(
+            event_rx,
+            sessions.clone(),
+            client_cell,
+            persistence,
+        ));
+
+        event_tx
+            .send((
+                "s3".into(),
+                EngineEvent::Agent(Some(crate::pty_engine::AgentSighting {
+                    name: "claude".to_string(),
+                    command: "claude --model opus".to_string(),
+                })),
+            ))
+            .await
+            .unwrap();
+        event_tx
+            .send(("s3".into(), EngineEvent::Agent(None)))
+            .await
+            .unwrap();
+        drop(event_tx);
+        broadcaster.await.unwrap();
+
+        let map = sessions.lock().unwrap();
+        let meta = &map.get("s3").unwrap().meta;
+        // The command the user typed becomes the session's restore command;
+        // live flag clears with the agent, history persists.
+        assert_eq!(
+            meta.argv,
+            Some(vec!["claude".to_string(), "--model".to_string(), "opus".to_string()])
+        );
+        assert!(!meta.agent_active);
+        assert_eq!(meta.agent_name.as_deref(), Some("claude"));
     }
     #[tokio::test]
     async fn nudge_without_engine_is_noop() {

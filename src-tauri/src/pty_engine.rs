@@ -85,14 +85,22 @@ impl PtyEngine for LocalPtyEngine {
     }
 }
 
+/// A foreground coding-agent sighting: the binary name plus the full
+/// command line as reported by `ps`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentSighting {
+    pub name: String,
+    pub command: String,
+}
+
 pub enum EngineEvent {
     Output(String),
     Idle,
     Busy,
     Title(String),
-    /// Foreground coding-agent process name (claude, omp, ...), or `None`
-    /// when no known agent is in the foreground.
-    Agent(Option<String>),
+    /// Foreground coding-agent sighting, or `None` when no known agent is
+    /// in the foreground.
+    Agent(Option<AgentSighting>),
     Exit(Option<i32>),
 }
 
@@ -113,6 +121,7 @@ impl LocalPtyEngine {
         rows: u16,
         event_tx: tokio::sync::mpsc::Sender<(String, EngineEvent)>,
         argv: Option<Vec<String>>,
+        shim_dir: Option<std::path::PathBuf>,
     ) -> Result<Self, String> {
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -132,11 +141,26 @@ impl LocalPtyEngine {
             }
             _ => {
                 let shell = default_shell();
-                (CommandBuilder::new(&shell), shell)
+                let mut builder = CommandBuilder::new(&shell);
+                #[cfg(unix)]
+                if let Some(dir) = &shim_dir {
+                    if let Ok(path) = std::env::var("PATH") {
+                        builder.env("PATH", format!("{}:{}", dir.display(), path));
+                    }
+                    builder.env("AGENT_IDE_CONV_ID", &session_id);
+                    let zdotdir = dir.join("zdotdir");
+                    if zdotdir.join(".zshrc").exists() {
+                        let orig = std::env::var("ZDOTDIR")
+                            .unwrap_or_else(|_| std::env::var("HOME").unwrap_or_default());
+                        builder.env("ZDOTDIR", &zdotdir);
+                        builder.env("AGENT_IDE_ORIG_ZDOTDIR", orig);
+                    }
+                }
+                (builder, shell)
             }
         };
         let mut cmd = cmd;
-        if let Some(ref cwd) = cwd {
+        if let Some(cwd) = &cwd {
             cmd.cwd(cwd);
         }
 
@@ -312,12 +336,13 @@ impl LocalPtyEngine {
                         .unwrap_or(true);
                     if command_running && probe_due {
                         last_agent_probe = Some(Instant::now());
-                        let probe = foreground_agent_name(fg_pgid);
-                        if probe != agent_name {
-                            agent_name = probe;
+                        let probe = foreground_agent_sighting(fg_pgid);
+                        let probe_name = probe.as_ref().map(|s| s.name.clone());
+                        if probe_name != agent_name {
+                            agent_name = probe_name;
                             let _ = monitor_event_tx.blocking_send((
                                 monitor_session_id.clone(),
-                                EngineEvent::Agent(agent_name.clone()),
+                                EngineEvent::Agent(probe),
                             ));
                         }
                     }
@@ -340,11 +365,10 @@ impl LocalPtyEngine {
         })
     }
 }
-
-/// Resolve the name of a known coding agent in the given foreground process
-/// group, or `None` when no known agent is running there.
+/// Probe the foreground process group for a known coding agent, returning
+/// its name and full command line, or `None` when no known agent runs there.
 #[cfg(unix)]
-fn foreground_agent_name(fg_pgid: i32) -> Option<String> {
+fn foreground_agent_sighting(fg_pgid: i32) -> Option<AgentSighting> {
     let output = std::process::Command::new("ps")
         .args(["-A", "-o", "pgid=,pid=,comm=,args="])
         .output()
@@ -352,7 +376,8 @@ fn foreground_agent_name(fg_pgid: i32) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    agent_detect::detect_agent_in(&String::from_utf8_lossy(&output.stdout), fg_pgid)
+    agent_detect::detect_agent_sighting_in(&String::from_utf8_lossy(&output.stdout), fg_pgid)
+        .map(|(name, command)| AgentSighting { name, command })
 }
 
 fn default_shell() -> String {
@@ -417,6 +442,7 @@ mod tests {
             24,
             event_tx,
             None,
+            None,
         )
         .expect("spawn engine");
 
@@ -427,6 +453,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(15);
         let mut saw_agent = false;
         let mut saw_clear = false;
+        let mut saw_command = false;
         while Instant::now() < deadline {
             tokio::select! {
                 ev = event_rx.recv() => {
@@ -435,7 +462,10 @@ mod tests {
                         continue;
                     }
                     match event {
-                        EngineEvent::Agent(Some(name)) if name == "claude" => saw_agent = true,
+                        EngineEvent::Agent(Some(s)) if s.name == "claude" => {
+                            saw_agent = true;
+                            saw_command = s.command.contains("claude");
+                        }
                         EngineEvent::Agent(None) if saw_agent => saw_clear = true,
                         _ => {}
                     }
@@ -450,6 +480,7 @@ mod tests {
         engine.kill().ok();
 
         assert!(saw_agent, "expected Agent(Some(\"claude\")) while script ran");
+        assert!(saw_command, "expected sighting to carry the agent command line");
         assert!(saw_clear, "expected Agent(None) after script finished");
     }
 
@@ -479,6 +510,7 @@ mod tests {
             24,
             event_tx,
             Some(vec!["claude".to_string()]),
+            None,
         )
         .expect("spawn engine");
 
@@ -491,8 +523,8 @@ mod tests {
                     if session_id != "agent-argv-smoke-test" {
                         continue;
                     }
-                    if let EngineEvent::Agent(Some(name)) = event {
-                        if name == "claude" {
+                    if let EngineEvent::Agent(Some(s)) = event {
+                        if s.name == "claude" {
                             saw_agent = true;
                         }
                     }

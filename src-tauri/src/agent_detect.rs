@@ -69,6 +69,23 @@ pub fn detect_agent_in_processes(procs: &[ProcessInfo]) -> Option<String> {
     })
 }
 
+/// Scan `ps` output (`pgid=,comm=,args=` columns) for a known agent whose
+/// process group matches `pgid`, returning the agent name and its full
+/// command line.
+pub fn detect_agent_sighting_in(ps_output: &str, pgid: i32) -> Option<(String, String)> {
+    detect_agent_sighting_in_processes(&parse_processes(ps_output, pgid))
+}
+
+/// Find a known agent among already-parsed process rows, returning its name
+/// and full command line (`argv0` + arguments as reported by `ps`).
+pub fn detect_agent_sighting_in_processes(procs: &[ProcessInfo]) -> Option<(String, String)> {
+    procs.iter().find(|p| p.is_agent).map(|p| {
+        let argv0 = p.args.split_whitespace().next().unwrap_or("");
+        let name = matches_agent(&p.comm, argv0, KNOWN_AGENT_BINARIES)
+            .unwrap_or_else(|| p.comm.clone());
+        (name, p.args.clone())
+    })
+}
 /// True when a single process row was identified as a coding agent.
 pub fn is_agent_process(comm: &str, args: &str) -> bool {
     let argv0 = args.split_whitespace().next().unwrap_or("");
@@ -193,6 +210,15 @@ mod tests {
             matches_agent("omp", "-zsh", KNOWN_AGENT_BINARIES),
             Some("omp".to_string())
         );
+    }
+
+    #[test]
+    fn sighting_detection_returns_name_and_command_line() {
+        let output = "  4321 100 claude claude --model opus\n  9999 200 zsh -zsh\n";
+        let (name, command) = detect_agent_sighting_in(output, 4321).unwrap();
+        assert_eq!(name, "claude");
+        assert_eq!(command, "claude --model opus");
+        assert!(detect_agent_sighting_in(output, 9999).is_none());
     }
 
     #[test]
