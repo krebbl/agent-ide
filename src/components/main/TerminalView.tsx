@@ -1,3 +1,4 @@
+import { WebKitDeadKeyAddon } from "../../utils/webkitDeadKey";
 import { useEffect, useRef } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -307,7 +308,10 @@ export default function TerminalView({
     };
     const dataDisposable = terminal.onData(handleInput);
     const binaryDisposable = terminal.onBinary(handleInput);
+    const deadKeyAddon = new WebKitDeadKeyAddon(handleInput);
+    terminal.loadAddon(deadKeyAddon);
     terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+      if (deadKeyAddon.handle(event)) return false;
       if (event.type !== "keydown") return true;
       if (event.key === "Escape") {
         if (useTerminalStore.getState().searchOpenSessionId === sessionId) {
