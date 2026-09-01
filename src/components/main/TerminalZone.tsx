@@ -51,6 +51,20 @@ function tabHasAgentSession(
   });
 }
 
+function tabAgentBusy(
+  tab: TerminalTab,
+  sessions: TerminalSession[],
+): boolean {
+  const leaves = collectLeaves(tab.rootPane);
+  return leaves.some((leaf) => {
+    const session = sessions.find((s) => s.id === leaf.sessionId);
+    return (
+      session?.agentActive === true &&
+      (session.isBusy === true || session.processRunning === true)
+    );
+  });
+}
+
 function getFocusedSessionTitle(
   tab: import("../../types").TerminalTab,
   sessions: import("../../stores/terminalStore").TerminalSession[],
@@ -242,8 +256,14 @@ export default function TerminalZone({
               icon: hasAgent ? (
                 <Bot
                   size={12}
-                  className="animate-pulse text-[var(--color-mauve)]"
-                  aria-label="Agent running"
+                  className={
+                    tabAgentBusy(tab, sessions)
+                      ? "animate-blink text-[var(--color-green)]"
+                      : hasUnseen
+                        ? "text-[var(--color-green)]"
+                        : "text-[var(--color-mauve)]"
+                  }
+                  aria-label="Agent session"
                 />
               ) : isBusy ? (
                 <Loader2
