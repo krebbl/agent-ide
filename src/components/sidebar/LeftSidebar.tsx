@@ -4,6 +4,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { usePrStore } from "../../stores/prStore";
+import PrBadge from "../ui/PrBadge";
 import AddProjectDialog from "../dialogs/AddProjectDialog";
 import AddWorktreeDialog from "../dialogs/AddWorktreeDialog";
 import NewAgentSessionDialog from "../dialogs/NewAgentSessionDialog";
@@ -846,6 +847,7 @@ export default function LeftSidebar() {
   }, []);
 
   const sessions = useTerminalStore.getState().sessions;
+  const prCache = usePrStore((s) => s.cache);
   const projectNameById = new Map(projects.map((p) => [p.id, p.name]));
   const branchById = new Map(
     projects.flatMap((p) =>
@@ -891,6 +893,38 @@ export default function LeftSidebar() {
     });
   void sessionTick;
 
+  // Active agents may live in collapsed projects whose PR cache was never
+  // populated by ProjectItem. Ensure PR info exists for their branches.
+  const prFetchKey = activeSessions
+    .map((s) => {
+      if (!s.projectId) return "";
+      const branch = branchById.get(`${s.projectId}:${s.worktreeId}`);
+      return branch ? `${s.projectId}:${branch}` : "";
+    })
+    .filter(Boolean)
+    .sort()
+    .join("|");
+  useEffect(() => {
+    if (!prFetchKey) return;
+    const { fetchPrsForWorktrees } = usePrStore.getState();
+    const statuses = useConnectionStatusStore.getState().statuses;
+    const projects = useProjectStore.getState().projects;
+    const groups = new Map<string, string[]>();
+    for (const key of prFetchKey.split("|")) {
+      const sep = key.indexOf(":");
+      const projectId = key.slice(0, sep);
+      const list = groups.get(projectId) ?? [];
+      list.push(key.slice(sep + 1));
+      groups.set(projectId, list);
+    }
+    for (const [projectId, branches] of groups) {
+      const p = projects.find((x) => x.id === projectId);
+      if (!p) continue;
+      if (p.type === "ssh" && statuses[projectId]?.status !== "connected") continue;
+      fetchPrsForWorktrees(projectId, branches);
+    }
+  }, [prFetchKey]);
+
   return (
     <DndContext
       sensors={sensors}
@@ -914,6 +948,9 @@ export default function LeftSidebar() {
                 branchById.get(
                   `${session.projectId}:${session.worktreeId}`,
                 ) ?? "";
+              const pr = branch
+                ? prCache[`${session.projectId}:${branch}`]?.pr
+                : undefined;
               return (
                 <button
                   key={`agent:${session.id}`}
@@ -951,8 +988,9 @@ export default function LeftSidebar() {
                       )}
                     </span>
                     {branch && (
-                      <span className="block truncate text-[10px] text-[var(--color-overlay1)]">
-                        {branch}
+                      <span className="flex w-full items-center gap-1.5 text-[10px] text-[var(--color-overlay1)]">
+                        <span className="truncate">{branch}</span>
+                        {pr && <PrBadge pr={pr} />}
                       </span>
                     )}
                   </span>

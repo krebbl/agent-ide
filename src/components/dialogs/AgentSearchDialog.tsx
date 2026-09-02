@@ -3,6 +3,8 @@ import { Bot } from "lucide-react";
 import Dialog from "../ui/Dialog";
 import { TerminalSession, useTerminalStore } from "../../stores/terminalStore";
 import { useProjectStore } from "../../stores/projectStore";
+import { usePrStore } from "../../stores/prStore";
+import PrBadge from "../ui/PrBadge";
 
 interface AgentSearchDialogProps {
   isOpen: boolean;
@@ -13,6 +15,7 @@ export default function AgentSearchDialog({
   isOpen,
   onClose,
 }: AgentSearchDialogProps) {
+  const prCache = usePrStore((s) => s.cache);
   const sessions = useTerminalStore((s) => s.sessions);
   const projects = useProjectStore((s) => s.projects);
   const [query, setQuery] = useState("");
@@ -67,6 +70,8 @@ export default function AgentSearchDialog({
         projectNameById[s.projectId ?? ""] ?? "",
         branchById[`${s.projectId}:${s.worktreeId}`] ?? "",
       ].map((f) => f.toLowerCase());
+      const pr = prCache[`${s.projectId}:${branchById[`${s.projectId}:${s.worktreeId}`] ?? ""}`]?.pr;
+      if (pr) fields.push(`#${pr.number}`);
       return terms.every((t) => fields.some((f) => f.includes(t)));
     });
   }, [agentSessions, query, projectNameById, branchById]);
@@ -147,6 +152,9 @@ export default function AgentSearchDialog({
           const projectName = projectNameById[session.projectId ?? ""] ?? "";
           const branch =
             branchById[`${session.projectId}:${session.worktreeId}`] ?? "";
+          const pr = branch
+            ? prCache[`${session.projectId}:${branch}`]?.pr
+            : undefined;
           const isBusy = session.isBusy || session.processRunning;
           return (
             <div
@@ -180,8 +188,9 @@ export default function AgentSearchDialog({
                   )}
                 </span>
                 {branch && (
-                  <span className="block truncate text-[10px] text-[var(--color-overlay1)]">
-                    {branch}
+                  <span className="flex w-full items-center gap-1.5 text-[10px] text-[var(--color-overlay1)]">
+                    <span className="truncate">{branch}</span>
+                    {pr && <PrBadge pr={pr} />}
                   </span>
                 )}
               </span>
