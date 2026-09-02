@@ -7,6 +7,7 @@ import MainArea from "../main/MainArea";
 import DevNotificationContainer from "../ui/DevNotificationContainer";
 import FileSearchDialog from "../dialogs/FileSearchDialog";
 import AgentSearchDialog from "../dialogs/AgentSearchDialog";
+import WorktreeSearchDialog from "../dialogs/WorktreeSearchDialog";
 import { useUiStore } from "../../stores/uiStore";
 import { useFileTreeStore } from "../../stores/fileTreeStore";
 
@@ -14,6 +15,7 @@ export default function AppLayout() {
   const { rightSidebarVisible } = useUiStore();
   const [fileSearchOpen, setFileSearchOpen] = useState(false);
   const [agentSearchOpen, setAgentSearchOpen] = useState(false);
+  const [worktreeSearchOpen, setWorktreeSearchOpen] = useState(false);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "o") {
@@ -26,6 +28,10 @@ export default function AppLayout() {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "a") {
         e.preventDefault();
         setAgentSearchOpen(true);
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "w") {
+        e.preventDefault();
+        setWorktreeSearchOpen(true);
       }
     };
     window.addEventListener("keydown", handler);
@@ -71,6 +77,7 @@ export default function AppLayout() {
       <DevNotificationContainer />
       <FileSearchDialog isOpen={fileSearchOpen} onClose={() => setFileSearchOpen(false)} />
       <AgentSearchDialog isOpen={agentSearchOpen} onClose={() => setAgentSearchOpen(false)} />
+      <WorktreeSearchDialog isOpen={worktreeSearchOpen} onClose={() => setWorktreeSearchOpen(false)} />
     </div>
   );
 }

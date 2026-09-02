@@ -11,6 +11,7 @@ import NewAgentSessionDialog from "../dialogs/NewAgentSessionDialog";
 import { Project, PrInfo, Worktree } from "../../types";
 import Dialog from "../ui/Dialog";
 import { openUrl } from "../../utils/openUrl";
+import { getWorktreeActivity } from "../../utils/worktreeActivity";
 import { useSortable } from "@dnd-kit/sortable";
 import {
   DndContext,
@@ -202,21 +203,6 @@ function getPrStatusRank(pr: PrInfo | null | undefined): number {
   if (pr.state === "merged") return 2;
   if (pr.state === "closed") return 3;
   return 1;
-}
-
-function getWorktreeActivity(
-  sessions: import("../../stores/terminalStore").TerminalSession[],
-  projectId: string,
-  worktreeId: string,
-): "idle" | "busy" | "input" | "unseen" {
-  return sessions.reduce<"idle" | "busy" | "input" | "unseen">((state, session) => {
-    if (session.projectId === projectId && session.worktreeId === worktreeId) {
-      if (session.processRunning || session.isBusy) return "busy";
-      if (session.hasUnseenActivity) return "unseen";
-      if (session.needsInput && state !== "busy" && state !== "unseen") return "input";
-    }
-    return state;
-  }, "idle");
 }
 
 function WorktreeItem({

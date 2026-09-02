@@ -7,7 +7,7 @@ export function useCloseShortcut() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const isMod = e.metaKey || e.ctrlKey;
-      if (!isMod || e.key.toLowerCase() !== "w") return;
+      if (!isMod || e.shiftKey || e.key.toLowerCase() !== "w") return;
 
       const { focusedZone } = useUiStore.getState();
 
