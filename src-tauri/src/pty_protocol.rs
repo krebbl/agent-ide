@@ -134,9 +134,12 @@ pub enum DaemonEvent {
         session_id: String,
         name: Option<String>,
     },
+    /// The agent conversation pinned to this terminal changed (SessionStart
+    /// marker hook saw a start or an in-app switch like `/resume`), or was
+    /// cleared (the agent process exited).
     Conversation {
         session_id: String,
-        conversation_id: String,
+        conversation_id: Option<String>,
     },
     SessionList {
         sessions: Vec<SessionMeta>,

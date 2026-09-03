@@ -527,7 +527,13 @@ export const AgentIdeSessionMarker = async () => {
       if (!id) return;
       try { mkdirSync(dir, { recursive: true }); } catch {}
       try {
-        writeFileSync(`${dir}/${conv}.conversation`, JSON.stringify({ session_id: id }));
+        // agent+pid let the daemon drop the marker when this opencode
+        // process is gone: opencode conversations are not pinned, so a
+        // stale id would make reboot resume the wrong session.
+        writeFileSync(
+          `${dir}/${conv}.conversation`,
+          JSON.stringify({ session_id: id, agent: "opencode", pid: process.pid }),
+        );
       } catch {}
     },
   };

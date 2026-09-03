@@ -120,7 +120,7 @@ export async function initTerminalEventListeners() {
       agentActive: Boolean(name),
     });
   });
-  await listen<{ sessionId: string; conversationId: string }>(
+  await listen<{ sessionId: string; conversationId: string | null }>(
     "pty_conversation",
     (event) => {
       useTerminalStore.getState().updateSessionByPtyId(event.payload.sessionId, {

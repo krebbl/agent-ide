@@ -74,6 +74,39 @@ fn restore_argv(argv: &[String], live_conversation: Option<&str>) -> Vec<String>
     }
 }
 
+/// A parsed conversation marker file.
+#[derive(Debug, Clone)]
+struct Marker {
+    id: String,
+    agent: Option<String>,
+    pid: Option<u32>,
+}
+
+/// Parse a marker file payload: `{ session_id, agent?, pid? }`.
+fn parse_marker(data: &str) -> Option<(String, Option<String>, Option<u32>)> {
+    let value: serde_json::Value = serde_json::from_str(data).ok()?;
+    let id = value.get("session_id")?.as_str()?.to_string();
+    let agent = value
+        .get("agent")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let pid = value.get("pid").and_then(|v| v.as_u64()).map(|p| p as u32);
+    Some((id, agent, pid))
+}
+
+/// True when the marker's conversation is still resumable. Markers without
+/// an agent (claude/pi/omp) are persistent. opencode conversations are not
+/// pinned — its marker carries the agent's pid and dies with the process.
+fn marker_live(agent: &Option<String>, pid: Option<u32>) -> bool {
+    if agent.as_deref() != Some("opencode") {
+        return true;
+    }
+    match pid {
+        None => true,
+        Some(pid) => unsafe { libc::kill(pid as i32, 0) == 0 },
+    }
+}
+
 /// The conversation id pinned by an injected `--session-id <id>`, if present.
 fn pinned_conversation_id(argv: &[String]) -> Option<String> {
     let pos = argv.iter().position(|a| a == "--session-id")?;
@@ -240,7 +273,7 @@ impl PtyDaemon {
                 loop {
                     tick.tick().await;
                     for (session_id, conversation_id) in daemon.refresh_conversation_markers() {
-                        info!(session_id = %session_id, conversation_id = %conversation_id, "agent conversation changed");
+                        info!(session_id = %session_id, conversation_id = ?conversation_id, "agent conversation changed");
                         PtyDaemon::send_to_client(
                             &daemon.client_tx,
                             DaemonEvent::Conversation {
@@ -858,14 +891,17 @@ impl PtyDaemon {
 
     /// Live conversation id recorded by the SessionStart marker hook for this
     /// terminal's pinned agent. `.conversation` (resume/clear/compact)
-    /// wins over `.startup` (last process the agent started).
+    /// wins over `.startup` (last process the agent started). Markers that
+    /// carry a dead pid (opencode) are treated as absent — opencode
+    /// conversations are not pinned, so a stale id would resume the wrong
+    /// session.
     fn live_conversation_id(&self, session_id: &str) -> Option<String> {
         for ext in ["conversation", "startup"] {
             let path = self.marker_dir.join(format!("{session_id}.{ext}"));
             if let Ok(data) = std::fs::read_to_string(&path) {
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) {
-                    if let Some(id) = value.get("session_id").and_then(|v| v.as_str()) {
-                        return Some(id.to_string());
+                if let Some((id, agent, pid)) = parse_marker(&data) {
+                    if marker_live(&agent, pid) {
+                        return Some(id);
                     }
                 }
             }
@@ -875,15 +911,16 @@ impl PtyDaemon {
 
     /// Scan the marker directory and update each session's
     /// `conversation_id` from the agent's SessionStart hook output. Returns
-    /// the sessions whose live conversation changed, so the caller can emit
-    /// `DaemonEvent::Conversation` and persist.
-    fn refresh_conversation_markers(&self) -> Vec<(String, String)> {
-        let mut changed = Vec::new();
+    /// the sessions whose live conversation changed (cleared ones carry
+    /// `None`), so the caller can emit `DaemonEvent::Conversation` and
+    /// persist. Dead-process markers (opencode) are deleted.
+    fn refresh_conversation_markers(&self) -> Vec<(String, Option<String>)> {
+        let mut changed: Vec<(String, Option<String>)> = Vec::new();
         let Ok(entries) = std::fs::read_dir(&self.marker_dir) else {
             return changed;
         };
-        // stem -> (conversation id, startup id); `.conversation` wins.
-        let mut by_pty: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+        // stem -> (conversation marker, startup id); `.conversation` wins.
+        let mut by_pty: HashMap<String, (Option<Marker>, Option<String>)> = HashMap::new();
         for entry in entries.flatten() {
             let path = entry.path();
             let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
@@ -898,30 +935,32 @@ impl PtyDaemon {
             let Ok(data) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) else {
-                continue;
-            };
-            let Some(id) = value.get("session_id").and_then(|v| v.as_str()).map(str::to_string)
-            else {
-                continue;
-            };
             let slot = by_pty.entry(pty_id.to_string()).or_default();
             if ext == "conversation" {
-                slot.0 = Some(id);
+                match parse_marker(&data) {
+                    Some((id, agent, pid)) => {
+                        if marker_live(&agent, pid) {
+                            slot.0 = Some(Marker { id, agent, pid });
+                        } else {
+                            // Agent process is gone: drop the stale marker.
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                    None => slot.0 = None,
+                }
             } else {
-                slot.1 = Some(id);
+                slot.1 = parse_marker(&data).map(|(id, _, _)| id);
             }
         }
         let mut map = self.sessions.lock().unwrap();
         for (pty_id, (conversation, startup)) in by_pty {
-            let Some(live) = conversation.or(startup) else {
+            let live = conversation.map(|m| m.id).or(startup);
+            let Some(session) = map.get_mut(&pty_id) else {
                 continue;
             };
-            if let Some(session) = map.get_mut(&pty_id) {
-                if session.meta.conversation_id.as_deref() != Some(live.as_str()) {
-                    session.meta.conversation_id = Some(live.clone());
-                    changed.push((pty_id, live));
-                }
+            if session.meta.conversation_id.as_deref() != live.as_deref() {
+                changed.push((pty_id.clone(), live.clone()));
+                session.meta.conversation_id = live;
             }
         }
         changed
@@ -1318,7 +1357,10 @@ mod tests {
         );
 
         let changed = daemon.refresh_conversation_markers();
-        assert_eq!(changed, vec![("s9".to_string(), "conv-1".to_string())]);
+        assert_eq!(
+            changed,
+            vec![("s9".to_string(), Some("conv-1".to_string()))]
+        );
         assert_eq!(
             daemon
                 .sessions
@@ -1333,6 +1375,75 @@ mod tests {
         );
         // Unchanged markers are not reported again.
         assert!(daemon.refresh_conversation_markers().is_empty());
+    }
+
+    #[tokio::test]
+    async fn opencode_marker_with_dead_pid_is_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = PtyDaemon::new(dir.path().join("sock"), dir.path().join("persist.json"));
+        // A pid that cannot exist (kernel reserves up to pid_max; use a value
+        // far above it on any realistic system).
+        std::fs::write(
+            daemon.marker_dir.join("s10.conversation"),
+            r#"{"session_id":"conv-oc","agent":"opencode","pid":4194304}"#,
+        )
+        .unwrap();
+        daemon.sessions.lock().unwrap().insert(
+            "s10".to_string(),
+            DaemonSession {
+                meta: SessionMeta {
+                    conversation_id: Some("conv-oc".to_string()),
+                    ..nudge_test_meta("s10")
+                },
+                engine: None,
+                title_busy: false,
+            },
+        );
+
+        let changed = daemon.refresh_conversation_markers();
+        assert_eq!(changed, vec![("s10".to_string(), None)]);
+        assert_eq!(
+            daemon
+                .sessions
+                .lock()
+                .unwrap()
+                .get("s10")
+                .unwrap()
+                .meta
+                .conversation_id,
+            None
+        );
+        // The stale marker file is removed.
+        assert!(!daemon.marker_dir.join("s10.conversation").exists());
+    }
+
+    #[tokio::test]
+    async fn opencode_marker_with_live_pid_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = PtyDaemon::new(dir.path().join("sock"), dir.path().join("persist.json"));
+        // This test process is alive, so the marker must be treated as live.
+        std::fs::write(
+            daemon.marker_dir.join("s11.conversation"),
+            format!(
+                r#"{{"session_id":"conv-live","agent":"opencode","pid":{}}}"#,
+                std::process::id()
+            ),
+        )
+        .unwrap();
+        daemon.sessions.lock().unwrap().insert(
+            "s11".to_string(),
+            DaemonSession {
+                meta: nudge_test_meta("s11"),
+                engine: None,
+                title_busy: false,
+            },
+        );
+
+        let changed = daemon.refresh_conversation_markers();
+        assert_eq!(
+            changed,
+            vec![("s11".to_string(), Some("conv-live".to_string()))]
+        );
     }
 
     #[tokio::test]

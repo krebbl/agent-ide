@@ -440,7 +440,7 @@ pub struct PtyStateSnapshotEvent {
 #[serde(rename_all = "camelCase")]
 pub struct PtyConversationEvent {
     pub session_id: String,
-    pub conversation_id: String,
+    pub conversation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
