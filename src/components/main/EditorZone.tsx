@@ -21,6 +21,7 @@ export default function EditorZone() {
   const pendingClose = useEditorStore((s) => s.pendingClose);
   const [symbolSearchOpen, setSymbolSearchOpen] = useState(false);
   const worktreeLoading = useUiStore((s) => s.worktreeLoading);
+  const filesLoading = useEditorStore((s) => s.filesLoading);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
 
   useEffect(() => {
@@ -107,7 +108,7 @@ export default function EditorZone() {
         />
       </div>
       <div className="relative flex flex-1 overflow-hidden">
-        {worktreeLoading && <LoadingOverlay label="Loading files…" />}
+        {(worktreeLoading || filesLoading) && <LoadingOverlay label="Loading files…" />}
         {activeFile ? (
           <Editor
             path={activeFile.path}

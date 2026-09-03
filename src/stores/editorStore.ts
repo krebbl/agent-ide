@@ -93,6 +93,7 @@ interface StoredTabs {
 let tabsByWorktree: Record<string, StoredTabs> = {};
 let tabsLoadedPromise: Promise<void> | null = null;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistSuppressed = false;
 
 function ensureTabsLoaded(): Promise<void> {
   if (!tabsLoadedPromise) {
@@ -116,6 +117,7 @@ interface EditorState {
   openFiles: OpenFile[];
   activePath: string | null;
   worktreeKey: string | null;
+  filesLoading: boolean;
   pendingReveal: PendingReveal | null;
   pendingClose: string | null;
 
@@ -139,6 +141,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   openFiles: [],
   activePath: null,
   worktreeKey: null,
+  filesLoading: false,
   pendingReveal: null,
   pendingClose: null,
 
@@ -147,31 +150,62 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     await ensureTabsLoaded();
     const stored = tabsByWorktree[key];
     if (!stored || stored.openPaths.length === 0) {
-      set({ worktreeKey: key, openFiles: [], activePath: null });
+      set({ worktreeKey: key, openFiles: [], activePath: null, filesLoading: false });
       return;
     }
-    const files: OpenFile[] = [];
-    for (const path of stored.openPaths) {
-      try {
-        const content = await invoke<string>("fs_read_file", { projectId, path });
-        files.push({ path, projectId, content, dirty: false });
-      } catch {
-        // file no longer exists or is unreadable, skip
+    const prev = {
+      worktreeKey: get().worktreeKey,
+      openFiles: get().openFiles,
+      activePath: get().activePath,
+    };
+    persistSuppressed = true;
+    try {
+      set({
+        worktreeKey: key,
+        openFiles: stored.openPaths.map((path) => ({ path, projectId, content: "", dirty: false })),
+        activePath: stored.activePath ?? stored.openPaths[stored.openPaths.length - 1],
+        filesLoading: true,
+      });
+      let loadedCount = 0;
+      for (const path of stored.openPaths) {
+        try {
+          const content = await invoke<string>("fs_read_file", { projectId, path });
+          loadedCount++;
+          set((s) => {
+            if (s.worktreeKey !== key) return s;
+            return {
+              openFiles: s.openFiles.map((f) => (f.path === path && !f.dirty ? { ...f, content } : f)),
+            };
+          });
+        } catch {
+          set((s) => {
+            if (s.worktreeKey !== key) return s;
+            const openFiles = s.openFiles.filter((f) => f.path !== path);
+            const activePath =
+              s.activePath === path ? (openFiles[openFiles.length - 1]?.path ?? null) : s.activePath;
+            return { openFiles, activePath };
+          });
+        }
       }
+      if (get().worktreeKey !== key) return;
+      set({ filesLoading: false });
+      if (loadedCount === 0) {
+        // Every read failed — likely a transient failure (e.g. SSH not
+        // connected yet), not genuinely missing files. Restore the previous
+        // state and leave persisted tabs untouched so a later setWorktree
+        // call can retry.
+        set(prev);
+      } else {
+        tabsByWorktree[key] = {
+          openPaths: get().openFiles.map((f) => f.path),
+          activePath: get().activePath,
+        };
+        schedulePersist();
+      }
+    } finally {
+      persistSuppressed = false;
     }
-    if (files.length === 0) {
-      // Every read failed — likely a transient failure (e.g. SSH not connected
-      // yet), not genuinely missing files. Leave state and persisted tabs
-      // untouched so a later setWorktree call can restore them.
-      return;
-    }
-    const activePath =
-      stored.activePath && files.some((f) => f.path === stored.activePath)
-        ? stored.activePath
-        : (files[files.length - 1]?.path ?? null);
-    set({ worktreeKey: key, openFiles: files, activePath });
   },
-
   setPendingReveal: (reveal) => set({ pendingReveal: reveal }),
 
   requestClose: (path) => {
@@ -283,6 +317,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 useEditorStore.subscribe((state, prev) => {
   if (state.openFiles === prev.openFiles && state.activePath === prev.activePath)
     return;
+  if (persistSuppressed) return;
   if (!state.worktreeKey) return;
   tabsByWorktree[state.worktreeKey] = {
     openPaths: state.openFiles.map((f) => f.path),
