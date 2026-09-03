@@ -204,6 +204,21 @@ export function contentChanged(
   });
 }
 
+function contentReplaced(file: OpenFile) {
+  const serverKey = serverKeyForPath(file.path);
+  if (!serverKey || !versions.has(file.path)) return;
+  const version = (versions.get(file.path) ?? 1) + 1;
+  versions.set(file.path, version);
+  const text = file.content;
+  enqueue(file.path, async () => {
+    if (!(await ensureServer(file.projectId, serverKey))) return;
+    await client.lspNotify(file.projectId, serverKey, "textDocument/didChange", {
+      textDocument: { uri: pathToUri(file.path), version },
+      contentChanges: [{ text }],
+    });
+  });
+}
+
 function didSave(file: OpenFile) {
   const serverKey = serverKeyForPath(file.path);
   if (!serverKey || !versions.has(file.path)) return;
@@ -269,6 +284,9 @@ export function installLsp() {
         didOpen(file);
       }
       const prevFile = prev.openFiles.find((f) => f.path === file.path);
+      if (prevFile && !file.dirty && prevFile.content !== file.content) {
+        contentReplaced(file);
+      }
       if (prevFile?.dirty && !file.dirty) {
         didSave(file);
       }

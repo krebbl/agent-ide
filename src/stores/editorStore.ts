@@ -94,6 +94,7 @@ let tabsByWorktree: Record<string, StoredTabs> = {};
 let tabsLoadedPromise: Promise<void> | null = null;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistSuppressed = false;
+let pendingFileLoads = 0;
 
 function ensureTabsLoaded(): Promise<void> {
   if (!tabsLoadedPromise) {
@@ -150,7 +151,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     await ensureTabsLoaded();
     const stored = tabsByWorktree[key];
     if (!stored || stored.openPaths.length === 0) {
-      set({ worktreeKey: key, openFiles: [], activePath: null, filesLoading: false });
+      set({ worktreeKey: key, openFiles: [], activePath: null });
+      syncFilesLoading();
       return;
     }
     const prev = {
@@ -164,8 +166,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         worktreeKey: key,
         openFiles: stored.openPaths.map((path) => ({ path, projectId, content: "", dirty: false })),
         activePath: stored.activePath ?? stored.openPaths[stored.openPaths.length - 1],
-        filesLoading: true,
       });
+      pendingFileLoads += stored.openPaths.length;
+      syncFilesLoading();
       let loadedCount = 0;
       for (const path of stored.openPaths) {
         try {
@@ -186,9 +189,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             return { openFiles, activePath };
           });
         }
+        pendingFileLoads--;
+        syncFilesLoading();
       }
       if (get().worktreeKey !== key) return;
-      set({ filesLoading: false });
       if (loadedCount === 0) {
         // Every read failed — likely a transient failure (e.g. SSH not
         // connected yet), not genuinely missing files. Restore the previous
@@ -263,11 +267,28 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       set({ activePath: path });
       return;
     }
-    const content = await invoke<string>("fs_read_file", { projectId, path });
     set((s) => ({
-      openFiles: [...s.openFiles, { path, projectId, content, dirty: false }],
+      openFiles: [...s.openFiles, { path, projectId, content: "", dirty: false }],
       activePath: path,
     }));
+    pendingFileLoads++;
+    syncFilesLoading();
+    try {
+      const content = await invoke<string>("fs_read_file", { projectId, path });
+      set((s) => ({
+        openFiles: s.openFiles.map((f) => (f.path === path && !f.dirty ? { ...f, content } : f)),
+      }));
+    } catch {
+      set((s) => {
+        const openFiles = s.openFiles.filter((f) => f.path !== path);
+        const activePath =
+          s.activePath === path ? (openFiles[openFiles.length - 1]?.path ?? null) : s.activePath;
+        return { openFiles, activePath };
+      });
+    } finally {
+      pendingFileLoads--;
+      syncFilesLoading();
+    }
   },
 
   closeFile: (path) => {
@@ -313,6 +334,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (activePath) await saveFile(activePath);
   },
 }));
+
+function syncFilesLoading() {
+  useEditorStore.setState({ filesLoading: pendingFileLoads > 0 });
+}
 
 useEditorStore.subscribe((state, prev) => {
   if (state.openFiles === prev.openFiles && state.activePath === prev.activePath)
