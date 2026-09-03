@@ -473,24 +473,40 @@ fn ensure_agent_marker_hooks() -> std::io::Result<()> {
     const PI_OMP_EXTENSION: &str = r#"// agent-ide session marker: records the live conversation id of this
 // terminal so a reboot resumes exactly it. No-op outside agent-ide
 // terminals (guarded on AGENT_IDE_CONV_ID).
+// omp/pi do not re-fire session_start on in-app session switches
+// (/resume, /new, /tree), so after the first session_start a low-frequency
+// poller keeps the marker in sync with the current session file.
 import { mkdirSync, writeFileSync } from "node:fs";
 
+const POLL_MS = 2000;
+
 export default function (pi: any) {
-  pi.on("session_start", async (_event: any, ctx: any) => {
+  const start = (ctx: any) => {
     const conv = process.env.AGENT_IDE_CONV_ID;
     const dir = process.env.AGENT_IDE_MARKERS_DIR;
-    if (!conv || !dir || !ctx?.sessionManager) return;
-    const file: string = ctx.sessionManager.getSessionFile?.() ?? "";
-    if (!file) return;
-    // Session files are named <timestamp>_<uuid>; the UUID is the session
-    // id `--resume` (omp) and `--session-id` (pi) accept.
-    const base = file.split("/").pop() ?? file;
-    const id = base.split("_").pop()?.replace(/\.jsonl$/, "") ?? "";
-    if (!id) return;
-    try { mkdirSync(dir, { recursive: true }); } catch {}
-    try {
-      writeFileSync(`${dir}/${conv}.conversation`, JSON.stringify({ session_id: id }));
-    } catch {}
+    if (!conv || !dir) return;
+    const g = globalThis as any;
+    g.__agentIdeCtx = ctx;
+    if (g.__agentIdeMarkerTimer) return;
+    let last = "";
+    g.__agentIdeMarkerTimer = setInterval(() => {
+      try {
+        const ctx2 = g.__agentIdeCtx;
+        const file: string = ctx2?.sessionManager?.getSessionFile?.() ?? "";
+        if (!file) return;
+        // Session files are named <timestamp>_<uuid>; the UUID is the
+        // session id `--resume` (omp) and `--session-id` (pi) accept.
+        const base = file.split("/").pop() ?? file;
+        const id = base.split("_").pop()?.replace(/\.jsonl$/, "") ?? "";
+        if (!id || id === last) return;
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(`${dir}/${conv}.conversation`, JSON.stringify({ session_id: id }));
+        last = id;
+      } catch {}
+    }, POLL_MS);
+  };
+  pi.on("session_start", async (_event: any, ctx: any) => {
+    start(ctx);
   });
 }
 "#;
