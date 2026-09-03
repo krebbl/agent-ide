@@ -29,20 +29,45 @@ interface FileTreeState {
   setShowIgnored: (show: boolean) => void;
 }
 
+const FS_TIMEOUT_MS = 15000;
+
+function withTimeout<T>(promise: Promise<T>, ms = FS_TIMEOUT_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`fs request timed out after ${ms / 1000}s`)),
+      ms,
+    );
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 async function loadGitignorePatterns(
   rootPath: string,
   projectId: string,
 ): Promise<string[]> {
   try {
-    const content = await invoke<string>("fs_read_file", {
-      projectId,
-      path: `${rootPath}/.gitignore`,
-    });
+    const content = await withTimeout(
+      invoke<string>("fs_read_file", {
+        projectId,
+        path: `${rootPath}/.gitignore`,
+      }),
+    );
     const patterns = content
       .split("\n")
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("#") && !l.startsWith("!"));
-    const dirs = await invoke<DirEntry[]>("fs_read_dir", { projectId, path: rootPath });
+    const dirs = await withTimeout(
+      invoke<DirEntry[]>("fs_read_dir", { projectId, path: rootPath }),
+    );
     const ignored: string[] = [];
     for (const entry of dirs) {
       for (const pattern of patterns) {
@@ -75,7 +100,9 @@ async function fetchDirEntries(
   ignoredFiles: string[],
   showIgnored: boolean,
 ): Promise<DirEntry[]> {
-  const raw = await invoke<DirEntry[]>("fs_read_dir", { projectId, path: dirPath });
+  const raw = await withTimeout(
+    invoke<DirEntry[]>("fs_read_dir", { projectId, path: dirPath }),
+  );
   if (showIgnored) return raw;
   return raw.filter((e) => !ignoredFiles.includes(e.name));
 }
