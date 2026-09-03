@@ -2886,7 +2886,7 @@ pub async fn cmd_ssh_connect(
         password: password.clone(),
     };
 
-    let (session, sftp) = connect_ssh(
+    let (session, sftp) = match connect_ssh(
         &host,
         port,
         &username,
@@ -2894,7 +2894,15 @@ pub async fn cmd_ssh_connect(
         key_path.as_deref(),
         password.as_deref(),
     )
-    .await?;
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            warn!("ssh_connect: connect failed for {}: {}", project_id, e);
+            state.emit_status(&project_id, ConnectionStatus::Error, Some(e.clone()));
+            return Err(e);
+        }
+    };
 
     info!("ssh_connect: connect succeeded, storing connection (sftp={})", sftp.is_some());
     let mut connections = state.ssh_connections.lock().await;

@@ -33,7 +33,7 @@ export default function RightSidebar() {
     if (activeProject.type === "ssh" && connectionStatus !== "connected") {
       lastKey.current = "";
       loadSeq.current++;
-      useUiStore.getState().setWorktreeLoading(connectionStatus !== "error");
+      useUiStore.getState().setWorktreeLoading(connectionStatus === undefined);
       return;
     }
     const statusSuffix = activeProject.type === "ssh" ? `:${connectionStatus ?? ""}` : "";
