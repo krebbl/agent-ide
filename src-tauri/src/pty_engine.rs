@@ -133,10 +133,21 @@ impl LocalPtyEngine {
             })
             .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
+        let markers_dir = shim_dir
+            .as_ref()
+            .and_then(|d| d.parent())
+            .map(|p| p.join("agent-session-markers"));
         let (cmd, cmd_label) = match &argv {
             Some(argv) if !argv.is_empty() => {
                 let mut builder = CommandBuilder::new(&argv[0]);
                 builder.args(&argv[1..]);
+                // Directly spawned agents (e.g. the built-in launcher) need
+                // the conversation id too: the SessionStart marker hook is
+                // keyed on it.
+                builder.env("AGENT_IDE_CONV_ID", &session_id);
+                if let Some(markers) = &markers_dir {
+                    builder.env("AGENT_IDE_MARKERS_DIR", markers);
+                }
                 (builder, argv[0].clone())
             }
             _ => {
@@ -148,6 +159,9 @@ impl LocalPtyEngine {
                         builder.env("PATH", format!("{}:{}", dir.display(), path));
                     }
                     builder.env("AGENT_IDE_CONV_ID", &session_id);
+                    if let Some(markers) = &markers_dir {
+                        builder.env("AGENT_IDE_MARKERS_DIR", markers);
+                    }
                     let zdotdir = dir.join("zdotdir");
                     if zdotdir.join(".zshrc").exists() {
                         let orig = std::env::var("ZDOTDIR")

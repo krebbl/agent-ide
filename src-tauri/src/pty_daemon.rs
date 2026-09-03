@@ -25,9 +25,11 @@ struct DaemonSession {
 /// Augment a persisted agent-session command so a reboot restores the
 /// conversation: an injected `--session-id <id>` pins the exact conversation
 /// and maps to `--resume <id>`; otherwise the agent's continue flag is
-/// appended. Non-agent argv and agents without resume support pass through
-/// unchanged.
-fn restore_argv(argv: &[String]) -> Vec<String> {
+/// appended. `live_conversation` (from the SessionStart marker hook) is the
+/// conversation the user actually switched to inside the agent and, when
+/// present, wins over the pinned id. Non-agent argv and agents without
+/// resume support pass through unchanged.
+fn restore_argv(argv: &[String], live_conversation: Option<&str>) -> Vec<String> {
     if let Some(pos) = argv.iter().position(|a| a == "--session-id") {
         if let Some(id) = argv.get(pos + 1) {
             let mut out: Vec<String> = argv
@@ -37,7 +39,7 @@ fn restore_argv(argv: &[String]) -> Vec<String> {
                 .map(|(_, a)| a.clone())
                 .collect();
             out.push("--resume".to_string());
-            out.push(id.clone());
+            out.push(live_conversation.unwrap_or(id).to_string());
             return out;
         }
     }
@@ -49,14 +51,33 @@ fn restore_argv(argv: &[String]) -> Vec<String> {
     }
     let agent =
         agent_detect::matches_agent(binary, binary, agent_detect::KNOWN_AGENT_BINARIES);
-    match agent.as_deref().and_then(agents::resume_flag) {
+    match agent.as_deref().and_then(agents::exact_resume_flag) {
+        // The marker hook knows the live conversation: resume exactly it.
         Some(flag) if !argv.iter().any(|arg| arg == flag) => {
-            let mut out = argv.to_vec();
-            out.push(flag.to_string());
-            out
+            if let Some(live) = live_conversation {
+                let mut out = argv.to_vec();
+                out.push(flag.to_string());
+                out.push(live.to_string());
+                return out;
+            }
+            // No id known: fuzzy continue-latest where supported.
+            match agent.as_deref().and_then(agents::resume_flag) {
+                Some(fallback) if !argv.iter().any(|arg| arg == fallback) => {
+                    let mut out = argv.to_vec();
+                    out.push(fallback.to_string());
+                    out
+                }
+                _ => argv.to_vec(),
+            }
         }
         _ => argv.to_vec(),
     }
+}
+
+/// The conversation id pinned by an injected `--session-id <id>`, if present.
+fn pinned_conversation_id(argv: &[String]) -> Option<String> {
+    let pos = argv.iter().position(|a| a == "--session-id")?;
+    argv.get(pos + 1).cloned()
 }
 
 struct SshProject {
@@ -154,6 +175,9 @@ pub struct PtyDaemon {
     /// PATH-shim directory that pins agent conversations to terminal
     /// session ids; `None`-equivalent when unwritable.
     shim_dir: Option<PathBuf>,
+    /// Directory of SessionStart marker files (`<pty-id>.conversation`)
+    /// written by the agent hook; watched for live conversation switches.
+    marker_dir: PathBuf,
     client_tx: Arc<Mutex<Option<mpsc::UnboundedSender<DaemonEvent>>>>,
     event_tx: mpsc::Sender<(String, EngineEvent)>,
     _event_rx_handle: Option<tokio::task::JoinHandle<()>>,
@@ -179,10 +203,15 @@ impl PtyDaemon {
             .parent()
             .map(|p| p.join("agent-shims"))
             .unwrap_or_else(|| persistence_path.with_extension("shims"));
-        let _ = agents::ensure_session_id_shims(&shim_dir);
+        let marker_dir = persistence_path
+            .parent()
+            .map(|p| p.join("agent-session-markers"))
+            .unwrap_or_else(|| persistence_path.with_extension("markers"));
+        let _ = agents::ensure_session_id_shims(&shim_dir, &marker_dir);
 
         Self {
             socket_path,
+            marker_dir,
             sessions,
             persistence_path,
             shim_dir: Some(shim_dir),
@@ -200,6 +229,30 @@ impl PtyDaemon {
 
         self.load_sessions();
         let daemon = Arc::new(self);
+
+        // Watch the SessionStart marker directory: when an agent starts or
+        // switches a conversation in-app (`/resume`), push the new live
+        // conversation id to the frontend and persist it.
+        {
+            let daemon = Arc::clone(&daemon);
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+                loop {
+                    tick.tick().await;
+                    for (session_id, conversation_id) in daemon.refresh_conversation_markers() {
+                        info!(session_id = %session_id, conversation_id = %conversation_id, "agent conversation changed");
+                        PtyDaemon::send_to_client(
+                            &daemon.client_tx,
+                            DaemonEvent::Conversation {
+                                session_id,
+                                conversation_id,
+                            },
+                        );
+                    }
+                    PtyDaemon::persist(&daemon.sessions, &daemon.persistence_path);
+                }
+            });
+        }
 
         loop {
             match listener.accept().await {
@@ -371,6 +424,18 @@ impl PtyDaemon {
                                 );
                                 changed = true;
                             }
+                            // Before any in-app switch, the live conversation
+                            // is the pinned id (`--session-id`). The marker
+                            // hook only reports resume/clear/compact, so seed
+                            // the initial conversation from the pin.
+                            if session.meta.conversation_id.is_none() {
+                                session.meta.conversation_id = session
+                                    .meta
+                                    .argv
+                                    .as_ref()
+                                    .and_then(|argv| pinned_conversation_id(argv));
+                                changed |= session.meta.conversation_id.is_some();
+                            }
                         }
                         if changed {
                             dirty = true;
@@ -475,11 +540,15 @@ impl PtyDaemon {
                     worktree_id,
                     agent_name: None,
                     agent_active: false,
+                    conversation_id: None,
                     created_at: Self::now_ms(),
                     pgid: None,
                     cols,
                     rows,
-                    argv: argv.map(|a| agents::with_forced_session_id(&a, &session_id)),
+                    argv: argv.map(|a| {
+                        let hooks = self.shim_dir.as_ref().map(|d| d.join("claude-hooks.json"));
+                        agents::with_forced_session_id(&a, &session_id, hooks.as_deref())
+                    }),
                 };
 
                 let engine = match LocalPtyEngine::spawn(
@@ -549,6 +618,7 @@ impl PtyDaemon {
                     title: title.clone(),
                     is_busy: false,
                     agent_name: None,
+                    conversation_id: None,
                     agent_active: false,
                     created_at: Self::now_ms(),
                     pgid: None,
@@ -785,6 +855,78 @@ impl PtyDaemon {
         }
     }
 
+
+    /// Live conversation id recorded by the SessionStart marker hook for this
+    /// terminal's pinned agent. `.conversation` (resume/clear/compact)
+    /// wins over `.startup` (last process the agent started).
+    fn live_conversation_id(&self, session_id: &str) -> Option<String> {
+        for ext in ["conversation", "startup"] {
+            let path = self.marker_dir.join(format!("{session_id}.{ext}"));
+            if let Ok(data) = std::fs::read_to_string(&path) {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) {
+                    if let Some(id) = value.get("session_id").and_then(|v| v.as_str()) {
+                        return Some(id.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Scan the marker directory and update each session's
+    /// `conversation_id` from the agent's SessionStart hook output. Returns
+    /// the sessions whose live conversation changed, so the caller can emit
+    /// `DaemonEvent::Conversation` and persist.
+    fn refresh_conversation_markers(&self) -> Vec<(String, String)> {
+        let mut changed = Vec::new();
+        let Ok(entries) = std::fs::read_dir(&self.marker_dir) else {
+            return changed;
+        };
+        // stem -> (conversation id, startup id); `.conversation` wins.
+        let mut by_pty: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            if ext != "conversation" && ext != "startup" {
+                continue;
+            }
+            let Some(pty_id) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Ok(data) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) else {
+                continue;
+            };
+            let Some(id) = value.get("session_id").and_then(|v| v.as_str()).map(str::to_string)
+            else {
+                continue;
+            };
+            let slot = by_pty.entry(pty_id.to_string()).or_default();
+            if ext == "conversation" {
+                slot.0 = Some(id);
+            } else {
+                slot.1 = Some(id);
+            }
+        }
+        let mut map = self.sessions.lock().unwrap();
+        for (pty_id, (conversation, startup)) in by_pty {
+            let Some(live) = conversation.or(startup) else {
+                continue;
+            };
+            if let Some(session) = map.get_mut(&pty_id) {
+                if session.meta.conversation_id.as_deref() != Some(live.as_str()) {
+                    session.meta.conversation_id = Some(live.clone());
+                    changed.push((pty_id, live));
+                }
+            }
+        }
+        changed
+    }
+
     fn load_sessions(&self) {
         if !self.persistence_path.exists() {
             return;
@@ -801,8 +943,15 @@ impl PtyDaemon {
                 meta.created_at = backfill;
             }
             let session_id = meta.session_id.clone();
+            // Marker (post-switch) wins; otherwise the live conversation is
+            // the pinned id.
+            let live = self
+                .live_conversation_id(&session_id)
+                .or_else(|| meta.argv.as_ref().and_then(|argv| pinned_conversation_id(argv)));
+            meta.conversation_id = live.clone();
+            let live = meta.conversation_id.clone();
             let engine: Option<Arc<dyn PtyEngine>> = if meta.session_type == "local" {
-                match self.respawn_local_engine(&meta) {
+                match self.respawn_local_engine(&meta, live.as_deref()) {
                     Ok(e) => {
                         meta.pgid = e.process_group_id();
                         Some(Arc::new(e))
@@ -826,14 +975,20 @@ impl PtyDaemon {
         }
     }
 
-    fn respawn_local_engine(&self, meta: &SessionMeta) -> Result<LocalPtyEngine, String> {
+    fn respawn_local_engine(
+        &self,
+        meta: &SessionMeta,
+        live_conversation: Option<&str>,
+    ) -> Result<LocalPtyEngine, String> {
         LocalPtyEngine::spawn(
             meta.session_id.clone(),
             meta.cwd.clone(),
             meta.cols,
             meta.rows,
             self.event_tx.clone(),
-            meta.argv.clone().map(|argv| restore_argv(&argv)),
+            meta.argv
+                .clone()
+                .map(|argv| restore_argv(&argv, live_conversation)),
             self.shim_dir.clone(),
         )
     }
@@ -881,7 +1036,7 @@ impl PtyDaemon {
                     ssh_session,
                     event_tx.clone(),
                     meta.argv.is_none(),
-                    meta.argv.clone().map(|argv| restore_argv(&argv)),
+                    meta.argv.clone().map(|argv| restore_argv(&argv, None)),
                 )
                 .await
                 {
@@ -995,6 +1150,7 @@ mod tests {
                     worktree_id: None,
                     agent_name: None,
                     agent_active: false,
+                    conversation_id: None,
                     created_at: 0,
                     pgid: None,
                     cols: 80,
@@ -1065,6 +1221,7 @@ mod tests {
                     worktree_id: None,
                     agent_name: None,
                     agent_active: false,
+                    conversation_id: None,
                     created_at: 0,
                     pgid: None,
                     cols: 80,
@@ -1134,12 +1291,48 @@ mod tests {
             worktree_id: None,
             agent_name: None,
             agent_active: false,
+            conversation_id: None,
             created_at: 0,
             pgid: None,
             cols: 80,
             rows: 24,
             argv: None,
         }
+    }
+    #[tokio::test]
+    async fn refresh_conversation_markers_updates_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = PtyDaemon::new(dir.path().join("sock"), dir.path().join("persist.json"));
+        std::fs::write(
+            daemon.marker_dir.join("s9.conversation"),
+            r#"{"session_id":"conv-1","source":"resume"}"#,
+        )
+        .unwrap();
+        daemon.sessions.lock().unwrap().insert(
+            "s9".to_string(),
+            DaemonSession {
+                meta: nudge_test_meta("s9"),
+                engine: None,
+                title_busy: false,
+            },
+        );
+
+        let changed = daemon.refresh_conversation_markers();
+        assert_eq!(changed, vec![("s9".to_string(), "conv-1".to_string())]);
+        assert_eq!(
+            daemon
+                .sessions
+                .lock()
+                .unwrap()
+                .get("s9")
+                .unwrap()
+                .meta
+                .conversation_id
+                .as_deref(),
+            Some("conv-1")
+        );
+        // Unchanged markers are not reported again.
+        assert!(daemon.refresh_conversation_markers().is_empty());
     }
 
     #[tokio::test]
@@ -1299,7 +1492,34 @@ mod tests {
             "--model".to_string(),
             "opus".to_string(),
         ];
-        assert_eq!(restore_argv(&argv), vec!["claude", "--model", "opus", "-c"]);
+        assert_eq!(
+            restore_argv(&argv, None),
+            vec!["claude", "--model", "opus", "-c"]
+        );
+    }
+
+    #[test]
+    fn restore_argv_uses_exact_resume_when_live_id_known() {
+        // omp: fuzzy -c without a marker, exact --resume with one.
+        let omp = vec!["omp".to_string()];
+        assert_eq!(restore_argv(&omp, None), vec!["omp", "-c"]);
+        assert_eq!(
+            restore_argv(&omp, Some("conv-omp")),
+            vec!["omp", "--resume", "conv-omp"]
+        );
+        // opencode without a marker falls back to continue-latest like omp.
+        let opencode = vec!["opencode".to_string()];
+        assert_eq!(restore_argv(&opencode, None), vec!["opencode", "-c"]);
+        assert_eq!(
+            restore_argv(&opencode, Some("conv-oc")),
+            vec!["opencode", "--session", "conv-oc"]
+        );
+        // pi: exact via --session-id.
+        let pi = vec!["pi".to_string(), "--model".to_string(), "opus".to_string()];
+        assert_eq!(
+            restore_argv(&pi, Some("conv-pi")),
+            vec!["pi", "--model", "opus", "--session-id", "conv-pi"]
+        );
     }
 
     #[test]
@@ -1312,7 +1532,7 @@ mod tests {
             "8b1f0e42-1111-2222-3333-444455556666".to_string(),
         ];
         assert_eq!(
-            restore_argv(&argv),
+            restore_argv(&argv, None),
             vec![
                 "claude",
                 "--model",
@@ -1321,41 +1541,125 @@ mod tests {
                 "8b1f0e42-1111-2222-3333-444455556666"
             ]
         );
+        // A conversation switched inside the agent (SessionStart marker)
+        // wins over the pinned id.
+        assert_eq!(
+            restore_argv(&argv, Some("switched-conv")),
+            vec![
+                "claude".to_string(),
+                "--model".to_string(),
+                "opus".to_string(),
+                "--resume".to_string(),
+                "switched-conv".to_string(),
+            ]
+        );
         // An explicitly resumed conversation re-runs verbatim.
         let manual = vec![
             "claude".to_string(),
             "--resume".to_string(),
             "abc".to_string(),
         ];
-        assert_eq!(restore_argv(&manual), manual);
+        assert_eq!(restore_argv(&manual, None), manual);
     }
 
     #[test]
     fn restore_argv_is_idempotent_and_passes_through_unknowns() {
         let resumed = vec!["omp".to_string(), "-c".to_string()];
-        assert_eq!(restore_argv(&resumed), resumed);
+        assert_eq!(restore_argv(&resumed, None), resumed);
         let shell = vec!["/bin/zsh".to_string(), "-l".to_string()];
-        assert_eq!(restore_argv(&shell), shell);
-        assert!(restore_argv(&[]).is_empty());
+        assert_eq!(restore_argv(&shell, None), shell);
+        assert!(restore_argv(&[], None).is_empty());
     }
 
     #[test]
-    fn forced_session_id_pins_claude_only_once() {
+    fn forced_session_id_pins_supported_agents() {
         let argv = vec!["claude".to_string(), "--model".to_string()];
         assert_eq!(
-            agents::with_forced_session_id(&argv, "sid"),
+            agents::with_forced_session_id(&argv, "sid", None),
             vec!["claude", "--model", "--session-id", "sid"]
+        );
+        // pi supports forced ids too, but no --settings flag.
+        let pi = vec!["pi".to_string(), "--model".to_string()];
+        assert_eq!(
+            agents::with_forced_session_id(&pi, "sid", Some(std::path::Path::new("/hooks/h.json"))),
+            vec!["pi", "--model", "--session-id", "sid"]
+        );
+        // The SessionStart hook settings file rides along for claude unless
+        // the user passes their own.
+        let hooks = std::path::Path::new("/hooks/claude-hooks.json");
+        assert_eq!(
+            agents::with_forced_session_id(&argv, "sid", Some(hooks)),
+            vec![
+                "claude",
+                "--model",
+                "--session-id",
+                "sid",
+                "--settings",
+                "/hooks/claude-hooks.json"
+            ]
+        );
+        // The user's own --settings file suppresses hook injection but the
+        // conversation is still pinned.
+        let own_settings = vec![
+            "claude".to_string(),
+            "--settings".to_string(),
+            "mine.json".to_string(),
+        ];
+        assert_eq!(
+            agents::with_forced_session_id(&own_settings, "sid", Some(hooks)),
+            vec!["claude", "--settings", "mine.json", "--session-id", "sid"]
         );
         // Already pinned or resumed: untouched.
         let pinned = vec!["claude".to_string(), "--session-id".to_string(), "x".to_string()];
-        assert_eq!(agents::with_forced_session_id(&pinned, "sid"), pinned);
+        assert_eq!(agents::with_forced_session_id(&pinned, "sid", None), pinned);
         let resumed = vec!["claude".to_string(), "--resume".to_string(), "x".to_string()];
-        assert_eq!(agents::with_forced_session_id(&resumed, "sid"), resumed);
+        assert_eq!(agents::with_forced_session_id(&resumed, "sid", None), resumed);
         // omp cannot force ids: untouched.
         let omp = vec!["omp".to_string()];
-        assert_eq!(agents::with_forced_session_id(&omp, "sid"), omp);
+        assert_eq!(agents::with_forced_session_id(&omp, "sid", None), omp);
     }
 
+    #[tokio::test]
+    async fn agent_sighting_seeds_conversation_from_pin() {
+        let (event_tx, event_rx) = mpsc::channel(16);
+        let (client_tx, _client_rx) = mpsc::unbounded_channel();
+        let client_cell = Arc::new(std::sync::Mutex::new(Some(client_tx)));
+        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        sessions.lock().unwrap().insert(
+            "s5".to_string(),
+            DaemonSession {
+                meta: nudge_test_meta("s5"),
+                engine: None,
+                title_busy: false,
+            },
+        );
+        let persistence = tempfile::tempdir().unwrap().path().join("persist.json");
+
+        let broadcaster = tokio::spawn(PtyDaemon::event_broadcaster(
+            event_rx,
+            sessions.clone(),
+            client_cell,
+            persistence,
+        ));
+
+        event_tx
+            .send((
+                "s5".into(),
+                EngineEvent::Agent(Some(crate::pty_engine::AgentSighting {
+                    name: "claude".to_string(),
+                    command: "claude --session-id pinned-9 --settings hooks.json".to_string(),
+                })),
+            ))
+            .await
+            .unwrap();
+        drop(event_tx);
+        broadcaster.await.unwrap();
+
+        let map = sessions.lock().unwrap();
+        let meta = &map.get("s5").unwrap().meta;
+        // Before any in-app switch, the live conversation is the pinned id.
+        assert_eq!(meta.conversation_id.as_deref(), Some("pinned-9"));
+    }
     #[tokio::test]
     async fn first_agent_sighting_stores_command_as_argv() {
         let (event_tx, event_rx) = mpsc::channel(16);

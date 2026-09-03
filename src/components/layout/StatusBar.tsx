@@ -20,6 +20,9 @@ export default function StatusBar() {
   const entries = Object.entries(servers).filter(([key]) =>
     activeProjectId ? key.startsWith(activeProjectId + ":") : true,
   );
+  const activeSession = useTerminalStore((s) =>
+    s.sessions.find((sess) => sess.id === s.activeSessionId),
+  );
   const isCollapsed = useTerminalStore((s) => s.isCollapsed);
   const setCollapsed = useTerminalStore((s) => s.setCollapsed);
   const activePath = useEditorStore((s) => s.activePath);
@@ -31,6 +34,30 @@ export default function StatusBar() {
   return (
     <div className="flex h-6 shrink-0 items-center border-t border-[var(--color-surface0)] bg-[var(--color-crust)] px-3 text-xs text-[var(--color-subtext0)]">
       <span>Ready</span>
+      {activeSession && (
+        <span className="ml-3 flex items-center gap-2 text-[var(--color-overlay0)]">
+          {activeSession.agentName && (
+            <span
+              className={
+                activeSession.agentActive
+                  ? "text-[var(--color-mauve)]"
+                  : undefined
+              }
+              title={activeSession.agentActive ? "agent running" : "agent idle"}
+            >
+              {activeSession.agentName}
+            </span>
+          )}
+          {activeSession.conversationId && (
+            <span
+              title={`conversation ${activeSession.conversationId}`}
+              className="font-mono"
+            >
+              {activeSession.conversationId.slice(0, 8)}
+            </span>
+          )}
+        </span>
+      )}
       <div className="ml-auto flex items-center gap-3">
         <button
           className={`transition-colors ${

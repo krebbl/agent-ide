@@ -260,8 +260,21 @@ pub fn launch_command(
     Ok(argv)
 }
 
+/// Exact-resume flag: resumes a SPECIFIC conversation by id, for agents
+/// whose CLI supports it (verified per `--help`). Agents without exact
+/// resume return `None`.
+pub fn exact_resume_flag(agent_id: &str) -> Option<&'static str> {
+    match agent_id {
+        "claude" => Some("--resume"),
+        "pi" => Some("--session-id"),
+        "omp" => Some("--resume"),
+        "opencode" => Some("--session"),
+        _ => None,
+    }
+}
+
 /// Flag that resumes an agent's most recent conversation in its working
-/// directory, for agents whose CLI supports it (verified per `--help`).
+/// directory — the fuzzy fallback when no conversation id is known.
 /// Agents without resume support return `None`.
 pub fn resume_flag(agent_id: &str) -> Option<&'static str> {
     match agent_id {
@@ -270,11 +283,13 @@ pub fn resume_flag(agent_id: &str) -> Option<&'static str> {
     }
 }
 
-
-/// Agents whose CLI can force the session id of a new conversation
-/// (`--session-id`). Only these get a per-terminal PATH shim; the others
-/// keep the `-c` (continue-latest) restore fallback.
-const SESSION_ID_SHIM_AGENTS: &[&str] = &["claude"];
+/// Agents whose CLI can force the session id of a new conversation. Only
+/// these get a per-terminal PATH shim that pins the conversation to the
+/// terminal's session id; the others keep fuzzy restore. `settings_flag`
+/// marks CLIs that understand claude's `--settings <file>` for hook
+/// injection.
+const SESSION_ID_SHIM_AGENTS: &[(&str, &str, bool)] =
+    &[("claude", "--session-id", true), ("pi", "--session-id", false)];
 
 /// True when the user already pins or resumes a conversation, so nothing
 /// may be injected.
@@ -289,10 +304,16 @@ pub(crate) fn pins_conversation(argv: &[String]) -> bool {
 }
 
 /// Pin a directly-spawned agent command to the terminal session's id with
-/// `--session-id`, so a reboot can resume that exact conversation. No-op
-/// for non-agent argv, agents without forced-id support, and commands that
-/// already pin or resume a conversation.
-pub fn with_forced_session_id(agent_argv: &[String], session_id: &str) -> Vec<String> {
+/// the agent's pin flag, so a reboot can resume that exact conversation.
+/// Claude additionally gets the SessionStart hook settings file so
+/// conversation switches made inside the agent (e.g. `/resume`) are
+/// recorded. No-op for non-agent argv, agents without forced-id support,
+/// and commands that already pin or resume a conversation.
+pub fn with_forced_session_id(
+    agent_argv: &[String],
+    session_id: &str,
+    hook_settings: Option<&Path>,
+) -> Vec<String> {
     let mut out = agent_argv.to_vec();
     let Some(binary) = out.first() else {
         return out;
@@ -302,30 +323,63 @@ pub fn with_forced_session_id(agent_argv: &[String], session_id: &str) -> Vec<St
         binary,
         crate::agent_detect::KNOWN_AGENT_BINARIES,
     );
-    if known.as_deref() == Some("claude") && !pins_conversation(&out) {
-        out.push("--session-id".to_string());
+    let Some((_, pin_flag, settings_flag)) = known
+        .as_deref()
+        .and_then(|id| SESSION_ID_SHIM_AGENTS.iter().find(|(id2, _, _)| *id2 == id))
+    else {
+        return out;
+    };
+    if !pins_conversation(&out) {
+        out.push(pin_flag.to_string());
         out.push(session_id.to_string());
+    }
+    if *settings_flag {
+        if let Some(settings) = hook_settings {
+            if !out.iter().any(|a| a == "--settings" || a.starts_with("--settings=")) {
+                out.push("--settings".to_string());
+                out.push(settings.display().to_string());
+            }
+        }
     }
     out
 }
 
-/// Create (once) a directory of PATH shims that run the real binary with
-/// `--session-id $AGENT_IDE_CONV_ID` unless the user already pins or resumes
-/// a conversation. Only agents whose CLI supports forced session ids get a
-/// shim.
-pub fn ensure_session_id_shims(dir: &std::path::Path) -> std::io::Result<()> {
+/// Create the PATH shims directory: per-agent wrappers that run the real
+/// binary with `--session-id $AGENT_IDE_CONV_ID` unless the user already pins
+/// or resumes a conversation, plus a Claude Code SessionStart hook settings
+/// file that records conversation switches (see `session-marker.sh` below).
+/// Only agents whose CLI supports forced session ids get a shim. Rewritten on
+/// every daemon start so content updates propagate to existing installs.
+pub fn ensure_session_id_shims(
+    dir: &std::path::Path,
+    marker_dir: &std::path::Path,
+) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    for agent in SESSION_ID_SHIM_AGENTS {
+    std::fs::create_dir_all(marker_dir)?;
+    let hooks_json = dir.join("claude-hooks.json");
+    for (agent, pin_flag, settings_flag) in SESSION_ID_SHIM_AGENTS {
         let shim = dir.join(agent);
-        if shim.exists() {
-            continue;
-        }
         let Some(real) = find_real_binary(agent) else {
             continue;
         };
+        // Claude-only: pass the SessionStart hook settings file so switches
+        // made inside the agent are recorded.
+        let settings_inject = if *settings_flag {
+            format!(" --settings \"{}\"", hooks_json.display())
+        } else {
+            String::new()
+        };
+        let settings_guard = if *settings_flag {
+            "        --settings|--settings=*)\n            exec \"{real}\" \"$@\"\n            ;;\n"
+        } else {
+            ""
+        };
         let script = format!(
-            "#!/bin/sh\n# agent-ide per-terminal wrapper: pin the conversation to this\n# terminal's session id unless the user already resumes or pins one.\nfor arg in \"$@\"; do\n    case \"$arg\" in\n        -r|--resume|-c|--continue|--session-id|--resume=*|--session-id=*)\n            exec \"{real}\" \"$@\"\n            ;;\n    esac\ndone\nif [ -n \"$AGENT_IDE_CONV_ID\" ]; then\n    exec \"{real}\" --session-id \"$AGENT_IDE_CONV_ID\" \"$@\"\nfi\nexec \"{real}\" \"$@\"\n",
-            real = real.display()
+            "#!/bin/sh\n# agent-ide per-terminal wrapper: pin the conversation to this\n# terminal's session id unless the user already resumes or pins one.{settings_guard_0}for arg in \"$@\"; do\n    case \"$arg\" in\n        -r|--resume|-c|--continue|--session-id|--resume=*|--session-id=*)\n            exec \"{real}\"{settings_inject} \"$@\"\n            ;;\n    esac\ndone\nif [ -n \"$AGENT_IDE_CONV_ID\" ]; then\n    exec \"{real}\" {pin_flag} \"$AGENT_IDE_CONV_ID\"{settings_inject} \"$@\"\nfi\nexec \"{real}\" \"$@\"\n",
+            settings_guard_0 = settings_guard,
+            real = real.display(),
+            settings_inject = settings_inject,
+            pin_flag = pin_flag
         );
         std::fs::write(&shim, script)?;
         #[cfg(unix)]
@@ -334,6 +388,38 @@ pub fn ensure_session_id_shims(dir: &std::path::Path) -> std::io::Result<()> {
             std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))?;
         }
     }
+    // SessionStart marker hook: the hook receives the live conversation id
+    // on stdin, so a switch made inside the agent (`/resume`, `/clear`,
+    // `/compact`) survives a reboot. Startup events land in a lower-priority
+    // `.startup` file so one-shot `claude -p` runs cannot clobber the
+    // authoritative `.conversation` marker. No-op outside agent-ide
+    // terminals (guarded on AGENT_IDE_CONV_ID).
+    let marker_script = dir.join("session-marker.sh");
+    let marker_script_body = format!(
+        "#!/bin/sh\n# agent-ide SessionStart marker: records the live conversation of the\n# terminal pinned by AGENT_IDE_CONV_ID so a reboot resumes the conversation\n# the user actually switched to. Startup events land in a lower-priority\n# .startup file (one-shot `claude -p` runs also fire startup); explicit\n# conversation moves (resume, clear, compact) win via .conversation.\n[ -n \"$AGENT_IDE_CONV_ID\" ] || exit 0\ninput=$(cat)\nsource=$(printf '%s' \"$input\" | sed -n 's/.*\"source\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n 1)\nif [ \"$source\" = \"startup\" ]; then\n    printf '%s' \"$input\" > \"{marker_dir}/$AGENT_IDE_CONV_ID.startup\"\nelse\n    printf '%s' \"$input\" > \"{marker_dir}/$AGENT_IDE_CONV_ID.conversation\"\nfi\n",
+        marker_dir = marker_dir.display()
+    );
+    std::fs::write(&marker_script, marker_script_body)?;
+    let hooks_settings = serde_json::json!({
+        "hooks": {
+            "SessionStart": [
+                { "hooks": [ { "type": "command", "command": quoted_command(&marker_script) } ] }
+            ]
+        }
+    })
+    .to_string();
+    std::fs::write(&hooks_json, hooks_settings)?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&marker_script, std::fs::Permissions::from_mode(0o755))?;
+    }
+    // PATH shims only catch invocations of the agent binary itself. Wrappers
+    // (caveman claude, npm scripts, aliases) exec the real binary directly,
+    // so the SessionStart hook must also be registered in the user's global
+    // claude settings. The marker script no-ops without AGENT_IDE_CONV_ID,
+    // so claude outside agent-ide terminals is unaffected.
+    let _ = ensure_global_claude_hook(&marker_script);
+    let _ = ensure_agent_marker_hooks();
     // A ZDOTDIR wrapper sources the user's own zsh config and then defines
     // per-agent wrapper functions. Functions take precedence over PATH
     // lookup, so rc files or plugins that rebuild PATH cannot bypass them.
@@ -344,10 +430,23 @@ pub fn ensure_session_id_shims(dir: &std::path::Path) -> std::io::Result<()> {
         "# agent-ide: chain the user's zshenv while terminal shims are active.\nif [ -n \"$AGENT_IDE_ORIG_ZDOTDIR\" ] && [ -f \"$AGENT_IDE_ORIG_ZDOTDIR/.zshenv\" ]; then\n    . \"$AGENT_IDE_ORIG_ZDOTDIR/.zshenv\"\nelif [ -f \"$HOME/.zshenv\" ]; then\n    . \"$HOME/.zshenv\"\nfi\n"
     );
     let mut wrappers = String::new();
-    for agent in SESSION_ID_SHIM_AGENTS {
+    for (agent, pin_flag, settings_flag) in SESSION_ID_SHIM_AGENTS {
+        let settings_inject = if *settings_flag {
+            format!(" --settings \"{}\"", hooks_json.display())
+        } else {
+            String::new()
+        };
+        let settings_guard = if *settings_flag {
+            "        --settings|--settings=*)\n            command {agent} \"$@\"; return ;;\n"
+        } else {
+            ""
+        };
         wrappers.push_str(&format!(
-            "{agent}() {{\n    local arg\n    for arg in \"$@\"; do\n        case \"$arg\" in\n            -r|--resume|-c|--continue|--session-id|--resume=*|--session-id=*)\n                command {agent} \"$@\"; return ;;\n        esac\n    done\n    if [ -n \"$AGENT_IDE_CONV_ID\" ]; then\n        command {agent} --session-id \"$AGENT_IDE_CONV_ID\" \"$@\"\n    else\n        command {agent} \"$@\"\n    fi\n}}\n",
-            agent = agent
+            "{agent}() {{\n    local arg\n{settings_guard_0}    for arg in \"$@\"; do\n        case \"$arg\" in\n            -r|--resume|-c|--continue|--session-id|--resume=*|--session-id=*)\n                command {agent}{settings_inject} \"$@\"; return ;;\n        esac\n    done\n    if [ -n \"$AGENT_IDE_CONV_ID\" ]; then\n        command {agent} {pin_flag} \"$AGENT_IDE_CONV_ID\"{settings_inject} \"$@\"\n    else\n        command {agent} \"$@\"\n    fi\n}}\n",
+            agent = agent,
+            settings_guard_0 = settings_guard,
+            settings_inject = settings_inject,
+            pin_flag = pin_flag
         ));
     }
     let zshrc = format!(
@@ -357,6 +456,166 @@ pub fn ensure_session_id_shims(dir: &std::path::Path) -> std::io::Result<()> {
     );
     std::fs::write(zdotdir.join(".zshenv"), zshenv)?;
     std::fs::write(zdotdir.join(".zshrc"), zshrc)?;
+    Ok(())
+}
+
+/// Session marker hooks for agents without claude's `--settings` flag.
+/// pi and omp are pi-family agents: a minimal TypeScript extension (their
+/// native lifecycle-hook mechanism) reacts to `session_start` — fired on
+/// startup, `/new`, `/resume` and `/fork`. opencode gets a plugin reacting
+/// to `session.created`/`session.idle`. All write the same
+/// `<pty>.conversation` marker JSON the daemon already reads, keyed by
+/// env vars the terminal exports; they no-op outside agent-ide terminals.
+fn ensure_agent_marker_hooks() -> std::io::Result<()> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Ok(());
+    };
+    const PI_OMP_EXTENSION: &str = r#"// agent-ide session marker: records the live conversation id of this
+// terminal so a reboot resumes exactly it. No-op outside agent-ide
+// terminals (guarded on AGENT_IDE_CONV_ID).
+import { mkdirSync, writeFileSync } from "node:fs";
+
+export default function (pi: any) {
+  pi.on("session_start", async (_event: any, ctx: any) => {
+    const conv = process.env.AGENT_IDE_CONV_ID;
+    const dir = process.env.AGENT_IDE_MARKERS_DIR;
+    if (!conv || !dir || !ctx?.sessionManager) return;
+    const file: string = ctx.sessionManager.getSessionFile?.() ?? "";
+    if (!file) return;
+    // Session files are named <timestamp>_<uuid>; the UUID is the session
+    // id `--resume` (omp) and `--session-id` (pi) accept.
+    const base = file.split("/").pop() ?? file;
+    const id = base.split("_").pop()?.replace(/\.jsonl$/, "") ?? "";
+    if (!id) return;
+    try { mkdirSync(dir, { recursive: true }); } catch {}
+    try {
+      writeFileSync(`${dir}/${conv}.conversation`, JSON.stringify({ session_id: id }));
+    } catch {}
+  });
+}
+"#;
+    const OPENCODE_PLUGIN: &str = r#"// agent-ide session marker: records the live conversation id of this
+// terminal so a reboot resumes exactly it. No-op outside agent-ide
+// terminals (guarded on AGENT_IDE_CONV_ID).
+import { mkdirSync, writeFileSync } from "node:fs";
+
+export const AgentIdeSessionMarker = async () => {
+  return {
+    event: async ({ event }) => {
+      const conv = process.env.AGENT_IDE_CONV_ID;
+      const dir = process.env.AGENT_IDE_MARKERS_DIR;
+      if (!conv || !dir) return;
+      if (event.type !== "session.created" && event.type !== "session.idle") return;
+      const props = event.properties ?? {};
+      const id = props.info?.id ?? props.info?.sessionID ?? props.sessionID;
+      if (!id) return;
+      try { mkdirSync(dir, { recursive: true }); } catch {}
+      try {
+        writeFileSync(`${dir}/${conv}.conversation`, JSON.stringify({ session_id: id }));
+      } catch {}
+    },
+  };
+};
+"#;
+    for (agent, rel_path, content) in [
+        ("pi", ".pi/agent/extensions/agent-ide-session-marker.ts", PI_OMP_EXTENSION),
+        ("omp", ".omp/agent/extensions/agent-ide-session-marker.ts", PI_OMP_EXTENSION),
+        ("opencode", ".config/opencode/plugins/agent-ide-session-marker.js", OPENCODE_PLUGIN),
+    ] {
+        if find_real_binary(agent).is_none() {
+            continue;
+        }
+        let path = home.join(rel_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, content)?;
+    }
+    Ok(())
+}
+
+/// Hook commands run through a shell: quote the path so spaces (e.g.
+/// "Application Support") survive.
+fn quoted_command(path: &Path) -> String {
+    format!("\"{}\"", path.display())
+}
+
+/// Register the SessionStart marker hook in the user's global
+/// `~/.claude/settings.json` so it also fires for agents launched through
+/// wrappers that bypass the PATH shims. Idempotent: an existing entry with
+/// the same command is left alone, everything else in the file is preserved.
+fn ensure_global_claude_hook(marker_script: &Path) -> std::io::Result<()> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Ok(());
+    };
+    let settings_path = home.join(".claude").join("settings.json");
+    let mut settings: serde_json::Value = std::fs::read_to_string(&settings_path)
+        .ok()
+        .and_then(|data| serde_json::from_str(&data).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !settings.is_object() {
+        return Ok(());
+    }
+    // The previously written registration may be unquoted (older agent-ide);
+    // treat both spellings as already-registered.
+    let command = quoted_command(marker_script);
+    let command_unquoted = marker_script.display().to_string();
+    {
+        let hooks = settings
+            .as_object_mut()
+            .unwrap()
+            .entry("hooks")
+            .or_insert_with(|| serde_json::json!({}));
+        if !hooks.is_object() {
+            return Ok(());
+        }
+        let session_start = hooks
+            .as_object_mut()
+            .unwrap()
+            .entry("SessionStart")
+            .or_insert_with(|| serde_json::json!([]));
+        let Some(entries) = session_start.as_array_mut() else {
+            return Ok(());
+        };
+        let already_registered = entries.iter().any(|entry| {
+            entry
+                .get("hooks")
+                .and_then(|h| h.as_array())
+                .is_some_and(|hs| {
+                    hs.iter().any(|h| {
+                        matches!(
+                            h.get("command").and_then(|c| c.as_str()),
+                            Some(c) if c == command.as_str() || c == command_unquoted.as_str()
+                        )
+                    })
+                })
+        });
+        if already_registered {
+            // Upgrade an unquoted legacy entry to the quoted form, then fall
+            // through to the write below.
+            for entry in entries.iter_mut() {
+                for h in entry
+                    .get_mut("hooks")
+                    .and_then(|h| h.as_array_mut())
+                    .into_iter().flatten()
+                {
+                    if h.get("command").and_then(|c| c.as_str()) == Some(command_unquoted.as_str()) {
+                        if let Some(obj) = h.as_object_mut() {
+                            obj.insert("command".to_string(), serde_json::json!(command));
+                        }
+                    }
+                }
+            }
+        } else {
+            entries.push(serde_json::json!({
+                "hooks": [ { "type": "command", "command": command } ]
+            }));
+        }
+    }
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
     Ok(())
 }
 /// Model catalogue for an agent. Curated defaults, enriched at runtime where
@@ -675,5 +934,47 @@ mod tests {
         assert_eq!(resume_flag("opencode"), Some("-c"));
         assert_eq!(resume_flag("codex"), None);
         assert_eq!(resume_flag("unknown"), None);
+    }
+
+    #[test]
+    fn global_hook_registration_merges_and_is_idempotent() {
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", home.path());
+        let marker = home.path().join("shims").join("session-marker.sh");
+        std::fs::create_dir_all(home.path().join("shims")).unwrap();
+
+        // First registration creates the settings file.
+        ensure_global_claude_hook(&marker).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(home.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        let entries = settings["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+
+        // Existing user hooks are preserved and duplicates are not added.
+        let with_user_hooks = serde_json::json!({
+            "env": { "FOO": "1" },
+            "hooks": {
+                "SessionStart": [
+                    { "hooks": [ { "type": "command", "command": "user-own-hook.sh" } ] }
+                ]
+            }
+        });
+        std::fs::write(
+            home.path().join(".claude/settings.json"),
+            serde_json::to_string_pretty(&with_user_hooks).unwrap(),
+        )
+        .unwrap();
+        ensure_global_claude_hook(&marker).unwrap();
+        ensure_global_claude_hook(&marker).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(home.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(settings["env"]["FOO"], "1");
+        let entries = settings["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        std::env::remove_var("HOME");
     }
 }

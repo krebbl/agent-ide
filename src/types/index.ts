@@ -46,6 +46,8 @@ export interface TerminalSession {
   cwd: string;
   title: string;
   agentName?: string;
+  /** Live agent conversation id (SessionStart marker hook); not the pty id. */
+  conversationId?: string | null;
   agentActive?: boolean;
   isBusy?: boolean;
   needsInput?: boolean;
@@ -86,6 +88,7 @@ export interface DaemonSessionMeta {
   projectId?: string;
   worktreeId?: string;
   agentName?: string;
+  conversationId?: string | null;
   agentActive?: boolean;
   createdAt?: number;
   cols: number;
@@ -97,7 +100,6 @@ export interface ProcessInfo {
   pgid: number;
   comm: string;
   args: string;
-  isAgent?: boolean;
 }
 
 export interface EditorTab {

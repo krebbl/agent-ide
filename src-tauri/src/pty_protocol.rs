@@ -27,6 +27,12 @@ pub struct SessionMeta {
     pub pgid: Option<i32>,
     pub cols: u16,
     pub rows: u16,
+    /// Live agent conversation id, recorded by the SessionStart marker hook
+    /// whenever the agent starts or switches a conversation (e.g. `/resume`).
+    /// This is the id a reboot must resume — not the PTY session id. `None`
+    /// until the agent reports its first session.
+    #[serde(default)]
+    pub conversation_id: Option<String>,
     /// Optional initial command argv. When present the daemon spawns this
     /// program instead of a plain shell (local) or types it into the remote
     /// shell after cd (ssh). Persisted so respawns keep the same command.
@@ -127,6 +133,10 @@ pub enum DaemonEvent {
     Agent {
         session_id: String,
         name: Option<String>,
+    },
+    Conversation {
+        session_id: String,
+        conversation_id: String,
     },
     SessionList {
         sessions: Vec<SessionMeta>,

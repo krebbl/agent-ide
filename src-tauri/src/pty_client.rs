@@ -129,6 +129,18 @@ impl PtyClient {
             DaemonEvent::Agent { session_id, name } => {
                 event_bus.emit("pty_agent", PtyAgentEvent { session_id, name });
             }
+            DaemonEvent::Conversation {
+                session_id,
+                conversation_id,
+            } => {
+                event_bus.emit(
+                    "pty_conversation",
+                    PtyConversationEvent {
+                        session_id,
+                        conversation_id,
+                    },
+                );
+            }
             DaemonEvent::Exit { session_id, exit_code } => {
                 event_bus.emit("pty_exit", PtyExitEvent { session_id, exit_code });
             }
@@ -422,6 +434,13 @@ pub struct PtyStateSnapshotEvent {
     pub session_id: String,
     pub is_busy: bool,
     pub title: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyConversationEvent {
+    pub session_id: String,
+    pub conversation_id: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

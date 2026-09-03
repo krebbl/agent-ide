@@ -101,6 +101,8 @@ export interface TerminalSession {
   type: "local" | "ssh";
   projectId?: string;
   worktreeId?: string;
+  /** Live agent conversation id (SessionStart marker hook); not the pty id. */
+  conversationId?: string | null;
   agentName?: string;
   agentActive?: boolean;
   isBusy?: boolean;
@@ -586,6 +588,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           isBusy: false,
           needsInput: false,
           agentName: meta.agentName,
+          conversationId: meta.conversationId ?? null,
           agentActive: meta.agentActive,
           createdAt: meta.createdAt ?? Date.now(),
         }));
