@@ -57,11 +57,13 @@ pub fn parse_processes(ps_output: &str, pgid: i32) -> Vec<ProcessInfo> {
 /// Scan `ps` output (`pgid=,comm=,args=` columns) for a known agent whose
 /// process group matches `pgid`. Matches on comm and argv[0] basename
 /// (catches node-wrapped CLIs such as Claude Code).
+#[cfg(test)]
 pub fn detect_agent_in(ps_output: &str, pgid: i32) -> Option<String> {
     detect_agent_in_processes(&parse_processes(ps_output, pgid))
 }
 
 /// Find a known agent among already-parsed process rows.
+#[cfg(test)]
 pub fn detect_agent_in_processes(procs: &[ProcessInfo]) -> Option<String> {
     procs.iter().find_map(|p| {
         let argv0 = p.args.split_whitespace().next().unwrap_or("");

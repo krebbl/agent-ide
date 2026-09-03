@@ -272,7 +272,6 @@ impl PtyDaemon {
                 }
             }
         }
-        Ok(())
     }
 
     async fn event_broadcaster(
@@ -1238,7 +1237,7 @@ mod tests {
         let mut saw_marker = false;
         while let Ok(ev) = tokio::time::timeout(deadline, event_rx.recv()).await {
             match ev {
-                Some((sid, EngineEvent::Output(data))) => {
+                Some((_sid, EngineEvent::Output(data))) => {
                     let bytes = STANDARD.decode(&data).unwrap_or_default();
                     // stty size prints "ROWS COLS"; the nudge shrinks the pty
                     // to 23 rows (and restores it), which the shell observes.
