@@ -9,6 +9,8 @@ interface UiState {
   setFocusedZone: (zone: FocusedZone) => void;
   worktreeLoading: boolean;
   setWorktreeLoading: (loading: boolean) => void;
+  fileSearchOpen: boolean;
+  setFileSearchOpen: (open: boolean) => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -19,4 +21,6 @@ export const useUiStore = create<UiState>((set) => ({
   setFocusedZone: (zone) => set({ focusedZone: zone }),
   worktreeLoading: false,
   setWorktreeLoading: (loading) => set({ worktreeLoading: loading }),
+  fileSearchOpen: false,
+  setFileSearchOpen: (open) => set({ fileSearchOpen: open }),
 }));

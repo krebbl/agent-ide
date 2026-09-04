@@ -12,8 +12,7 @@ import { useUiStore } from "../../stores/uiStore";
 import { useFileTreeStore } from "../../stores/fileTreeStore";
 
 export default function AppLayout() {
-  const { rightSidebarVisible } = useUiStore();
-  const [fileSearchOpen, setFileSearchOpen] = useState(false);
+  const { rightSidebarVisible, fileSearchOpen, setFileSearchOpen } = useUiStore();
   const [agentSearchOpen, setAgentSearchOpen] = useState(false);
   const [worktreeSearchOpen, setWorktreeSearchOpen] = useState(false);
   useEffect(() => {

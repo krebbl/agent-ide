@@ -3,6 +3,7 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import { FileCode } from "lucide-react";
 import { useEditorStore, languageFromPath } from "../../stores/editorStore";
 import { useUiStore } from "../../stores/uiStore";
+import { useFileTreeStore } from "../../stores/fileTreeStore";
 import { monaco } from "../../utils/monacoSetup";
 import { installLsp, contentChanged } from "../../services/lsp/coordinator";
 import { registerProviders } from "../../services/lsp/providers";
@@ -78,6 +79,10 @@ export default function EditorZone() {
     });
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyT, () => {
       if (useEditorStore.getState().activePath) setSymbolSearchOpen(true);
+    });
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyO, () => {
+      const { rootPath, projectId } = useFileTreeStore.getState();
+      if (rootPath && projectId) useUiStore.getState().setFileSearchOpen(true);
     });
   };
 
