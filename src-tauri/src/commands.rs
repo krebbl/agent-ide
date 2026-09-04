@@ -29,6 +29,7 @@ pub use crate::{
     cmd_load_expanded_projects as load_expanded_projects,
     cmd_load_projects as load_projects,
     cmd_list_agent_models as list_agent_models,
+    cmd_list_local_dir as list_local_dir,
     cmd_save_editor_tabs as save_editor_tabs,
     cmd_save_expanded_projects as save_expanded_projects,
     cmd_save_projects as save_projects,
@@ -107,6 +108,7 @@ pub async fn dispatch(
         "fs_rm" => cmd_state!(FsRmReq, fs_rm, [project_id: String, path: String, recursive: Option<bool>]),
         "fs_mv" => cmd_state!(FsMvReq, fs_mv, [project_id: String, from: String, to: String]),
         "fs_exists" => cmd_state!(FsExistsReq, fs_exists, [project_id: String, path: String]),
+        "list_local_dir" => cmd_plain!(ListLocalDirReq, list_local_dir, [path: String]),
         "fs_search_files" => cmd_state!(FsSearchFilesReq, fs_search_files, [project_id: String, root: String, query: String, limit: Option<usize>]),
         "check_agent_ready" => cmd_plain!(CheckAgentReadyReq, check_agent_ready, [id: String]),
         "check_agents_ready" => {

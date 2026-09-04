@@ -4,6 +4,7 @@ import { FolderOpen, Server, Key, Lock, CheckCircle, AlertCircle, Loader2 } from
 import { useProjectStore } from "../../stores/projectStore";
 import { Project, SSHConnection, LocalConnection } from "../../types";
 import RemoteDirBrowser from "./RemoteDirBrowser";
+import LocalDirBrowser from "./LocalDirBrowser";
 import Dialog from "../ui/Dialog";
 
 interface AddProjectDialogProps {
@@ -18,12 +19,14 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
   const [localName, setLocalName] = useState("");
   const [localIsGit, setLocalIsGit] = useState<boolean | null>(null);
   const [localChecking, setLocalChecking] = useState(false);
+  const [localShowBrowser, setLocalShowBrowser] = useState(false);
 
   const [sshHost, setSshHost] = useState("marcuskrejpowicz.com");
   const [sshPort, setSshPort] = useState(22);
   const [sshUsername, setSshUsername] = useState("dev");
   const [sshAuthMethod, setSshAuthMethod] = useState<"key" | "password" | "agent">("key");
   const [sshKeyPath, setSshKeyPath] = useState("");
+  const [keyShowBrowser, setKeyShowBrowser] = useState(false);
   const [sshPassword, setSshPassword] = useState("");
   const [sshTestStatus, setSshTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [sshTestMessage, setSshTestMessage] = useState("");
@@ -43,25 +46,41 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
   } | null>(null);
   const [sshAgentChecking, setSshAgentChecking] = useState(false);
 
+  const applyLocalPath = async (selected: string) => {
+    setLocalPath(selected);
+    const parts = selected.split("/").filter(Boolean);
+    setLocalName(parts[parts.length - 1] || selected);
+    setLocalIsGit(null);
+    setLocalChecking(true);
+    try {
+      const isGit = await invoke<boolean>("check_is_git_repo", { path: selected });
+      setLocalIsGit(isGit);
+    } catch {
+      setLocalIsGit(false);
+    } finally {
+      setLocalChecking(false);
+    }
+  };
+
   const handleLocalBrowse = async () => {
-    if (import.meta.env.VITE_TAURI !== "true") return;
-    // Platform-specific Tauri dialog; keep out of the web bundle.
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const selected = await open({ directory: true, multiple: false });
-    if (selected && typeof selected === "string") {
-      setLocalPath(selected);
-      const parts = selected.split("/").filter(Boolean);
-      setLocalName(parts[parts.length - 1] || selected);
-      setLocalIsGit(null);
-      setLocalChecking(true);
-      try {
-        const isGit = await invoke<boolean>("check_is_git_repo", { path: selected });
-        setLocalIsGit(isGit);
-      } catch {
-        setLocalIsGit(false);
-      } finally {
-        setLocalChecking(false);
-      }
+    if (import.meta.env.VITE_TAURI === "true") {
+      // Platform-specific Tauri dialog; keep out of the web bundle.
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({ directory: true, multiple: false });
+      if (selected && typeof selected === "string") applyLocalPath(selected);
+    } else {
+      setLocalShowBrowser(true);
+    }
+  };
+
+  const handleKeyBrowse = async () => {
+    if (import.meta.env.VITE_TAURI === "true") {
+      // Platform-specific Tauri dialog; keep out of the web bundle.
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({ multiple: false });
+      if (selected && typeof selected === "string") setSshKeyPath(selected);
+    } else {
+      setKeyShowBrowser(true);
     }
   };
 
@@ -281,16 +300,24 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
                 placeholder="/path/to/project"
                 className="flex-1 rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
               />
-              {import.meta.env.VITE_TAURI === "true" && (
-                <button
-                  onClick={handleLocalBrowse}
-                  className="rounded-md bg-[var(--color-surface0)] px-3 py-2 text-sm text-[var(--color-text)] hover:bg-[var(--color-surface1)]"
-                >
-                  Browse
-                </button>
-              )}
+              <button
+                onClick={handleLocalBrowse}
+                className="rounded-md bg-[var(--color-surface0)] px-3 py-2 text-sm text-[var(--color-text)] hover:bg-[var(--color-surface1)]"
+              >
+                Browse
+              </button>
             </div>
           </div>
+          {localShowBrowser && (
+            <LocalDirBrowser
+              mode="dir"
+              onSelect={(p) => {
+                setLocalShowBrowser(false);
+                applyLocalPath(p);
+              }}
+              onCancel={() => setLocalShowBrowser(false)}
+            />
+          )}
 
           <div>
             <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">Project Name</label>
@@ -403,22 +430,23 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
                   placeholder="~/.ssh/id_ed25519"
                   className="flex-1 rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
                 />
-                {import.meta.env.VITE_TAURI === "true" && (
-                  <button
-                    onClick={async () => {
-                      // Platform-specific Tauri dialog; keep out of the web bundle.
-                      const { open } = await import("@tauri-apps/plugin-dialog");
-                      const selected = await open({ multiple: false });
-                      if (selected && typeof selected === "string") {
-                        setSshKeyPath(selected);
-                      }
-                    }}
-                    className="rounded-md bg-[var(--color-surface0)] px-3 py-2 text-sm text-[var(--color-text)] hover:bg-[var(--color-surface1)]"
-                  >
-                    Browse
-                  </button>
-                )}
+                <button
+                  onClick={handleKeyBrowse}
+                  className="rounded-md bg-[var(--color-surface0)] px-3 py-2 text-sm text-[var(--color-text)] hover:bg-[var(--color-surface1)]"
+                >
+                  Browse
+                </button>
               </div>
+              {keyShowBrowser && (
+                <LocalDirBrowser
+                  mode="file"
+                  onSelect={(p) => {
+                    setKeyShowBrowser(false);
+                    setSshKeyPath(p);
+                  }}
+                  onCancel={() => setKeyShowBrowser(false)}
+                />
+              )}
             </div>
           )}
 

@@ -1166,6 +1166,15 @@ async fn check_is_git_repo(path: String) -> Result<bool, String> {
     crate::commands::check_is_git_repo(path).await
 }
 
+pub async fn cmd_list_local_dir(path: String) -> Result<Vec<DirEntry>, String> {
+    LocalFileSystem.read_dir(&path).await
+}
+
+#[tauri::command]
+async fn list_local_dir(path: String) -> Result<Vec<DirEntry>, String> {
+    crate::commands::list_local_dir(path).await
+}
+
 pub async fn cmd_git_init(path: String) -> Result<(), String> {
     Repository::init(&path).map_err(|e| format!("Failed to initialize git repository: {}", e))?;
     Ok(())
@@ -3387,6 +3396,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            check_is_git_repo,
+            list_local_dir,
             save_projects,
             load_projects,
             save_expanded_projects,
