@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { invoke } from "../services/ipc";
+import { invoke, listen } from "../services/ipc";
 import { Project, Worktree } from "../types";
 import { useTerminalStore } from "./terminalStore";
 import { usePrStore } from "./prStore";
@@ -21,6 +21,7 @@ interface ProjectStore {
   getActiveProject: () => Project | undefined;
   toggleProjectExpanded: (id: string) => void;
   fetchWorktrees: (projectId: string) => Promise<void>;
+  applyWorktrees: (projectId: string, raw: Worktree[]) => void;
   setActiveWorktree: (projectId: string, worktreeId: string) => Promise<void>;
   removeWorktree: (projectId: string, worktreePath: string, force?: boolean, deleteBranch?: boolean) => Promise<void>;
   refreshWorktrees: (projectId: string) => Promise<void>;
@@ -218,10 +219,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     });
   },
 
-  fetchWorktrees: async (projectId: string) => {
-    set((s) => ({ worktreeLoading: { ...s.worktreeLoading, [projectId]: true } }));
-    try {
-      const raw = await invoke<Worktree[]>("git_worktree_list_async", { projectId });
+  applyWorktrees: (projectId: string, raw: Worktree[]) => {
+    set((s) => {
       const worktrees: Worktree[] = raw.map((wt) => ({
         id: wt.id,
         branch: wt.branch,
@@ -232,26 +231,32 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         behind: wt.behind,
         locked: wt.locked,
       }));
-      set((s) => {
-        const selectedWorktreeId = s.selectedWorktreeId;
-        const activeProjectId = s.activeProjectId;
-        const updated = s.projects.map((p) => {
-          if (p.id !== projectId) return p;
-          const activeWorktreeId =
-            p.activeWorktreeId && worktrees.some((w) => w.id === p.activeWorktreeId)
-              ? p.activeWorktreeId
-              : null;
-          return { ...p, worktrees, activeWorktreeId };
-        });
-        const activeRemoved =
-          activeProjectId === projectId &&
-          selectedWorktreeId !== null &&
-          !worktrees.some((w) => w.id === selectedWorktreeId);
-        return {
-          projects: updated,
-          selectedWorktreeId: activeRemoved ? null : selectedWorktreeId,
-        };
+      const selectedWorktreeId = s.selectedWorktreeId;
+      const activeProjectId = s.activeProjectId;
+      const updated = s.projects.map((p) => {
+        if (p.id !== projectId) return p;
+        const activeWorktreeId =
+          p.activeWorktreeId && worktrees.some((w) => w.id === p.activeWorktreeId)
+            ? p.activeWorktreeId
+            : null;
+        return { ...p, worktrees, activeWorktreeId };
       });
+      const activeRemoved =
+        activeProjectId === projectId &&
+        selectedWorktreeId !== null &&
+        !worktrees.some((w) => w.id === selectedWorktreeId);
+      return {
+        projects: updated,
+        selectedWorktreeId: activeRemoved ? null : selectedWorktreeId,
+      };
+    });
+  },
+
+  fetchWorktrees: async (projectId: string) => {
+    set((s) => ({ worktreeLoading: { ...s.worktreeLoading, [projectId]: true } }));
+    try {
+      const raw = await invoke<Worktree[]>("git_worktree_list_async", { projectId });
+      get().applyWorktrees(projectId, raw);
       const projects = get().projects;
       await invoke("save_projects", { projects });
     } catch (e) {
@@ -345,3 +350,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     }
   },
 }));
+
+export function initWorktreeRefreshListener() {
+  listen<{ projectId: string; worktrees: Worktree[] }>(
+    "worktrees_refreshed",
+    (event) => {
+      useProjectStore.getState().applyWorktrees(event.payload.projectId, event.payload.worktrees);
+    },
+  ).catch(() => {});
+}

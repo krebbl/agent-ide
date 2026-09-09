@@ -3089,6 +3089,76 @@ async fn start_health_check(state: Arc<AppState>) {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorktreesRefreshedEvent {
+    project_id: String,
+    worktrees: Vec<WorktreeInfo>,
+}
+
+/// Periodically fetches remotes (`git fetch --all --prune`) and re-lists
+/// worktrees for every project, pushing the result to the frontend so
+/// ahead/behind counts and branch state stay current after remote merges.
+async fn start_worktree_refresh(state: Arc<AppState>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        interval.tick().await;
+
+        let projects = match crate::commands::load_projects(&state).await {
+            Ok(projects) => projects,
+            Err(e) => {
+                warn!("worktree_refresh: failed to load projects: {}", e);
+                continue;
+            }
+        };
+
+        for project in projects {
+            // Skip SSH projects without a live connection: the health check
+            // owns reconnection, and fetching would trigger a duplicate
+            // reconnect attempt every tick.
+            if let Connection::Ssh { .. } = &project.connection {
+                let connected = {
+                    let connections = state.ssh_connections.lock().await;
+                    connections
+                        .get(&project.id)
+                        .map(|c| c.status == ConnectionStatus::Connected)
+                        .unwrap_or(false)
+                };
+                if !connected {
+                    continue;
+                }
+            }
+
+            let fetch_result = match &project.connection {
+                Connection::Local { path } => fetch_remotes_local(path),
+                Connection::Ssh { .. } => {
+                    let repo_path = get_repo_path(&project);
+                    fetch_remotes_ssh(&project.id, &repo_path, &state).await
+                }
+            };
+            if let Err(e) = fetch_result {
+                warn!("worktree_refresh: fetch failed for {}: {}", project.id, e);
+                continue;
+            }
+
+            match cmd_git_worktree_list_async(&state, project.id.clone()).await {
+                Ok(worktrees) => {
+                    state.event_bus.emit(
+                        "worktrees_refreshed",
+                        WorktreesRefreshedEvent {
+                            project_id: project.id.clone(),
+                            worktrees,
+                        },
+                    );
+                }
+                Err(e) => {
+                    warn!("worktree_refresh: list failed for {}: {}", project.id, e);
+                }
+            }
+        }
+    }
+}
+
 /// Guarantees `state.ssh_connections` has a live, connected session for `project_id`
 /// before an SSH-backed operation (git-over-ssh, sftp) runs. Unlike the periodic
 /// health check, this also covers the case where no entry exists yet at all - e.g.
@@ -3377,6 +3447,11 @@ pub fn run() {
             let state_clone = state.clone();
             tauri::async_runtime::spawn(async move {
                 start_health_check(state_clone).await;
+            });
+
+            let worktree_refresh_state = state.clone();
+            tauri::async_runtime::spawn(async move {
+                start_worktree_refresh(worktree_refresh_state).await;
             });
 
             let pty_client = Arc::new(
