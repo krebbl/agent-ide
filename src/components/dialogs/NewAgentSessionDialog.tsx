@@ -50,6 +50,7 @@ export default function NewAgentSessionDialog({
   const { projects, addWorktree, setActiveWorktree, fetchWorktrees, updateProject } = useProjectStore();
   const { addSession } = useTerminalStore();
   const agentsLoading = useAgentStore((s) => s.isLoading);
+  const storeAgents = useAgentStore((s) => s.agents);
   const draft = useAgentDraftStore((s) => s.drafts[projectId] ?? EMPTY_DRAFT);
   const updateDraft = (patch: Partial<AgentSessionDraft>) =>
     useAgentDraftStore.getState().update(projectId, patch);
@@ -89,15 +90,14 @@ export default function NewAgentSessionDialog({
 
   useEffect(() => {
     // Installed agents are loaded once at app startup (main.tsx) and cached
-    // in the agent store; pick the stored preference or the first available.
-    // When a temporary draft exists for this project (dialog was canceled
-    // with input), keep its values instead of re-deriving defaults.
-    const all = useAgentStore.getState().agents;
-    const available = all.filter(
+    // in the agent store; re-derive when the store fills so a dialog opened
+    // before the check finished still gets options. When a temporary draft
+    // holds a real selection, keep the user's values instead of re-deriving.
+    const available = storeAgents.filter(
       (a) => a.installed && SUPPORTED_AGENTS.includes(a.id),
     );
     setAgents(available);
-    if (useAgentDraftStore.getState().drafts[projectId]) return;
+    if (useAgentDraftStore.getState().drafts[projectId]?.selectedAgentId) return;
     const project = useProjectStore.getState().projects.find((p) => p.id === projectId);
     const preferred = project?.preferredAgent;
     updateDraft({
@@ -105,7 +105,7 @@ export default function NewAgentSessionDialog({
       selectedAgentId: available.find((a) => a.id === preferred)?.id ?? available[0]?.id ?? "",
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [projectId, storeAgents]);
 
   useEffect(() => {
     if (!selectedAgentId) {
