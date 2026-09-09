@@ -437,14 +437,17 @@ pub fn ensure_session_id_shims(
             String::new()
         };
         let settings_guard = if *settings_flag {
-            "        --settings|--settings=*)\n            command {agent} \"$@\"; return ;;\n"
+            format!(
+                "            --settings|--settings=*)\n                command {agent} \"$@\"; return ;;\n",
+                agent = agent
+            )
         } else {
-            ""
+            String::new()
         };
         wrappers.push_str(&format!(
-            "{agent}() {{\n    local arg\n{settings_guard_0}    for arg in \"$@\"; do\n        case \"$arg\" in\n            -r|--resume|-c|--continue|--session-id|--resume=*|--session-id=*)\n                command {agent}{settings_inject} \"$@\"; return ;;\n        esac\n    done\n    if [ -n \"$AGENT_IDE_CONV_ID\" ]; then\n        command {agent} {pin_flag} \"$AGENT_IDE_CONV_ID\"{settings_inject} \"$@\"\n    else\n        command {agent} \"$@\"\n    fi\n}}\n",
+            "{agent}() {{\n    local arg\n    for arg in \"$@\"; do\n        case \"$arg\" in\n{settings_guard}            -r|--resume|-c|--continue|--session-id|--resume=*|--session-id=*)\n                command {agent}{settings_inject} \"$@\"; return ;;\n        esac\n    done\n    if [ -n \"$AGENT_IDE_CONV_ID\" ]; then\n        command {agent} {pin_flag} \"$AGENT_IDE_CONV_ID\"{settings_inject} \"$@\"\n    else\n        command {agent} \"$@\"\n    fi\n}}\n",
             agent = agent,
-            settings_guard_0 = settings_guard,
+            settings_guard = settings_guard,
             settings_inject = settings_inject,
             pin_flag = pin_flag
         ));
@@ -1000,3 +1003,4 @@ mod tests {
         std::env::remove_var("HOME");
     }
 }
+
