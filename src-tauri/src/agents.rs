@@ -288,8 +288,10 @@ pub fn resume_flag(agent_id: &str) -> Option<&'static str> {
 /// terminal's session id; the others keep fuzzy restore. `settings_flag`
 /// marks CLIs that understand claude's `--settings <file>` for hook
 /// injection.
-const SESSION_ID_SHIM_AGENTS: &[(&str, &str, bool)] =
-    &[("claude", "--session-id", true), ("pi", "--session-id", false)];
+const SESSION_ID_SHIM_AGENTS: &[(&str, &str, bool)] = &[
+    ("claude", "--session-id", true),
+    ("pi", "--session-id", false),
+];
 
 /// True when the user already pins or resumes a conversation, so nothing
 /// may be injected.
@@ -335,7 +337,10 @@ pub fn with_forced_session_id(
     }
     if *settings_flag {
         if let Some(settings) = hook_settings {
-            if !out.iter().any(|a| a == "--settings" || a.starts_with("--settings=")) {
+            if !out
+                .iter()
+                .any(|a| a == "--settings" || a.starts_with("--settings="))
+            {
                 out.push("--settings".to_string());
                 out.push(settings.display().to_string());
             }
@@ -543,9 +548,21 @@ export const AgentIdeSessionMarker = async () => {
 };
 "#;
     for (agent, rel_path, content) in [
-        ("pi", ".pi/agent/extensions/agent-ide-session-marker.ts", PI_OMP_EXTENSION),
-        ("omp", ".omp/agent/extensions/agent-ide-session-marker.ts", PI_OMP_EXTENSION),
-        ("opencode", ".config/opencode/plugins/agent-ide-session-marker.js", OPENCODE_PLUGIN),
+        (
+            "pi",
+            ".pi/agent/extensions/agent-ide-session-marker.ts",
+            PI_OMP_EXTENSION,
+        ),
+        (
+            "omp",
+            ".omp/agent/extensions/agent-ide-session-marker.ts",
+            PI_OMP_EXTENSION,
+        ),
+        (
+            "opencode",
+            ".config/opencode/plugins/agent-ide-session-marker.js",
+            OPENCODE_PLUGIN,
+        ),
     ] {
         if find_real_binary(agent).is_none() {
             continue;
@@ -565,10 +582,33 @@ fn quoted_command(path: &Path) -> String {
     format!("\"{}\"", path.display())
 }
 
+/// True when the command is an agent-ide session-marker registration whose
+/// script path no longer exists on disk. Matches both the quoted form
+/// agent-ide writes and the unquoted legacy form; anything else is kept.
+fn is_stale_marker_command(hook: &serde_json::Value) -> bool {
+    let Some(command) = hook.get("command").and_then(|c| c.as_str()) else {
+        return false;
+    };
+    let trimmed = command.trim();
+    let unquoted = trimmed
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(trimmed);
+    let path = std::path::Path::new(unquoted);
+    if path.file_name() != Some(std::ffi::OsStr::new("session-marker.sh"))
+        || path.parent().and_then(|p| p.file_name()) != Some(std::ffi::OsStr::new("agent-shims"))
+    {
+        return false;
+    }
+    !path.exists()
+}
 /// Register the SessionStart marker hook in the user's global
 /// `~/.claude/settings.json` so it also fires for agents launched through
 /// wrappers that bypass the PATH shims. Idempotent: an existing entry with
 /// the same command is left alone, everything else in the file is preserved.
+/// Entries from previous installs whose shim dir has since vanished (e.g. a
+/// daemon that persisted under /tmp) are pruned so claude's SessionStart no
+/// longer fails on the missing script.
 fn ensure_global_claude_hook(marker_script: &Path) -> std::io::Result<()> {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return Ok(());
@@ -602,6 +642,15 @@ fn ensure_global_claude_hook(marker_script: &Path) -> std::io::Result<()> {
         let Some(entries) = session_start.as_array_mut() else {
             return Ok(());
         };
+        // Prune registrations from previous installs whose shim dir is gone;
+        // only agent-ide-authored entries pointing at missing scripts are
+        // dropped, everything else is preserved untouched.
+        entries.retain(|entry| {
+            let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array()) else {
+                return true;
+            };
+            hooks.is_empty() || !hooks.iter().all(is_stale_marker_command)
+        });
         let already_registered = entries.iter().any(|entry| {
             entry
                 .get("hooks")
@@ -622,9 +671,11 @@ fn ensure_global_claude_hook(marker_script: &Path) -> std::io::Result<()> {
                 for h in entry
                     .get_mut("hooks")
                     .and_then(|h| h.as_array_mut())
-                    .into_iter().flatten()
+                    .into_iter()
+                    .flatten()
                 {
-                    if h.get("command").and_then(|c| c.as_str()) == Some(command_unquoted.as_str()) {
+                    if h.get("command").and_then(|c| c.as_str()) == Some(command_unquoted.as_str())
+                    {
                         if let Some(obj) = h.as_object_mut() {
                             obj.insert("command".to_string(), serde_json::json!(command));
                         }
@@ -899,9 +950,10 @@ fn filter_wrapper_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
                 return true;
             };
             !normalized.starts_with(&superset_bin)
-                && !(normalized.starts_with(&superset_prefix) && normalized.components().any(|c| {
-                    c.as_os_str() == std::ffi::OsStr::new("bin")
-                }))
+                && !(normalized.starts_with(&superset_prefix)
+                    && normalized
+                        .components()
+                        .any(|c| c.as_os_str() == std::ffi::OsStr::new("bin")))
         })
         .collect()
 }
@@ -921,6 +973,9 @@ fn home_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    // HOME is process-global; tests repointing it run in parallel threads,
+    // so every such test must hold this lock for its whole body.
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     #[test]
     fn parses_omp_models_json_entries() {
         let json = r#"{"models":[
@@ -948,7 +1003,11 @@ mod tests {
             {"selector":"","name":"Broken"}
         ]}"#;
         let parsed: OmpModelsResponse = serde_json::from_str(json).unwrap();
-        let count = parsed.models.iter().filter(|m| !m.selector.trim().is_empty()).count();
+        let count = parsed
+            .models
+            .iter()
+            .filter(|m| !m.selector.trim().is_empty())
+            .count();
         assert_eq!(count, 1);
     }
 
@@ -963,6 +1022,7 @@ mod tests {
 
     #[test]
     fn global_hook_registration_merges_and_is_idempotent() {
+        let _home = HOME_LOCK.lock().unwrap();
         let home = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", home.path());
         let marker = home.path().join("shims").join("session-marker.sh");
@@ -1002,5 +1062,35 @@ mod tests {
         assert_eq!(entries.len(), 2);
         std::env::remove_var("HOME");
     }
-}
+    #[test]
+    fn global_hook_prunes_stale_registrations() {
+        let home = tempfile::tempdir().unwrap();
+        let _home = HOME_LOCK.lock().unwrap();
+        std::env::set_var("HOME", home.path());
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+        // A previous install's shim dir plus the live one.
+        let stale = home.path().join("agent-shims/session-marker.sh");
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        std::fs::write(&stale, "#!/bin/sh\n").unwrap();
+        let live = home.path().join("other/agent-shims/session-marker.sh");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, "#!/bin/sh\n").unwrap();
 
+        ensure_global_claude_hook(&stale).unwrap();
+        // The stale shim dir gets cleaned up (e.g. /tmp hygiene).
+        std::fs::remove_file(&stale).unwrap();
+
+        ensure_global_claude_hook(&live).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(home.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        let entries = settings["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0]["hooks"][0]["command"],
+            serde_json::json!(quoted_command(&live))
+        );
+        std::env::remove_var("HOME");
+    }
+}
