@@ -78,23 +78,25 @@ fn normalize_site_url(url: &str) -> String {
 
 fn extract_issue_key(branch: &str) -> Option<String> {
     let bytes = branch.as_bytes();
+    let is_key_char = |b: u8| b.is_ascii_alphanumeric();
+    let is_letter = |b: u8| b.is_ascii_alphabetic();
     let mut i = 0;
     while i < bytes.len() {
-        if !bytes[i].is_ascii_uppercase() {
+        if !is_letter(bytes[i]) {
             i += 1;
             continue;
         }
-        if i > 0 && bytes[i - 1].is_ascii_alphanumeric() {
+        if i > 0 && is_key_char(bytes[i - 1]) {
             i += 1;
             continue;
         }
         let mut end = i;
-        while end < bytes.len() && (bytes[end].is_ascii_uppercase() || bytes[end].is_ascii_digit()) {
+        while end < bytes.len() && is_key_char(bytes[end]) {
             end += 1;
         }
         let left_len = end - i;
         if left_len >= 2
-            && bytes[end - 1].is_ascii_uppercase()
+            && is_letter(bytes[end - 1])
             && end < bytes.len()
             && bytes[end] == b'-'
         {
@@ -102,8 +104,8 @@ fn extract_issue_key(branch: &str) -> Option<String> {
             while d < bytes.len() && bytes[d].is_ascii_digit() {
                 d += 1;
             }
-            if d > end + 1 && (d >= bytes.len() || !bytes[d].is_ascii_alphanumeric()) {
-                return Some(branch[i..d].to_string());
+            if d > end + 1 && (d >= bytes.len() || !is_key_char(bytes[d])) {
+                return Some(branch[i..d].to_uppercase());
             }
         }
         i += 1;
@@ -347,6 +349,10 @@ mod tests {
         assert_eq!(extract_issue_key("feature/PROJ-123-add-search"), Some("PROJ-123".to_string()));
         assert_eq!(extract_issue_key("proj/AB-4_fix"), Some("AB-4".to_string()));
         assert_eq!(extract_issue_key("PROJ-1"), Some("PROJ-1".to_string()));
+        assert_eq!(extract_issue_key("fix-mnt-123"), Some("MNT-123".to_string()));
+        assert_eq!(extract_issue_key("feature/mnt-123-add-search"), Some("MNT-123".to_string()));
+        assert_eq!(extract_issue_key("hotfix-mnt-123"), Some("MNT-123".to_string()));
+        assert_eq!(extract_issue_key("fix-123"), Some("FIX-123".to_string()));
     }
 
     #[test]
