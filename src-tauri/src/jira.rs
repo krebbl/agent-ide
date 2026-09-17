@@ -138,7 +138,7 @@ fn parse_issue(key: &str, site_url: &str, payload: &serde_json::Value) -> Result
         .and_then(|c| c.as_array())
         .cloned()
         .unwrap_or_default();
-    let comments = fields
+    let mut comments: Vec<JiraComment> = fields
         .pointer("/comment/comments")
         .and_then(|c| c.as_array())
         .unwrap_or(&empty)
@@ -154,6 +154,7 @@ fn parse_issue(key: &str, site_url: &str, payload: &serde_json::Value) -> Result
                 .filter(|s| !s.trim().is_empty()),
         })
         .collect();
+    comments.sort_by(|a, b| b.created.cmp(&a.created));
 
     let labels = fields
         .get("labels")
