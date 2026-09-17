@@ -72,7 +72,9 @@ fn detect_remote_host_local(repo_path: &Path) -> Result<String, String> {
         return Err("Not a git repository or no origin remote configured".to_string());
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_lowercase())
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_lowercase())
 }
 
 fn provider_from_url(remote_url: &str) -> Result<&'static str, String> {
@@ -96,11 +98,7 @@ fn shell_escape(s: &str) -> String {
 
 // ── Remote command execution via SSH ────────────────────────────────────────
 
-async fn exec_remote(
-    state: &AppState,
-    project_id: &str,
-    cmd: &str,
-) -> Result<String, String> {
+async fn exec_remote(state: &AppState, project_id: &str, cmd: &str) -> Result<String, String> {
     let connections = state.ssh_connections.lock().await;
     let conn = connections
         .get(project_id)
@@ -135,7 +133,9 @@ async fn exec_remote(
                     stdout.push_str(&String::from_utf8_lossy(&data));
                 }
             }
-            russh::ChannelMsg::ExitStatus { exit_status: status } => {
+            russh::ChannelMsg::ExitStatus {
+                exit_status: status,
+            } => {
                 exit_status = Some(status);
             }
             russh::ChannelMsg::Close => break,
@@ -173,15 +173,13 @@ async fn detect_remote_host_ssh(
 fn run_cli_local(repo_path: &str, bin: &str, args: &[&str]) -> Result<String, String> {
     let mut cmd = Command::new(bin);
     cmd.args(args).current_dir(repo_path);
-    let output = cmd
-        .output()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                format!("{} CLI not found. Is it installed and on your PATH?", bin)
-            } else {
-                format!("Failed to run {}: {}", bin, e)
-            }
-        })?;
+    let output = cmd.output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("{} CLI not found. Is it installed and on your PATH?", bin)
+        } else {
+            format!("Failed to run {}: {}", bin, e)
+        }
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -388,7 +386,10 @@ fn parse_bkt_pr_list(json: &str) -> Result<Vec<PrInfo>, String> {
             match arr {
                 Some(serde_json::Value::Array(_)) => arr.cloned(),
                 _ => {
-                    let keys: Vec<&str> = wrapper.as_object().map(|o| o.keys().map(|k| k.as_str()).collect()).unwrap_or_default();
+                    let keys: Vec<&str> = wrapper
+                        .as_object()
+                        .map(|o| o.keys().map(|k| k.as_str()).collect())
+                        .unwrap_or_default();
                     return Err(format!("bkt output is an object but no array found. Available keys: {:?}. First 500 chars: {}", keys, &json[..json.len().min(500)]));
                 }
             }
@@ -447,8 +448,8 @@ fn parse_bkt_pr_list(json: &str) -> Result<Vec<PrInfo>, String> {
         name: String,
     }
 
-    let prs: Vec<BktPr> = serde_json::from_str(json_str)
-        .map_err(|e| format!("Failed to parse bkt output: {}", e))?;
+    let prs: Vec<BktPr> =
+        serde_json::from_str(json_str).map_err(|e| format!("Failed to parse bkt output: {}", e))?;
 
     prs.into_iter()
         .map(|pr| {
@@ -586,7 +587,10 @@ pub async fn cmd_pr_for_branch(
     branch: String,
 ) -> Result<PrInfoResult, String> {
     let projects = crate::commands::load_projects(state).await?;
-    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or("Project not found")?;
 
     let repo_path = get_repo_path(project);
 
@@ -791,7 +795,10 @@ pub async fn cmd_pr_list_for_repo(
     project_id: String,
 ) -> Result<Vec<PrInfo>, String> {
     let projects = crate::commands::load_projects(state).await?;
-    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or("Project not found")?;
 
     let repo_path = get_repo_path(project);
 

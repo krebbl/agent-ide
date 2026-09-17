@@ -1,6 +1,6 @@
 use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 
-use agent_ide_lib::{event_bus::EventBus, AppState, lsp, pty_client};
+use agent_ide_lib::{event_bus::EventBus, lsp, pty_client, AppState};
 use axum::{
     extract::{Path, Request, State, WebSocketUpgrade},
     http::{header::AUTHORIZATION, StatusCode},
@@ -37,10 +37,10 @@ async fn auth_middleware(
         .and_then(|h| h.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "));
 
-    let query_token = request.uri().query().and_then(|q| {
-        q.split('&')
-            .find_map(|pair| pair.strip_prefix("token="))
-    });
+    let query_token = request
+        .uri()
+        .query()
+        .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")));
 
     let provided = header_token.or(query_token);
 
@@ -69,10 +69,7 @@ async fn events_websocket(
     let provided = req
         .uri()
         .query()
-        .and_then(|q| {
-            q.split('&')
-                .find_map(|pair| pair.strip_prefix("token="))
-        })
+        .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")))
         .map(|t| t.to_string());
 
     match provided {
@@ -108,8 +105,8 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let auth_token = env::var("AGENT_IDE_AUTH_TOKEN")
-        .unwrap_or_else(|_| "agent-ide-dev-token".to_string());
+    let auth_token =
+        env::var("AGENT_IDE_AUTH_TOKEN").unwrap_or_else(|_| "agent-ide-dev-token".to_string());
 
     let static_dir: PathBuf = env::var("AGENT_IDE_STATIC_DIR")
         .map(PathBuf::from)
@@ -132,7 +129,13 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let app_state = AppState::new(event_bus.clone(), lsp_manager);
 
     let pty_client = Arc::new(
-        pty_client::PtyClient::new(pty_client::daemon_socket_path(), event_bus.clone(), false, None).await?,
+        pty_client::PtyClient::new(
+            pty_client::daemon_socket_path(),
+            event_bus.clone(),
+            false,
+            None,
+        )
+        .await?,
     );
     let _ = app_state.pty_client.set(pty_client);
 

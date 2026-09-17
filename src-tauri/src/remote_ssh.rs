@@ -46,7 +46,10 @@ pub async fn connect_ssh(
     key_path: Option<&str>,
     password: Option<&str>,
 ) -> Result<client::Handle<ClientHandler>, String> {
-    info!("remote_ssh: host={} port={} username={} auth_method={}", host, port, username, auth_method);
+    info!(
+        "remote_ssh: host={} port={} username={} auth_method={}",
+        host, port, username, auth_method
+    );
     let config = Arc::new(client::Config::default());
 
     let connect_timeout = if auth_method == "agent" {
@@ -246,7 +249,9 @@ impl RemotePtyEngine {
                 "exec tmux set -g status off \\; new-session -A -s {} 2>/dev/null || exec ${{SHELL:-/bin/sh}} -l\n",
                 shell_escape(&session_id)
             );
-            let _ = channel.data(std::io::Cursor::new(tmux_cmd.into_bytes())).await;
+            let _ = channel
+                .data(std::io::Cursor::new(tmux_cmd.into_bytes()))
+                .await;
         } else {
             // Invisible identity marker: ask the fresh remote shell for its
             // controlling terminal. `ps` reports that tty for every process
@@ -261,9 +266,7 @@ impl RemotePtyEngine {
                 setup.push_str(&format!("cd {}; ", shell_escape(dir)));
             }
             setup.push_str("printf '\\033]1338;AI_TTY=%s\\033\\\\' \"$(tty)\"; stty echo\n");
-            let _ = channel
-                .data(std::io::Cursor::new(setup.into_bytes()))
-                .await;
+            let _ = channel.data(std::io::Cursor::new(setup.into_bytes())).await;
         }
 
         let (input_tx, input_rx) = mpsc::channel::<String>(64);
@@ -328,7 +331,14 @@ impl crate::pty_engine::PtyEngine for RemotePtyEngine {
     fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
         let tx = self.resize_tx.clone();
         tokio::spawn(async move {
-            let _ = tx.send(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).await;
+            let _ = tx
+                .send(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .await;
         });
         Ok(())
     }
@@ -383,17 +393,14 @@ async fn run_remote_terminal(
     let mut last_agent_probe: Option<Instant> = None;
     let mut probe_in_flight = false;
     let mut detected_agent: Option<String> = None;
-    let (probe_result_tx, mut probe_result_rx) =
-        mpsc::unbounded_channel::<Vec<ProcessInfo>>();
+    let (probe_result_tx, mut probe_result_rx) = mpsc::unbounded_channel::<Vec<ProcessInfo>>();
 
     // Probe the remote process table when this session produces output
     // (throttled to once per second, one probe in flight). Many remote
     // shells never emit OSC-133 markers, so output activity — not the Busy
     // event — is the trigger. Idle sessions produce no output and thus no
     // probes: zero SSH overhead when nothing is running.
-    let schedule_probe = |last: &mut Option<Instant>,
-                              in_flight: &mut bool,
-                              key: Option<String>| {
+    let schedule_probe = |last: &mut Option<Instant>, in_flight: &mut bool, key: Option<String>| {
         let due = last
             .map(|t| t.elapsed() >= Duration::from_secs(1))
             .unwrap_or(true);
@@ -494,7 +501,9 @@ async fn run_remote_terminal(
         }
     }
 
-    let _ = event_tx.send((session_id, crate::pty_engine::EngineEvent::Exit(exit_code))).await;
+    let _ = event_tx
+        .send((session_id, crate::pty_engine::EngineEvent::Exit(exit_code)))
+        .await;
 }
 
 /// Run `ps -A -o tty=,pid=,comm=,args=` on the remote server over a fresh
@@ -506,12 +515,7 @@ async fn remote_ps(session: &SessionHandle, tty: Option<&str>) -> Vec<ProcessInf
     };
     let channel = {
         let handle = session.lock().await;
-        match tokio::time::timeout(
-            Duration::from_secs(10),
-            handle.channel_open_session(),
-        )
-        .await
-        {
+        match tokio::time::timeout(Duration::from_secs(10), handle.channel_open_session()).await {
             Ok(Ok(ch)) => Some(ch),
             _ => None,
         }

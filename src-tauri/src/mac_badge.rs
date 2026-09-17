@@ -59,7 +59,11 @@ mod probe_test {
 
         crate::mac_badge::imp::set_badge(4);
         let after = tile.badgeLabel().map(|s| s.to_string());
-        assert_eq!(after.as_deref(), Some("4"), "setBadgeLabel(4) must be readable back");
+        assert_eq!(
+            after.as_deref(),
+            Some("4"),
+            "setBadgeLabel(4) must be readable back"
+        );
 
         crate::mac_badge::imp::set_badge(0);
         assert!(tile.badgeLabel().is_none(), "clear must remove the badge");

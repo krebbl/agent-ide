@@ -178,10 +178,13 @@ pub async fn spawn_remote(
     };
 
     let command = build_spawn_command(shell, spec, root_path);
-    tokio::time::timeout(Duration::from_secs(15), channel.exec(true, command.into_bytes()))
-        .await
-        .map_err(|_| "exec request timed out".to_string())?
-        .map_err(|e| format!("Failed to exec language server: {}", e))?;
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        channel.exec(true, command.into_bytes()),
+    )
+    .await
+    .map_err(|_| "exec request timed out".to_string())?
+    .map_err(|e| format!("Failed to exec language server: {}", e))?;
 
     tokio::spawn(async move {
         let mut parser = FrameParser::new();

@@ -61,7 +61,10 @@ pub fn scan_osc133_command(state: &mut Vec<u8>, data: &[u8]) -> Option<Osc133Eve
     let mut start = 0;
 
     while start + MARKER_PREFIX.len() <= buffer.len() {
-        if let Some(pos) = buffer[start..].windows(MARKER_PREFIX.len()).position(|w| w == MARKER_PREFIX) {
+        if let Some(pos) = buffer[start..]
+            .windows(MARKER_PREFIX.len())
+            .position(|w| w == MARKER_PREFIX)
+        {
             let marker_start = start + pos;
             let cmd_idx = marker_start + MARKER_PREFIX.len();
 
@@ -220,7 +223,9 @@ pub fn scan_osc_title(state: &mut Vec<u8>, data: &[u8]) -> Option<String> {
             }
 
             if terminated {
-                if let Some(title) = sanitize_title(&String::from_utf8_lossy(&buffer[title_start..title_end])) {
+                if let Some(title) =
+                    sanitize_title(&String::from_utf8_lossy(&buffer[title_start..title_end]))
+                {
                     result = Some(title);
                 }
                 start = scan + 1;
@@ -404,8 +409,14 @@ mod tests {
     }
 }
 
-fn require_pty_client(state: &crate::AppState) -> Result<Arc<crate::pty_client::PtyClient>, String> {
-    state.pty_client.get().cloned().ok_or_else(|| "PtyClient not initialized".to_string())
+fn require_pty_client(
+    state: &crate::AppState,
+) -> Result<Arc<crate::pty_client::PtyClient>, String> {
+    state
+        .pty_client
+        .get()
+        .cloned()
+        .ok_or_else(|| "PtyClient not initialized".to_string())
 }
 
 pub async fn cmd_pty_spawn(
@@ -423,9 +434,26 @@ pub async fn cmd_pty_spawn(
         || (project_id.is_some() && session_type.as_deref() != Some("local"));
     let session_id = uuid::Uuid::new_v4().to_string();
     if is_remote {
-        pty_client.create_remote(session_id.clone(), project_id.unwrap_or_default(), cwd, cols, rows, worktree_id, false, argv)?;
+        pty_client.create_remote(
+            session_id.clone(),
+            project_id.unwrap_or_default(),
+            cwd,
+            cols,
+            rows,
+            worktree_id,
+            false,
+            argv,
+        )?;
     } else {
-        pty_client.spawn(session_id.clone(), cwd, cols, rows, project_id, worktree_id, argv)?;
+        pty_client.spawn(
+            session_id.clone(),
+            cwd,
+            cols,
+            rows,
+            project_id,
+            worktree_id,
+            argv,
+        )?;
     }
     Ok(session_id)
 }
@@ -441,10 +469,22 @@ pub async fn pty_spawn(
     argv: Option<Vec<String>>,
     state: tauri::State<'_, Arc<crate::AppState>>,
 ) -> Result<String, String> {
-    crate::commands::pty_spawn(state.inner().as_ref(), cwd, cols, rows, project_id, worktree_id, session_type, argv).await
+    crate::commands::pty_spawn(
+        state.inner().as_ref(),
+        cwd,
+        cols,
+        rows,
+        project_id,
+        worktree_id,
+        session_type,
+        argv,
+    )
+    .await
 }
 
-pub async fn cmd_pty_list_sessions(state: &crate::AppState) -> Result<Vec<crate::pty_protocol::SessionMeta>, String> {
+pub async fn cmd_pty_list_sessions(
+    state: &crate::AppState,
+) -> Result<Vec<crate::pty_protocol::SessionMeta>, String> {
     require_pty_client(state)?.list_sessions().await
 }
 
@@ -459,7 +499,9 @@ pub async fn cmd_pty_session_processes(
     state: &crate::AppState,
     session_id: String,
 ) -> Result<Vec<crate::pty_protocol::ProcessInfo>, String> {
-    require_pty_client(state)?.session_processes(session_id).await
+    require_pty_client(state)?
+        .session_processes(session_id)
+        .await
 }
 
 #[tauri::command]
@@ -506,10 +548,7 @@ pub async fn pty_resize(
     crate::commands::pty_resize(state.inner().as_ref(), session_id, cols, rows).await
 }
 
-pub async fn cmd_pty_nudge(
-    state: &crate::AppState,
-    session_id: String,
-) -> Result<(), String> {
+pub async fn cmd_pty_nudge(state: &crate::AppState, session_id: String) -> Result<(), String> {
     require_pty_client(state)?.nudge(session_id)
 }
 
@@ -521,10 +560,7 @@ pub async fn pty_nudge(
     crate::commands::pty_nudge(state.inner().as_ref(), session_id).await
 }
 
-pub async fn cmd_pty_kill(
-    state: &crate::AppState,
-    session_id: String,
-) -> Result<(), String> {
+pub async fn cmd_pty_kill(state: &crate::AppState, session_id: String) -> Result<(), String> {
     require_pty_client(state)?.kill(session_id)
 }
 
@@ -596,5 +632,3 @@ pub async fn pty_register_ssh_project(
     )
     .await
 }
-
-

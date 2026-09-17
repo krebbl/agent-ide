@@ -11,12 +11,10 @@ pub fn server_for_language(language_id: &str) -> Option<ServerSpec> {
             command: "rust-analyzer",
             args: &[],
         }),
-        "typescript" | "javascript" | "typescriptreact" | "javascriptreact" => {
-            Some(ServerSpec {
-                command: "typescript-language-server",
-                args: &["--stdio"],
-            })
-        }
+        "typescript" | "javascript" | "typescriptreact" | "javascriptreact" => Some(ServerSpec {
+            command: "typescript-language-server",
+            args: &["--stdio"],
+        }),
         "python" => Some(ServerSpec {
             command: "pyright-langserver",
             args: &["--stdio"],
@@ -76,14 +74,9 @@ pub fn path_to_uri(path: &str) -> String {
     }
     for byte in path.bytes() {
         match byte {
-            b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'-'
-            | b'.'
-            | b'_'
-            | b'~'
-            | b'/' => out.push(byte as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(byte as char)
+            }
             _ => out.push_str(&format!("%{:02X}", byte)),
         }
     }

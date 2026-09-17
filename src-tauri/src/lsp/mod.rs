@@ -165,10 +165,10 @@ impl LspManager {
     }
 
     async fn insert(&self, client: Arc<LspClient>) {
-        self.clients.lock().await.insert(
-            client_key(&client.project_id, &client.language_id),
-            client,
-        );
+        self.clients
+            .lock()
+            .await
+            .insert(client_key(&client.project_id, &client.language_id), client);
     }
 
     async fn remove(&self, project_id: &str, language_id: &str) -> Option<Arc<LspClient>> {
@@ -236,12 +236,7 @@ fn emit_status(
     }
 }
 
-fn emit_message(
-    event_bus: Option<&EventBus>,
-    project_id: &str,
-    language_id: &str,
-    message: Value,
-) {
+fn emit_message(event_bus: Option<&EventBus>, project_id: &str, language_id: &str, message: Value) {
     if let Some(event_bus) = event_bus {
         event_bus.emit(
             "lsp://message",
@@ -256,8 +251,7 @@ fn emit_message(
 
 pub(super) async fn dispatch_message(ctx: &ReaderContext, msg: Value) {
     let has_id = msg.get("id").is_some();
-    let is_response =
-        has_id && (msg.get("result").is_some() || msg.get("error").is_some());
+    let is_response = has_id && (msg.get("result").is_some() || msg.get("error").is_some());
     if is_response {
         if let Some(id) = msg.get("id").and_then(|v| v.as_u64()) {
             if let Some(tx) = ctx.transport.pending.lock().await.remove(&id) {
@@ -281,14 +275,26 @@ pub(super) async fn dispatch_message(ctx: &ReaderContext, msg: Value) {
                     .await;
             });
         }
-        emit_message(ctx.event_bus.as_ref(), &ctx.project_id, &ctx.language_id, msg);
+        emit_message(
+            ctx.event_bus.as_ref(),
+            &ctx.project_id,
+            &ctx.language_id,
+            msg,
+        );
     } else {
-        emit_message(ctx.event_bus.as_ref(), &ctx.project_id, &ctx.language_id, msg);
+        emit_message(
+            ctx.event_bus.as_ref(),
+            &ctx.project_id,
+            &ctx.language_id,
+            msg,
+        );
     }
 }
 
 pub(super) async fn handle_reader_exit(ctx: ReaderContext) {
-    ctx.transport.fail_all_pending("Language server exited").await;
+    ctx.transport
+        .fail_all_pending("Language server exited")
+        .await;
     if ctx.stopping.load(Ordering::SeqCst) {
         emit_status(
             ctx.event_bus.as_ref(),
@@ -309,7 +315,9 @@ pub(super) async fn handle_reader_exit(ctx: ReaderContext) {
     tokio::spawn(auto_restart(ctx));
 }
 
-fn auto_restart(ctx: ReaderContext) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+fn auto_restart(
+    ctx: ReaderContext,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
     Box::pin(auto_restart_inner(ctx))
 }
 
@@ -397,7 +405,13 @@ pub async fn start_server(
         manager.remove(project_id, language_id).await;
     }
 
-    emit_status(event_bus.as_ref(), project_id, language_id, "starting", None);
+    emit_status(
+        event_bus.as_ref(),
+        project_id,
+        language_id,
+        "starting",
+        None,
+    );
 
     let result = spawn_and_initialize(
         event_bus.clone(),
@@ -461,9 +475,8 @@ async fn spawn_and_initialize(
 
     let handle = match &target {
         SpawnTarget::Local => {
-            let program = registry::resolve_on_path(spec.command).ok_or_else(|| {
-                format!("Language server '{}' not found on PATH", spec.command)
-            })?;
+            let program = registry::resolve_on_path(spec.command)
+                .ok_or_else(|| format!("Language server '{}' not found on PATH", spec.command))?;
             let spawned = process::spawn_local(&program, spec.args, Some(root_path))?;
             let process::SpawnedServer {
                 child,
@@ -619,7 +632,14 @@ pub async fn lsp_request(
     params: Value,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Value, String> {
-    crate::commands::lsp_request(state.inner().as_ref(), project_id, language_id, method, params).await
+    crate::commands::lsp_request(
+        state.inner().as_ref(),
+        project_id,
+        language_id,
+        method,
+        params,
+    )
+    .await
 }
 
 pub async fn cmd_lsp_notify(
@@ -645,7 +665,14 @@ pub async fn lsp_notify(
     params: Value,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    crate::commands::lsp_notify(state.inner().as_ref(), project_id, language_id, method, params).await
+    crate::commands::lsp_notify(
+        state.inner().as_ref(),
+        project_id,
+        language_id,
+        method,
+        params,
+    )
+    .await
 }
 
 pub async fn cmd_lsp_stop(
@@ -818,7 +845,11 @@ mod tests {
                 }),
             )
             .await;
-        assert!(symbols.is_ok(), "documentSymbol failed: {:?}", symbols.err());
+        assert!(
+            symbols.is_ok(),
+            "documentSymbol failed: {:?}",
+            symbols.err()
+        );
         client.shutdown().await;
         manager.remove("test-project", "ruby").await;
     }

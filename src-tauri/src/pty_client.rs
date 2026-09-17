@@ -8,8 +8,7 @@ use tracing::{info, warn};
 
 use crate::event_bus::EventBus;
 use crate::pty::{
-    PtyAgentEvent, PtyBusyEvent, PtyExitEvent, PtyIdleEvent, PtyOutputEvent,
-    PtyTitleEvent,
+    PtyAgentEvent, PtyBusyEvent, PtyExitEvent, PtyIdleEvent, PtyOutputEvent, PtyTitleEvent,
 };
 use crate::pty_protocol::{DaemonEvent, DaemonRequest, ProcessInfo, SessionMeta};
 
@@ -37,17 +36,24 @@ impl PtyClient {
         let write_task = tokio::spawn(async move {
             while let Some(req) = request_rx.recv().await {
                 let json = serde_json::to_string(&req).unwrap_or_default();
-                if writer.write_all(format!("{}\n", json).as_bytes()).await.is_err() {
+                if writer
+                    .write_all(format!("{}\n", json).as_bytes())
+                    .await
+                    .is_err()
+                {
                     break;
                 }
                 let _ = writer.flush().await;
             }
         });
 
-        let list_waiter = Arc::new(Mutex::new(None::<tokio::sync::oneshot::Sender<Vec<SessionMeta>>>));
+        let list_waiter = Arc::new(Mutex::new(
+            None::<tokio::sync::oneshot::Sender<Vec<SessionMeta>>>,
+        ));
         let list_waiter_read = Arc::clone(&list_waiter);
-        let processes_waiter =
-            Arc::new(Mutex::new(None::<tokio::sync::oneshot::Sender<Vec<ProcessInfo>>>));
+        let processes_waiter = Arc::new(Mutex::new(
+            None::<tokio::sync::oneshot::Sender<Vec<ProcessInfo>>>,
+        ));
         let processes_waiter_read = Arc::clone(&processes_waiter);
         let event_bus_for_read = event_bus.clone();
         let badge_for_read = badge.clone();
@@ -109,13 +115,7 @@ impl PtyClient {
     fn emit_event(event_bus: &EventBus, ev: DaemonEvent) {
         match ev {
             DaemonEvent::Output { session_id, data } => {
-                event_bus.emit(
-                    "pty_output",
-                    PtyOutputEvent {
-                        session_id,
-                        data,
-                    },
-                );
+                event_bus.emit("pty_output", PtyOutputEvent { session_id, data });
             }
             DaemonEvent::Idle { session_id, title } => {
                 event_bus.emit("pty_idle", PtyIdleEvent { session_id, title });
@@ -141,8 +141,17 @@ impl PtyClient {
                     },
                 );
             }
-            DaemonEvent::Exit { session_id, exit_code } => {
-                event_bus.emit("pty_exit", PtyExitEvent { session_id, exit_code });
+            DaemonEvent::Exit {
+                session_id,
+                exit_code,
+            } => {
+                event_bus.emit(
+                    "pty_exit",
+                    PtyExitEvent {
+                        session_id,
+                        exit_code,
+                    },
+                );
             }
             DaemonEvent::StateSnapshot {
                 session_id,
@@ -164,7 +173,10 @@ impl PtyClient {
             DaemonEvent::ProcessList { .. } => {
                 // request/response only; not broadcast as a frontend event
             }
-            DaemonEvent::Error { session_id, message } => {
+            DaemonEvent::Error {
+                session_id,
+                message,
+            } => {
                 warn!("pty daemon error: {}", message);
                 event_bus.emit(
                     "pty_error",
@@ -310,7 +322,10 @@ impl PtyClient {
 
 const DAEMON_TOKEN: &str = env!("AGENT_IDE_DAEMON_TOKEN");
 
-async fn ensure_daemon_running(socket_path: &PathBuf, daemonize: bool) -> Result<Option<std::process::Child>, String> {
+async fn ensure_daemon_running(
+    socket_path: &PathBuf,
+    daemonize: bool,
+) -> Result<Option<std::process::Child>, String> {
     if socket_path.exists() {
         if let Ok(is_current) = check_existing_daemon(socket_path).await {
             if is_current {
@@ -320,14 +335,16 @@ async fn ensure_daemon_running(socket_path: &PathBuf, daemonize: bool) -> Result
         kill_existing_daemon(socket_path).await;
         let _ = std::fs::remove_file(socket_path);
     }
-    let current_exe = std::env::current_exe()
-        .map_err(|e| format!("Failed to get current executable: {}", e))?;
+    let current_exe =
+        std::env::current_exe().map_err(|e| format!("Failed to get current executable: {}", e))?;
     let mut cmd = std::process::Command::new(current_exe);
     cmd.arg("--pty-daemon");
     if daemonize {
         cmd.arg("--daemonize");
     }
-    let child = cmd.spawn().map_err(|e| format!("Failed to spawn pty daemon: {}", e))?;
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn pty daemon: {}", e))?;
 
     for _ in 0..50 {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -486,5 +503,3 @@ pub fn daemon_pid_path() -> PathBuf {
 pub fn daemon_persistence_path() -> PathBuf {
     daemon_config_dir().join("terminal_sessions.json")
 }
-
-

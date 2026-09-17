@@ -35,8 +35,12 @@ pub fn parse_processes(ps_output: &str, pgid: i32) -> Vec<ProcessInfo> {
         if tokens.len() < 3 {
             continue;
         }
-        let Ok(row_pgid) = tokens[0].parse::<i32>() else { continue };
-        let Ok(pid) = tokens[1].parse::<i32>() else { continue };
+        let Ok(row_pgid) = tokens[0].parse::<i32>() else {
+            continue;
+        };
+        let Ok(pid) = tokens[1].parse::<i32>() else {
+            continue;
+        };
         if row_pgid != pgid {
             continue;
         }
@@ -83,8 +87,8 @@ pub fn detect_agent_sighting_in(ps_output: &str, pgid: i32) -> Option<(String, S
 pub fn detect_agent_sighting_in_processes(procs: &[ProcessInfo]) -> Option<(String, String)> {
     procs.iter().find(|p| p.is_agent).map(|p| {
         let argv0 = p.args.split_whitespace().next().unwrap_or("");
-        let name = matches_agent(&p.comm, argv0, KNOWN_AGENT_BINARIES)
-            .unwrap_or_else(|| p.comm.clone());
+        let name =
+            matches_agent(&p.comm, argv0, KNOWN_AGENT_BINARIES).unwrap_or_else(|| p.comm.clone());
         (name, p.args.clone())
     })
 }
@@ -155,7 +159,11 @@ fn scan_ai_marker_value(state: &mut Vec<u8>, data: &[u8], prefix: &[u8]) -> Opti
     };
     let value = String::from_utf8_lossy(value).trim().to_string();
     keep_tail_partial(state, &buf[end..], prefix);
-    if value.is_empty() { None } else { Some(value) }
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 /// Scan for the remote-session terminal marker
@@ -163,9 +171,8 @@ fn scan_ai_marker_value(state: &mut Vec<u8>, data: &[u8], prefix: &[u8]) -> Opti
 /// leading `/dev/` stripped, matching `ps`'s tty column).
 pub fn scan_ai_tty_marker(state: &mut Vec<u8>, data: &[u8]) -> Option<String> {
     const PREFIX: &[u8] = b"\x1b]1338;AI_TTY=";
-    scan_ai_marker_value(state, data, PREFIX).map(|v| {
-        v.strip_prefix("/dev/").unwrap_or(&v).to_string()
-    })
+    scan_ai_marker_value(state, data, PREFIX)
+        .map(|v| v.strip_prefix("/dev/").unwrap_or(&v).to_string())
 }
 
 /// Parse `ps -A -o tty=,pid=,comm=,args=` output, keeping only rows whose
@@ -183,7 +190,9 @@ pub fn parse_processes_by_tty(ps_output: &str, tty: &str) -> Vec<ProcessInfo> {
         if tokens[0] != tty {
             continue;
         }
-        let Ok(pid) = tokens[1].parse::<i32>() else { continue };
+        let Ok(pid) = tokens[1].parse::<i32>() else {
+            continue;
+        };
         let comm = tokens[2].clone();
         let args = tokens[3..].join(" ");
         let is_agent = is_agent_process(&comm, &args);
@@ -259,10 +268,7 @@ mod tests {
     #[test]
     fn parses_agent_from_ps_output() {
         let output = "  1234 999 zsh    -zsh\n  4321 100 claude claude --dangerously-skip-permissions\n  4321 101 git   git status\n";
-        assert_eq!(
-            detect_agent_in(output, 4321),
-            Some("claude".to_string())
-        );
+        assert_eq!(detect_agent_in(output, 4321), Some("claude".to_string()));
     }
 
     #[test]
@@ -274,10 +280,7 @@ mod tests {
     #[test]
     fn ps_output_missing_columns_tolerated() {
         let output = "   -    ?? ?? ???\n  4321 100 claude claude\n";
-        assert_eq!(
-            detect_agent_in(output, 4321),
-            Some("claude".to_string())
-        );
+        assert_eq!(detect_agent_in(output, 4321), Some("claude".to_string()));
     }
 
     #[test]
@@ -311,7 +314,10 @@ mod tests {
 
     #[test]
     fn detects_detached_agent_among_parsed() {
-        let procs = parse_processes("  42 201 zsh -zsh\n  42 202 node /usr/local/bin/claude -p foo\n", 42);
+        let procs = parse_processes(
+            "  42 201 zsh -zsh\n  42 202 node /usr/local/bin/claude -p foo\n",
+            42,
+        );
         assert_eq!(
             detect_agent_in_processes(&procs),
             Some("claude".to_string())

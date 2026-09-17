@@ -22,8 +22,7 @@ fn read_file_secrets() -> Result<HashMap<String, String>, String> {
     if content.trim().is_empty() {
         return Ok(HashMap::new());
     }
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse secrets file: {}", e))
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse secrets file: {}", e))
 }
 
 fn write_file_secrets(secrets: &HashMap<String, String>) -> Result<(), String> {
@@ -64,7 +63,11 @@ pub fn get_secret(key: &str) -> Result<Option<String>, String> {
             Ok(value) => return Ok(Some(value)),
             Err(keyring::Error::NoEntry) => return Ok(None),
             Err(e) if !use_file_store() => {
-                tracing::warn!("keyring get failed for {}: {}; falling back to file", key, e);
+                tracing::warn!(
+                    "keyring get failed for {}: {}; falling back to file",
+                    key,
+                    e
+                );
             }
             _ => {}
         }
@@ -80,7 +83,11 @@ pub fn set_secret(key: &str, value: &str) -> Result<(), String> {
         match entry.set_password(value) {
             Ok(()) => return Ok(()),
             Err(e) => {
-                tracing::warn!("keyring set failed for {}: {}; falling back to file", key, e);
+                tracing::warn!(
+                    "keyring set failed for {}: {}; falling back to file",
+                    key,
+                    e
+                );
             }
         }
     }

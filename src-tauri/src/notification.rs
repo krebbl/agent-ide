@@ -54,12 +54,16 @@ pub fn show(title: &str, body: &str, session_id: Option<&str>) -> Result<(), Str
     {
         let title_c = CString::new(title).map_err(|e| e.to_string())?;
         let body_c = CString::new(body).map_err(|e| e.to_string())?;
-        let session_id_c = session_id.map(|s| CString::new(s).map_err(|e| e.to_string())).transpose()?;
+        let session_id_c = session_id
+            .map(|s| CString::new(s).map_err(|e| e.to_string()))
+            .transpose()?;
         unsafe {
             show_notification(
                 title_c.as_ptr() as *const i8,
                 body_c.as_ptr() as *const i8,
-                session_id_c.as_ref().map_or(std::ptr::null(), |s| s.as_ptr() as *const i8),
+                session_id_c
+                    .as_ref()
+                    .map_or(std::ptr::null(), |s| s.as_ptr() as *const i8),
             );
         }
         Ok(())

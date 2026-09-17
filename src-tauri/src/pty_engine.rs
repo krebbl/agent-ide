@@ -5,11 +5,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{info, trace};
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use async_trait::async_trait;
 use crate::agent_detect;
 use crate::pty::{scan_osc133_command, scan_osc_title};
 use crate::pty_protocol::ProcessInfo;
+use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 #[async_trait]
 pub trait PtyEngine: Send + Sync {
@@ -56,14 +56,20 @@ impl PtyEngine for LocalPtyEngine {
 
     fn kill(&self) -> Result<(), String> {
         let mut child = self.child.lock().unwrap();
-        child.kill().map_err(|e| format!("Failed to kill PTY: {}", e))
+        child
+            .kill()
+            .map_err(|e| format!("Failed to kill PTY: {}", e))
     }
 
     fn process_group_id(&self) -> Option<i32> {
         #[cfg(unix)]
-        { self.shell_pgid.map(|p| p as i32) }
+        {
+            self.shell_pgid.map(|p| p as i32)
+        }
         #[cfg(not(unix))]
-        { None }
+        {
+            None
+        }
     }
 
     #[cfg(unix)]
@@ -213,16 +219,12 @@ impl LocalPtyEngine {
                     Ok(n) => {
                         match scan_osc133_command(&mut osc_state, &buffer[..n]) {
                             Some(crate::pty::Osc133Event::End) => {
-                                let _ = reader_event_tx.blocking_send((
-                                    reader_session_id.clone(),
-                                    EngineEvent::Idle,
-                                ));
+                                let _ = reader_event_tx
+                                    .blocking_send((reader_session_id.clone(), EngineEvent::Idle));
                             }
                             Some(crate::pty::Osc133Event::Start) => {
-                                let _ = reader_event_tx.blocking_send((
-                                    reader_session_id.clone(),
-                                    EngineEvent::Busy,
-                                ));
+                                let _ = reader_event_tx
+                                    .blocking_send((reader_session_id.clone(), EngineEvent::Busy));
                             }
                             None => {}
                         }
@@ -233,10 +235,8 @@ impl LocalPtyEngine {
                             ));
                         }
                         let data = STANDARD.encode(&buffer[..n]);
-                        let _ = reader_event_tx.blocking_send((
-                            reader_session_id.clone(),
-                            EngineEvent::Output(data),
-                        ));
+                        let _ = reader_event_tx
+                            .blocking_send((reader_session_id.clone(), EngineEvent::Output(data)));
                     }
                     Err(_) => break,
                 }
@@ -251,7 +251,11 @@ impl LocalPtyEngine {
             .or_else(|| {
                 child_pid.and_then(|pid| {
                     let pgid = unsafe { libc::getpgid(pid) };
-                    if pgid < 0 { None } else { Some(pgid) }
+                    if pgid < 0 {
+                        None
+                    } else {
+                        Some(pgid)
+                    }
                 })
             });
         info!(
@@ -268,7 +272,10 @@ impl LocalPtyEngine {
         let monitor_child = child_arc.clone();
         let monitor_direct_cmd = direct_cmd;
         let monitor_handle = thread::spawn(move || {
-            info!(session_id = monitor_session_id, "daemon local pty monitor started");
+            info!(
+                session_id = monitor_session_id,
+                "daemon local pty monitor started"
+            );
             let mut child = monitor_child.lock().unwrap();
             let mut command_running = false;
             let mut agent_name: Option<String> = None;
@@ -288,7 +295,10 @@ impl LocalPtyEngine {
                         break;
                     }
                     Ok(None) => {
-                        trace!(session_id = monitor_session_id, "pty try_wait: still running");
+                        trace!(
+                            session_id = monitor_session_id,
+                            "pty try_wait: still running"
+                        );
                     }
                     Err(e) => {
                         tracing::error!(session_id = monitor_session_id, error = %e, "pty try_wait failed");
@@ -314,13 +324,14 @@ impl LocalPtyEngine {
                         // regardless of whether it emits OSC-133 markers.
                         // Mark the session busy for the command's whole
                         // duration, not just while it produces output.
-                        let _ = monitor_event_tx.blocking_send((
-                            monitor_session_id.clone(),
-                            EngineEvent::Busy,
-                        ));
+                        let _ = monitor_event_tx
+                            .blocking_send((monitor_session_id.clone(), EngineEvent::Busy));
                     } else if !monitor_direct_cmd && fg_pgid == pgid && command_running {
                         command_running = false;
-                        info!(session_id = monitor_session_id, "foreground command finished");
+                        info!(
+                            session_id = monitor_session_id,
+                            "foreground command finished"
+                        );
                         if agent_name.is_some() {
                             agent_name = None;
                             last_agent_probe = None;
@@ -329,10 +340,8 @@ impl LocalPtyEngine {
                                 EngineEvent::Agent(None),
                             ));
                         }
-                        let _ = monitor_event_tx.blocking_send((
-                            monitor_session_id.clone(),
-                            EngineEvent::Idle,
-                        ));
+                        let _ = monitor_event_tx
+                            .blocking_send((monitor_session_id.clone(), EngineEvent::Idle));
                     } else {
                         trace!(
                             session_id = monitor_session_id,
@@ -366,7 +375,10 @@ impl LocalPtyEngine {
                 thread::sleep(Duration::from_millis(100));
                 child = monitor_child.lock().unwrap();
             }
-            info!(session_id = monitor_session_id, "daemon local pty monitor ended");
+            info!(
+                session_id = monitor_session_id,
+                "daemon local pty monitor ended"
+            );
         });
 
         Ok(Self {
@@ -460,9 +472,7 @@ mod tests {
         )
         .expect("spawn engine");
 
-        engine
-            .write(b"./bin/claude\n")
-            .expect("write command");
+        engine.write(b"./bin/claude\n").expect("write command");
 
         let deadline = Instant::now() + Duration::from_secs(15);
         let mut saw_agent = false;
@@ -493,8 +503,14 @@ mod tests {
 
         engine.kill().ok();
 
-        assert!(saw_agent, "expected Agent(Some(\"claude\")) while script ran");
-        assert!(saw_command, "expected sighting to carry the agent command line");
+        assert!(
+            saw_agent,
+            "expected Agent(Some(\"claude\")) while script ran"
+        );
+        assert!(
+            saw_command,
+            "expected sighting to carry the agent command line"
+        );
         assert!(saw_clear, "expected Agent(None) after script finished");
     }
 

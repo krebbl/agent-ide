@@ -7,11 +7,11 @@ use tokio::net::UnixListener;
 use tokio::sync::{mpsc, Mutex as TokioMutex};
 use tracing::{error, info, warn};
 
+use crate::agent_detect;
+use crate::agents;
 use crate::pty_engine::{EngineEvent, LocalPtyEngine, PtyEngine};
 use crate::pty_protocol::{DaemonEvent, DaemonRequest, SessionMeta};
 use crate::remote_ssh::{self, RemotePtyEngine, SessionHandle};
-use crate::agent_detect;
-use crate::agents;
 
 struct DaemonSession {
     meta: SessionMeta,
@@ -49,8 +49,7 @@ fn restore_argv(argv: &[String], live_conversation: Option<&str>) -> Vec<String>
     if agents::pins_conversation(argv) {
         return argv.to_vec();
     }
-    let agent =
-        agent_detect::matches_agent(binary, binary, agent_detect::KNOWN_AGENT_BINARIES);
+    let agent = agent_detect::matches_agent(binary, binary, agent_detect::KNOWN_AGENT_BINARIES);
     match agent.as_deref().and_then(agents::exact_resume_flag) {
         // The marker hook knows the live conversation: resume exactly it.
         Some(flag) if !argv.iter().any(|arg| arg == flag) => {
@@ -332,16 +331,17 @@ impl PtyDaemon {
                                         // lock guard: the request handler may
                                         // await (remote probes), and holding a
                                         // guard across await is not Send.
-                                        let client_tx_opt =
-                                            client_tx_cell.lock().unwrap().clone();
-                                        daemon.handle_request(
-                                            req,
-                                            &sessions,
-                                            &persistence_path,
-                                            &event_tx,
-                                            client_tx_opt.as_ref(),
-                                            &ssh_manager,
-                                        ).await;
+                                        let client_tx_opt = client_tx_cell.lock().unwrap().clone();
+                                        daemon
+                                            .handle_request(
+                                                req,
+                                                &sessions,
+                                                &persistence_path,
+                                                &event_tx,
+                                                client_tx_opt.as_ref(),
+                                                &ssh_manager,
+                                            )
+                                            .await;
                                     }
                                 }
                                 Err(e) => {
@@ -372,13 +372,8 @@ impl PtyDaemon {
             let event = match ev {
                 EngineEvent::Output(data) => {
                     drop(map);
-                    let _ = Self::send_to_client(
-                        &client_tx,
-                        DaemonEvent::Output {
-                            session_id,
-                            data,
-                        },
-                    );
+                    let _ =
+                        Self::send_to_client(&client_tx, DaemonEvent::Output { session_id, data });
                     continue;
                 }
                 EngineEvent::Title(title) => {
@@ -515,7 +510,10 @@ impl PtyDaemon {
                 EngineEvent::Exit(exit_code) => {
                     map.remove(&session_id);
                     dirty = true;
-                    DaemonEvent::Exit { session_id, exit_code }
+                    DaemonEvent::Exit {
+                        session_id,
+                        exit_code,
+                    }
                 }
             };
             drop(map);
@@ -532,7 +530,8 @@ impl PtyDaemon {
     ) -> Result<(), String> {
         let guard = client_tx.lock().unwrap();
         if let Some(tx) = guard.as_ref() {
-            tx.send(event).map_err(|_| "client disconnected".to_string())
+            tx.send(event)
+                .map_err(|_| "client disconnected".to_string())
         } else {
             Ok(())
         }
@@ -733,8 +732,7 @@ impl PtyDaemon {
                     let mut map = sessions.lock().unwrap();
                     if let Some(session) = map.get_mut(&session_id) {
                         if session.engine.is_none() {
-                            let (latest_cols, latest_rows) =
-                                (session.meta.cols, session.meta.rows);
+                            let (latest_cols, latest_rows) = (session.meta.cols, session.meta.rows);
                             if (latest_cols, latest_rows) != (cols, rows) {
                                 let _ = engine.resize(latest_cols, latest_rows);
                             }
@@ -767,7 +765,15 @@ impl PtyDaemon {
                 password,
             } => {
                 let pid = project_id.clone();
-                ssh_manager.register(project_id, host, port, username, auth_method, key_path, password);
+                ssh_manager.register(
+                    project_id,
+                    host,
+                    port,
+                    username,
+                    auth_method,
+                    key_path,
+                    password,
+                );
                 self.respawn_remote_sessions(&pid);
             }
             DaemonRequest::Write { session_id, data } => {
@@ -783,7 +789,11 @@ impl PtyDaemon {
                     }
                 }
             }
-            DaemonRequest::Resize { session_id, cols, rows } => {
+            DaemonRequest::Resize {
+                session_id,
+                cols,
+                rows,
+            } => {
                 let mut map = sessions.lock().unwrap();
                 if let Some(session) = map.get_mut(&session_id) {
                     if let Some(engine) = session.engine.as_ref() {
@@ -888,7 +898,6 @@ impl PtyDaemon {
         }
     }
 
-
     /// Live conversation id recorded by the SessionStart marker hook for this
     /// terminal's pinned agent. `.conversation` (resume/clear/compact)
     /// wins over `.startup` (last process the agent started). Markers that
@@ -984,9 +993,11 @@ impl PtyDaemon {
             let session_id = meta.session_id.clone();
             // Marker (post-switch) wins; otherwise the live conversation is
             // the pinned id.
-            let live = self
-                .live_conversation_id(&session_id)
-                .or_else(|| meta.argv.as_ref().and_then(|argv| pinned_conversation_id(argv)));
+            let live = self.live_conversation_id(&session_id).or_else(|| {
+                meta.argv
+                    .as_ref()
+                    .and_then(|argv| pinned_conversation_id(argv))
+            });
             meta.conversation_id = live.clone();
             let live = meta.conversation_id.clone();
             let engine: Option<Arc<dyn PtyEngine>> = if meta.session_type == "local" {
@@ -1010,7 +1021,14 @@ impl PtyDaemon {
             // process runs. `agent_name` stays sticky as session history.
             meta.is_busy = false;
             meta.agent_active = false;
-            map.insert(session_id, DaemonSession { meta, engine, title_busy: false });
+            map.insert(
+                session_id,
+                DaemonSession {
+                    meta,
+                    engine,
+                    title_busy: false,
+                },
+            );
         }
     }
 
@@ -1031,10 +1049,7 @@ impl PtyDaemon {
             self.shim_dir.clone(),
         )
     }
-    fn respawn_remote_sessions(
-        &self,
-        project_id: &str,
-    ) {
+    fn respawn_remote_sessions(&self, project_id: &str) {
         let sessions = Arc::clone(&self.sessions);
         let persistence_path = self.persistence_path.clone();
         let event_tx = self.event_tx.clone();
@@ -1113,10 +1128,7 @@ impl PtyDaemon {
         });
     }
 
-    fn persist(
-        sessions: &Arc<Mutex<HashMap<String, DaemonSession>>>,
-        persistence_path: &PathBuf,
-    ) {
+    fn persist(sessions: &Arc<Mutex<HashMap<String, DaemonSession>>>, persistence_path: &PathBuf) {
         let map = sessions.lock().unwrap();
         let list: Vec<SessionMeta> = map.values().map(|s| s.meta.clone()).collect();
         drop(map);
@@ -1136,7 +1148,6 @@ fn basename(path: &str) -> String {
         .map(|s| s.to_string())
         .unwrap_or_else(|| path.to_string())
 }
-
 
 impl PtyDaemon {
     /// Current epoch time in milliseconds (coarse-grained creation clock).
@@ -1236,7 +1247,6 @@ mod tests {
         assert!(matches!(idle, DaemonEvent::Idle { ref title, .. } if title == "host:~"));
         assert!(client_rx.recv().await.is_none());
     }
-
 
     #[tokio::test]
     async fn fg_busy_is_not_cleared_by_title_change() {
@@ -1449,10 +1459,7 @@ mod tests {
     #[tokio::test]
     async fn nudge_resizes_away_and_back_to_force_repaint() {
         let dir = tempfile::tempdir().unwrap();
-        let daemon = PtyDaemon::new(
-            dir.path().join("sock"),
-            dir.path().join("persist.json"),
-        );
+        let daemon = PtyDaemon::new(dir.path().join("sock"), dir.path().join("persist.json"));
         let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let (event_tx, _event_rx) = mpsc::channel(16);
         let engine = Arc::new(RecordingEngine {
@@ -1490,10 +1497,7 @@ mod tests {
     async fn nudge_delivers_sigwinch_to_live_session() {
         use base64::{engine::general_purpose::STANDARD, Engine as _};
         let dir = tempfile::tempdir().unwrap();
-        let daemon = PtyDaemon::new(
-            dir.path().join("sock"),
-            dir.path().join("persist.json"),
-        );
+        let daemon = PtyDaemon::new(dir.path().join("sock"), dir.path().join("persist.json"));
         let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let (event_tx, mut event_rx) = mpsc::channel(256);
         let ssh_manager = Arc::new(SshManager::new());
@@ -1554,7 +1558,10 @@ mod tests {
                 None => break,
             }
         }
-        assert!(saw_marker, "nudge must resize the live pty so its programs can observe it");
+        assert!(
+            saw_marker,
+            "nudge must resize the live pty so its programs can observe it"
+        );
 
         daemon
             .handle_request(
@@ -1579,11 +1586,7 @@ mod tests {
         stale["agentActive"] = serde_json::Value::Bool(true);
         stale["agentName"] = serde_json::Value::String("claude".to_string());
         stale["sessionType"] = serde_json::Value::String("ssh".to_string());
-        std::fs::write(
-            &persistence,
-            serde_json::to_string(&vec![stale]).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(&persistence, serde_json::to_string(&vec![stale]).unwrap()).unwrap();
 
         let daemon = PtyDaemon::new(dir.path().join("sock"), persistence.clone());
         daemon.load_sessions();
@@ -1721,10 +1724,21 @@ mod tests {
             vec!["claude", "--settings", "mine.json", "--session-id", "sid"]
         );
         // Already pinned or resumed: untouched.
-        let pinned = vec!["claude".to_string(), "--session-id".to_string(), "x".to_string()];
+        let pinned = vec![
+            "claude".to_string(),
+            "--session-id".to_string(),
+            "x".to_string(),
+        ];
         assert_eq!(agents::with_forced_session_id(&pinned, "sid", None), pinned);
-        let resumed = vec!["claude".to_string(), "--resume".to_string(), "x".to_string()];
-        assert_eq!(agents::with_forced_session_id(&resumed, "sid", None), resumed);
+        let resumed = vec![
+            "claude".to_string(),
+            "--resume".to_string(),
+            "x".to_string(),
+        ];
+        assert_eq!(
+            agents::with_forced_session_id(&resumed, "sid", None),
+            resumed
+        );
         // omp cannot force ids: untouched.
         let omp = vec!["omp".to_string()];
         assert_eq!(agents::with_forced_session_id(&omp, "sid", None), omp);
@@ -1817,7 +1831,11 @@ mod tests {
         // live flag clears with the agent, history persists.
         assert_eq!(
             meta.argv,
-            Some(vec!["claude".to_string(), "--model".to_string(), "opus".to_string()])
+            Some(vec![
+                "claude".to_string(),
+                "--model".to_string(),
+                "opus".to_string()
+            ])
         );
         assert!(!meta.agent_active);
         assert_eq!(meta.agent_name.as_deref(), Some("claude"));
@@ -1825,10 +1843,7 @@ mod tests {
     #[tokio::test]
     async fn nudge_without_engine_is_noop() {
         let dir = tempfile::tempdir().unwrap();
-        let daemon = PtyDaemon::new(
-            dir.path().join("sock"),
-            dir.path().join("persist.json"),
-        );
+        let daemon = PtyDaemon::new(dir.path().join("sock"), dir.path().join("persist.json"));
         let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let (event_tx, _event_rx) = mpsc::channel(16);
         let ssh_manager = Arc::new(SshManager::new());
@@ -1847,4 +1862,3 @@ mod tests {
             .await;
     }
 }
-
