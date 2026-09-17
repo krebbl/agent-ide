@@ -1,9 +1,17 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 fn secrets_path() -> Result<PathBuf, String> {
     crate::config::app_config_dir().map(|d| d.join("secrets.json"))
+}
+
+static SECRET_CACHE: LazyLock<parking_lot::Mutex<HashMap<String, Option<String>>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+
+fn cache() -> &'static parking_lot::Mutex<HashMap<String, Option<String>>> {
+    &SECRET_CACHE
 }
 
 fn use_file_store() -> bool {
@@ -56,24 +64,31 @@ fn write_file_secrets(secrets: &HashMap<String, String>) -> Result<(), String> {
 }
 
 pub fn get_secret(key: &str) -> Result<Option<String>, String> {
+    if let Some(cached) = cache().lock().get(key) {
+        return Ok(cached.clone());
+    }
+    let mut from_keyring: Option<Option<String>> = None;
     if !use_file_store() {
         let entry = keyring::Entry::new("agent-ide", key)
             .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
         match entry.get_password() {
-            Ok(value) => return Ok(Some(value)),
-            Err(keyring::Error::NoEntry) => return Ok(None),
-            Err(e) if !use_file_store() => {
+            Ok(value) => from_keyring = Some(Some(value)),
+            Err(keyring::Error::NoEntry) => from_keyring = Some(None),
+            Err(e) => {
                 tracing::warn!(
                     "keyring get failed for {}: {}; falling back to file",
                     key,
                     e
                 );
             }
-            _ => {}
         }
     }
-    let secrets = read_file_secrets()?;
-    Ok(secrets.get(key).cloned())
+    let value = match from_keyring {
+        Some(v) => v,
+        None => read_file_secrets()?.get(key).cloned(),
+    };
+    cache().lock().insert(key.to_string(), value.clone());
+    Ok(value)
 }
 
 pub fn set_secret(key: &str, value: &str) -> Result<(), String> {
@@ -93,7 +108,9 @@ pub fn set_secret(key: &str, value: &str) -> Result<(), String> {
     }
     let mut secrets = read_file_secrets()?;
     secrets.insert(key.to_string(), value.to_string());
-    write_file_secrets(&secrets)
+    write_file_secrets(&secrets)?;
+    cache().lock().insert(key.to_string(), Some(value.to_string()));
+    Ok(())
 }
 
 pub fn delete_secret(key: &str) -> Result<(), String> {
@@ -112,5 +129,7 @@ pub fn delete_secret(key: &str) -> Result<(), String> {
     }
     let mut secrets = read_file_secrets()?;
     secrets.remove(key);
-    write_file_secrets(&secrets)
+    write_file_secrets(&secrets)?;
+    cache().lock().insert(key.to_string(), None);
+    Ok(())
 }
