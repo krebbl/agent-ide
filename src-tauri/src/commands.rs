@@ -47,6 +47,11 @@ pub use crate::pr_info::{
     cmd_pr_for_branch as pr_for_branch, cmd_pr_list_for_repo as pr_list_for_repo,
 };
 
+pub use crate::jira::{
+    cmd_jira_get_config as jira_get_config, cmd_jira_issue_for_branch as jira_issue_for_branch,
+    cmd_jira_set_config as jira_set_config,
+};
+
 pub use crate::cmd_ssh_agent_info as ssh_agent_info;
 
 pub async fn dispatch(state: &AppState, command: &str, payload: Value) -> Result<Value, String> {
@@ -191,6 +196,17 @@ pub async fn dispatch(state: &AppState, command: &str, payload: Value) -> Result
             cmd_state!(PrForBranchReq, pr_for_branch, [project_id: String, branch: String])
         }
         "pr_list_for_repo" => cmd_state!(PrListForRepoReq, pr_list_for_repo, [project_id: String]),
+        "jira_get_config" => {
+            cmd_state!(JiraGetConfigReq, jira_get_config, [project_id: String])
+        }
+        "jira_set_config" => {
+            cmd_state!(JiraSetConfigReq, jira_set_config, [
+                project_id: String, site_url: String, email: String, api_token: Option<String>
+            ])
+        }
+        "jira_issue_for_branch" => {
+            cmd_state!(JiraIssueForBranchReq, jira_issue_for_branch, [project_id: String, branch: String])
+        }
         "lsp_start" => {
             cmd_state!(LspStartReq, lsp_start, [project_id: String, language_id: String, root_path: String])
         }

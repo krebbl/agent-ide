@@ -15,6 +15,11 @@ export interface SSHConnection {
   path?: string;
 }
 
+export interface JiraProjectConfig {
+  siteUrl: string;
+  email: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -25,6 +30,7 @@ export interface Project {
   preferredAgent?: string | null;
   preferredModel?: string | null;
   preferredSetupCommand?: string | null;
+  jiraConfig?: JiraProjectConfig | null;
 }
 
 export interface Worktree {
@@ -164,4 +170,43 @@ export interface AgentStatus {
 export interface AgentModel {
   id: string;
   label: string;
+}
+
+export interface JiraComment {
+  author: string;
+  created: string;
+  body: string;
+}
+
+export interface JiraIssue {
+  key: string;
+  summary: string;
+  description: string | null;
+  status: string;
+  issueType: string;
+  priority: string | null;
+  assignee: string | null;
+  reporter: string | null;
+  url: string;
+  labels: string[];
+  created: string;
+  updated: string;
+  comments: JiraComment[];
+}
+
+export interface JiraIssueResult {
+  issue: JiraIssue | null;
+  ticketKey: string | null;
+  error: string | null;
+}
+
+export interface JiraConfigState {
+  siteUrl: string;
+  email: string;
+  hasToken: boolean;
+}
+
+export interface JiraConfigUpdate {
+  config: JiraConfigState;
+  project: Project;
 }

@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Bot, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge, BrushCleaning } from "lucide-react";
+import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Bot, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge, BrushCleaning, Settings } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { usePrStore } from "../../stores/prStore";
+import { useUiStore } from "../../stores/uiStore";
 import AddProjectDialog from "../dialogs/AddProjectDialog";
 import AddWorktreeDialog from "../dialogs/AddWorktreeDialog";
 import NewAgentSessionDialog from "../dialogs/NewAgentSessionDialog";
+import ProjectSettingsDialog from "../dialogs/ProjectSettingsDialog";
 import { Project, PrInfo, Worktree } from "../../types";
 import Dialog from "../ui/Dialog";
 import { openUrl } from "../../utils/openUrl";
@@ -642,6 +644,16 @@ function ProjectItem({
           <button
             onClick={(e) => {
               e.stopPropagation();
+              useUiStore.getState().openProjectSettings(project.id);
+            }}
+            className="text-[var(--color-overlay0)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-[var(--color-text)]"
+            title="Project settings"
+          >
+            <Settings size={12} />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
               setShowAddDialog(true);
             }}
             className="text-[var(--color-overlay0)] hover:text-[var(--color-blue)]"
@@ -764,6 +776,7 @@ export default function LeftSidebar() {
   const [dragActiveId, setDragActiveId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [showAgentDialog, setShowAgentDialog] = useState(false);
+  const projectSettingsProjectId = useUiStore((s) => s.projectSettingsProjectId);
   const [agentWorktree, setAgentWorktree] = useState<{
     project: Project;
     worktree: Worktree;
@@ -999,6 +1012,7 @@ export default function LeftSidebar() {
             onClose={() => setShowAgentDialog(false)}
           />
         )}
+        {projectSettingsProjectId && <ProjectSettingsDialog />}
       </div>
     </DndContext>
   );

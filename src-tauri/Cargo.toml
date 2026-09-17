@@ -42,6 +42,7 @@ russh-keys = "0.50.0-beta.7"
 git2 = { version = "0.19", features = [] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 parking_lot = "0.12"
 async-trait = "0.1"

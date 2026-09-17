@@ -4,6 +4,7 @@ mod badge;
 pub mod commands;
 pub mod config;
 pub mod event_bus;
+mod jira;
 pub mod lsp;
 mod mac_badge;
 mod notification;
@@ -83,6 +84,17 @@ pub struct Project {
     /// loadable.
     #[serde(default)]
     pub preferred_setup_command: Option<String>,
+    /// Per-project Jira Cloud connection (API token stored in secrets).
+    /// None keeps old projects.json loadable.
+    #[serde(default)]
+    pub jira_config: Option<JiraProjectConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JiraProjectConfig {
+    pub site_url: String,
+    pub email: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3876,6 +3888,9 @@ pub fn run() {
             build_agent_command,
             pr_info::pr_for_branch,
             pr_info::pr_list_for_repo,
+            jira::jira_get_config,
+            jira::jira_set_config,
+            jira::jira_issue_for_branch,
             lsp::lsp_start,
             lsp::lsp_request,
             lsp::lsp_notify,
