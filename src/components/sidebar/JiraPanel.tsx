@@ -36,10 +36,18 @@ function MetaRow({ label, value }: { label: string; value: string | null }) {
   );
 }
 
-function IssueView({ issue }: { issue: JiraIssue }) {
+function IssueView({
+  issue,
+  onRefresh,
+  refreshing,
+}: {
+  issue: JiraIssue;
+  onRefresh: () => void;
+  refreshing: boolean;
+}) {
   return (
     <div className="flex flex-col gap-3 p-3">
-      <div className="flex items-center gap-2">
+      <div className="sticky top-0 z-10 -mx-3 -mt-3 flex items-center gap-2 border-b border-[var(--color-surface0)] bg-[var(--color-base)] px-3 pb-2 pt-3">
         <button
           onClick={() => void openUrl(issue.url)}
           className="flex items-center gap-1.5 text-sm font-semibold text-[var(--color-blue)] hover:underline"
@@ -52,6 +60,14 @@ function IssueView({ issue }: { issue: JiraIssue }) {
         <span className="rounded bg-[var(--color-surface0)] px-1.5 py-0.5 text-xs text-[var(--color-subtext0)]">
           {issue.issueType}
         </span>
+        <button
+          onClick={onRefresh}
+          disabled={refreshing}
+          className="ml-auto text-[var(--color-overlay1)] transition-colors hover:text-[var(--color-blue)] disabled:opacity-40"
+          title="Refresh"
+        >
+          <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
+        </button>
       </div>
       <div className="text-sm text-[var(--color-text)]">{issue.summary}</div>
       <div className="flex flex-col gap-1">
@@ -157,21 +173,6 @@ export default function JiraPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-8 shrink-0 items-center justify-between border-b border-[var(--color-surface0)] px-3">
-        <span className="truncate text-xs text-[var(--color-overlay1)]" title={branch}>
-          {branch ?? "No worktree"}
-        </span>
-        {config?.hasToken && (
-          <button
-            onClick={() => branch && void fetchIssueForBranch(projectId, branch, true)}
-            disabled={!branch || entry?.loading}
-            className="text-[var(--color-overlay1)] transition-colors hover:text-[var(--color-blue)] disabled:opacity-40"
-            title="Refresh"
-          >
-            <RefreshCw size={13} className={entry?.loading ? "animate-spin" : ""} />
-          </button>
-        )}
-      </div>
       <div className="flex-1 overflow-y-auto">
         {!config?.hasToken ? (
           <div className="flex flex-col items-start gap-2 p-3">
@@ -195,7 +196,13 @@ export default function JiraPanel() {
             {result?.error && (
               <div className="p-3 text-xs text-[var(--color-peach)]">{result.error}</div>
             )}
-            {result?.issue && <IssueView issue={result.issue} />}
+            {result?.issue && (
+              <IssueView
+                issue={result.issue}
+                refreshing={!!entry?.loading}
+                onRefresh={() => branch && void fetchIssueForBranch(projectId, branch, true)}
+              />
+            )}
           </>
         )}
       </div>
