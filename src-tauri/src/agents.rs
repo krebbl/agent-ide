@@ -260,6 +260,133 @@ pub fn launch_command(
     Ok(argv)
 }
 
+/// Headless argv that answers a single prompt non-interactively and prints
+/// the response to stdout. Only agents the New Agent dialog offers need it.
+/// Minimal flags: no sessions, no tools, no UI — just the model's answer.
+pub fn print_command(
+    agent_id: &str,
+    model: Option<&str>,
+    prompt: &str,
+) -> Result<Vec<String>, String> {
+    let agent = builtin_agents()
+        .into_iter()
+        .find(|a| a.id == agent_id)
+        .ok_or_else(|| format!("Unknown agent: {}", agent_id))?;
+    let binary = agent
+        .command
+        .first()
+        .cloned()
+        .ok_or_else(|| format!("Agent {} has no binary", agent_id))?;
+    let mut argv = match agent_id {
+        "claude" => vec![binary, "-p".to_string()],
+        "omp" => vec![
+            binary,
+            "--print".to_string(),
+            "--no-session".to_string(),
+            "--no-tools".to_string(),
+            "--no-lsp".to_string(),
+            "--no-pty".to_string(),
+            "--no-extensions".to_string(),
+            "--no-skills".to_string(),
+        ],
+        "opencode" => vec![binary, "run".to_string()],
+        _ => {
+            return Err(format!(
+                "Agent {} does not support non-interactive mode",
+                agent_id
+            ))
+        }
+    };
+    if let Some(m) = model {
+        if !m.trim().is_empty() {
+            argv.push(agent.model_flag);
+            argv.push(m.to_string());
+        }
+    }
+    argv.push(prompt.to_string());
+    Ok(argv)
+}
+
+/// Ask an agent CLI (headless) for a kebab-case worktree name summarizing
+/// the task prompt, then sanitize the free-form answer down to a valid
+/// single name. Returns an error when the agent fails or answers garbage.
+pub async fn generate_worktree_name(
+    agent_id: &str,
+    model: Option<&str>,
+    prompt: &str,
+    cwd: Option<String>,
+) -> Result<String, String> {
+    const META_PROMPT: &str = "You generate git worktree names. Reply with ONLY a short kebab-case name (2-4 words, lowercase letters, digits and hyphens, at most 30 characters) that summarizes this task. No quotes, no backticks, no explanation.\n\nTask: ";
+    let clipped: String = prompt.trim().chars().take(600).collect();
+    if clipped.is_empty() {
+        return Err("Prompt is empty".to_string());
+    }
+    let argv = print_command(agent_id, model, &format!("{}{}", META_PROMPT, clipped))?;
+    let program = argv[0].clone();
+    let binary = find_real_binary(&program).unwrap_or_else(|| PathBuf::from(&program));
+
+    let mut command = tokio::process::Command::new(&binary);
+    command
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(dir) = cwd.filter(|d| std::path::Path::new(d).is_dir()) {
+        command.current_dir(dir);
+    }
+
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    let output = tokio::time::timeout(TIMEOUT, command.output())
+        .await
+        .map_err(|_| "Agent took too long to answer".to_string())?
+        .map_err(|e| format!("Failed to run {}: {}", program, e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.lines().last().unwrap_or("").trim();
+        return Err(format!(
+            "{} exited with {}: {}",
+            program,
+            output.status,
+            detail
+        ));
+    }
+    sanitize_worktree_name(&String::from_utf8_lossy(&output.stdout))
+        .ok_or_else(|| "Agent did not return a usable name".to_string())
+}
+
+/// Map free-form LLM output to a single `[a-z0-9_-]` name: last usable
+/// line (courtesy preambles come first, the answer last), punctuation
+/// collapsed to hyphens, empty segments dropped, capped at 40 chars. Code
+/// fences and backtick-quoted answers degrade to "" or a clean name
+/// respectively instead of leaking markdown.
+fn sanitize_worktree_name(raw: &str) -> Option<String> {
+    raw.lines()
+        .filter_map(|line| {
+            let mapped: String = line
+                .trim()
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                        c.to_ascii_lowercase()
+                    } else {
+                        '-'
+                    }
+                })
+                .collect();
+            let collapsed = mapped
+                .split('-')
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join("-");
+            if collapsed.is_empty() {
+                None
+            } else {
+                Some(collapsed.chars().take(40).collect::<String>())
+            }
+        })
+        .last()
+}
+
 /// Exact-resume flag: resumes a SPECIFIC conversation by id, for agents
 /// whose CLI supports it (verified per `--help`). Agents without exact
 /// resume return `None`.
@@ -975,7 +1102,7 @@ mod tests {
 
     // HOME is process-global; tests repointing it run in parallel threads,
     // so every such test must hold this lock for its whole body.
-    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static HOME_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
     #[test]
     fn parses_omp_models_json_entries() {
         let json = r#"{"models":[
@@ -992,6 +1119,55 @@ mod tests {
     fn omp_models_response_allows_missing_fields() {
         let parsed: OmpModelsResponse = serde_json::from_str(r#"{"models":[]}"#).unwrap();
         assert!(parsed.models.is_empty());
+    }
+
+    #[test]
+    fn print_command_builds_headless_argv() {
+        let argv = print_command("omp", Some("haiku"), "task").unwrap();
+        assert_eq!(argv.first().map(String::as_str), Some("omp"));
+        assert!(argv.contains(&"--print".to_string()));
+        assert!(argv.contains(&"--no-session".to_string()));
+        assert_eq!(*argv.last().unwrap(), "task".to_string());
+        // Model flag lands before the positional prompt.
+        let model_pos = argv.iter().position(|a| a == "--model").unwrap();
+        let prompt_pos = argv.len() - 1;
+        assert!(model_pos < prompt_pos);
+
+        assert_eq!(print_command("claude", None, "p").unwrap()[1], "-p");
+        assert_eq!(print_command("opencode", None, "p").unwrap()[1], "run");
+        assert!(print_command("codex", None, "p").is_err());
+        assert!(print_command("unknown", None, "p").is_err());
+    }
+
+    #[test]
+    fn sanitize_worktree_name_extracts_single_valid_name() {
+        assert_eq!(
+            sanitize_worktree_name("fix-login-bug\n"),
+            Some("fix-login-bug".to_string())
+        );
+        // Markdown fences and quotes degrade, never leak.
+        assert_eq!(sanitize_worktree_name("```\nfoo-bar\n```"), Some("foo-bar".to_string()));
+        assert_eq!(sanitize_worktree_name("\"Fix: Login Bug!\""), Some("fix-login-bug".to_string()));
+        assert_eq!(
+            sanitize_worktree_name("Add_OAuth2 support"),
+            Some("add_oauth2-support".to_string())
+        );
+        // The answer is expected last; preamble noise is skipped.
+        assert_eq!(
+            sanitize_worktree_name("Sure!\n\nrefactor-db-layer"),
+            Some("refactor-db-layer".to_string())
+        );
+        assert_eq!(
+            sanitize_worktree_name("```\nfoo-bar\n```\nHope that helps!"),
+            Some("hope-that-helps".to_string())
+        );
+        // Overlong answers are capped.
+        assert_eq!(
+            sanitize_worktree_name(&"a".repeat(60)),
+            Some("a".repeat(40))
+        );
+        assert_eq!(sanitize_worktree_name("--- *** ---"), None);
+        assert_eq!(sanitize_worktree_name(""), None);
     }
 
     #[test]
@@ -1022,7 +1198,8 @@ mod tests {
 
     #[test]
     fn global_hook_registration_merges_and_is_idempotent() {
-        let _home = HOME_LOCK.lock().unwrap();
+        let _home = HOME_LOCK.lock();
+        let original_home = std::env::var("HOME").ok();
         let home = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", home.path());
         let marker = home.path().join("shims").join("session-marker.sh");
@@ -1060,12 +1237,16 @@ mod tests {
         assert_eq!(settings["env"]["FOO"], "1");
         let entries = settings["hooks"]["SessionStart"].as_array().unwrap();
         assert_eq!(entries.len(), 2);
-        std::env::remove_var("HOME");
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
     }
     #[test]
     fn global_hook_prunes_stale_registrations() {
         let home = tempfile::tempdir().unwrap();
-        let _home = HOME_LOCK.lock().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        let _home = HOME_LOCK.lock();
         std::env::set_var("HOME", home.path());
         std::fs::create_dir_all(home.path().join(".claude")).unwrap();
         // A previous install's shim dir plus the live one.
@@ -1091,6 +1272,9 @@ mod tests {
             entries[0]["hooks"][0]["command"],
             serde_json::json!(quoted_command(&live))
         );
-        std::env::remove_var("HOME");
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
     }
 }

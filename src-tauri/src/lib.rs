@@ -1,5 +1,5 @@
-mod agents;
 mod agent_detect;
+mod agents;
 mod badge;
 pub mod commands;
 pub mod config;
@@ -17,11 +17,11 @@ pub mod remote_ssh;
 pub mod secrets;
 
 use git2::{BranchType, Repository};
+use open::that;
 use russh::keys::agent::client::AgentClient;
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use russh::*;
 use russh_sftp::client::SftpSession;
-use tokio::io::AsyncWriteExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -29,10 +29,10 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::Manager;
+use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
-use open::that;
 
 pub async fn cmd_util_open_url(url: String) -> Result<(), String> {
     that(&url).map_err(|e| e.to_string())
@@ -46,7 +46,9 @@ async fn util_open_url(url: String) -> Result<(), String> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Connection {
-    Local { path: String },
+    Local {
+        path: String,
+    },
     Ssh {
         host: String,
         port: u16,
@@ -147,7 +149,12 @@ pub trait FileSystemProvider: Send + Sync {
     async fn rm(&self, path: &str, recursive: bool) -> Result<(), String>;
     async fn mv(&self, from: &str, to: &str) -> Result<(), String>;
     async fn exists(&self, path: &str) -> bool;
-    async fn search_files(&self, root: &str, query: &str, limit: usize) -> Result<Vec<String>, String>;
+    async fn search_files(
+        &self,
+        root: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, String>;
 }
 
 fn parse_search_terms(query: &str) -> Vec<String> {
@@ -162,20 +169,21 @@ pub struct LocalFileSystem;
 #[async_trait::async_trait]
 impl FileSystemProvider for LocalFileSystem {
     async fn read_dir(&self, path: &str) -> Result<Vec<DirEntry>, String> {
-        let entries = std::fs::read_dir(path).map_err(|e| format!("Failed to read directory: {}", e))?;
+        let entries =
+            std::fs::read_dir(path).map_err(|e| format!("Failed to read directory: {}", e))?;
         let mut result = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-            let metadata = entry.metadata().map_err(|e| format!("Failed to read metadata: {}", e))?;
+            let metadata = entry
+                .metadata()
+                .map_err(|e| format!("Failed to read metadata: {}", e))?;
             result.push(DirEntry {
                 name: entry.file_name().to_string_lossy().to_string(),
                 is_dir: metadata.is_dir(),
                 size: metadata.len(),
             });
         }
-        result.sort_by(|a, b| {
-            b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name))
-        });
+        result.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
         Ok(result)
     }
 
@@ -222,7 +230,12 @@ impl FileSystemProvider for LocalFileSystem {
         Path::new(path).exists()
     }
 
-    async fn search_files(&self, root: &str, query: &str, limit: usize) -> Result<Vec<String>, String> {
+    async fn search_files(
+        &self,
+        root: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, String> {
         let root_owned = root.to_owned();
         let terms = parse_search_terms(query);
 
@@ -252,9 +265,14 @@ impl FileSystemProvider for LocalFileSystem {
                 let path = entry.path();
                 let rel = path.strip_prefix(&root_owned).unwrap_or(path);
                 let rel_lower = rel.to_string_lossy().to_lowercase();
-                let name_lower = path.file_name().map_or(String::new(), |n| n.to_string_lossy().to_lowercase());
+                let name_lower = path
+                    .file_name()
+                    .map_or(String::new(), |n| n.to_string_lossy().to_lowercase());
 
-                if terms.iter().all(|t| rel_lower.contains(t) || name_lower.contains(t)) {
+                if terms
+                    .iter()
+                    .all(|t| rel_lower.contains(t) || name_lower.contains(t))
+                {
                     matches.push(path.to_string_lossy().to_string());
                 }
             }
@@ -325,7 +343,10 @@ impl SftpFileSystem {
             let conn = connections
                 .get(&self.project_id)
                 .ok_or("No SSH connection found for this project")?;
-            let mut channel = conn.session.lock().await
+            let mut channel = conn
+                .session
+                .lock()
+                .await
                 .channel_open_session()
                 .await
                 .map_err(|e| format!("Failed to open channel: {}", e))?;
@@ -353,7 +374,10 @@ impl SftpFileSystem {
         let conn = connections
             .get(&self.project_id)
             .ok_or("No SSH connection found for this project")?;
-        let mut channel = conn.session.lock().await
+        let mut channel = conn
+            .session
+            .lock()
+            .await
             .channel_open_session()
             .await
             .map_err(|e| format!("Failed to open channel: {}", e))?;
@@ -399,9 +423,7 @@ impl FileSystemProvider for SftpFileSystem {
                 size: meta.len(),
             });
         }
-        result.sort_by(|a, b| {
-            b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name))
-        });
+        result.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
         Ok(result)
     }
 
@@ -423,7 +445,9 @@ impl FileSystemProvider for SftpFileSystem {
         let parts: Vec<&str> = resolved.split('/').filter(|s| !s.is_empty()).collect();
         let mut accum = String::new();
         for (i, part) in parts.iter().enumerate() {
-            if i == parts.len() - 1 { break; } // skip the file itself
+            if i == parts.len() - 1 {
+                break;
+            } // skip the file itself
             accum.push('/');
             accum.push_str(part);
             // ignore errors — directory might already exist
@@ -439,7 +463,9 @@ impl FileSystemProvider for SftpFileSystem {
         file.write_all(content.as_bytes())
             .await
             .map_err(|e| format!("Failed to write file: {}", e))?;
-        file.flush().await.map_err(|e| format!("Failed to flush file: {}", e))?;
+        file.flush()
+            .await
+            .map_err(|e| format!("Failed to flush file: {}", e))?;
         Ok(())
     }
 
@@ -459,8 +485,7 @@ impl FileSystemProvider for SftpFileSystem {
     async fn mkdir(&self, path: &str) -> Result<(), String> {
         let resolved = self.resolve_path(path).await?;
         let sftp = self.get_sftp().await?;
-        sftp
-            .create_dir(&resolved)
+        sftp.create_dir(&resolved)
             .await
             .map_err(|e| format!("Failed to create directory: {}", e))
     }
@@ -504,8 +529,7 @@ impl FileSystemProvider for SftpFileSystem {
         let from_resolved = self.resolve_path(from).await?;
         let to_resolved = self.resolve_path(to).await?;
         let sftp = self.get_sftp().await?;
-        sftp
-            .rename(&from_resolved, &to_resolved)
+        sftp.rename(&from_resolved, &to_resolved)
             .await
             .map_err(|e| format!("Failed to move: {}", e))
     }
@@ -522,7 +546,12 @@ impl FileSystemProvider for SftpFileSystem {
         sftp.metadata(&resolved).await.is_ok()
     }
 
-    async fn search_files(&self, root: &str, query: &str, limit: usize) -> Result<Vec<String>, String> {
+    async fn search_files(
+        &self,
+        root: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, String> {
         let resolved_root = self.resolve_path(root).await?;
         let terms = parse_search_terms(query);
 
@@ -535,21 +564,33 @@ impl FileSystemProvider for SftpFileSystem {
 
         // Fallback: recursive SFTP directory walk
         let sftp = self.get_sftp().await?;
-        self.search_files_sftp_recursive(sftp, &resolved_root, &terms, limit).await
+        self.search_files_sftp_recursive(sftp, &resolved_root, &terms, limit)
+            .await
     }
 }
 
 impl SftpFileSystem {
-    async fn try_git_ls_files(&self, root: &str, terms: &[String], limit: usize) -> Result<Vec<String>, String> {
+    async fn try_git_ls_files(
+        &self,
+        root: &str,
+        terms: &[String],
+        limit: usize,
+    ) -> Result<Vec<String>, String> {
         let connections = self.state.ssh_connections.lock().await;
         let conn = connections
             .get(&self.project_id)
             .ok_or("No SSH connection found for this project")?;
 
         let root_escaped = shell_escape(root);
-        let cmd = format!("cd {} && git ls-files --cached --others --exclude-standard 2>/dev/null", root_escaped);
+        let cmd = format!(
+            "cd {} && git ls-files --cached --others --exclude-standard 2>/dev/null",
+            root_escaped
+        );
 
-        let mut channel = conn.session.lock().await
+        let mut channel = conn
+            .session
+            .lock()
+            .await
             .channel_open_session()
             .await
             .map_err(|e| format!("Failed to open channel: {}", e))?;
@@ -566,7 +607,9 @@ impl SftpFileSystem {
                 russh::ChannelMsg::Data { data } => {
                     stdout.push_str(&String::from_utf8_lossy(&data));
                 }
-                russh::ChannelMsg::ExitStatus { exit_status: status } => {
+                russh::ChannelMsg::ExitStatus {
+                    exit_status: status,
+                } => {
                     exit_status = Some(status);
                 }
                 russh::ChannelMsg::Close => break,
@@ -674,9 +717,15 @@ async fn sftp_remove_recursive(sftp: Arc<SftpSession>, path: &str) -> Result<(),
         .map_err(|e| format!("Failed to remove directory {}: {}", path, e))
 }
 
-async fn get_fs_provider(project_id: &str, state: &AppState) -> Result<Box<dyn FileSystemProvider>, String> {
+async fn get_fs_provider(
+    project_id: &str,
+    state: &AppState,
+) -> Result<Box<dyn FileSystemProvider>, String> {
     let projects = crate::commands::load_projects(state).await?;
-    let project = projects.iter().find(|p| p.id == project_id).ok_or("Project not found")?;
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or("Project not found")?;
 
     match &project.connection {
         Connection::Local { .. } => Ok(Box::new(LocalFileSystem)),
@@ -845,7 +894,9 @@ pub async fn cmd_fs_search_files(
     limit: Option<usize>,
 ) -> Result<Vec<String>, String> {
     let provider = get_fs_provider(&project_id, state).await?;
-    provider.search_files(&root, &query, limit.unwrap_or(100)).await
+    provider
+        .search_files(&root, &query, limit.unwrap_or(100))
+        .await
 }
 
 #[tauri::command]
@@ -860,8 +911,7 @@ async fn fs_search_files(
 }
 
 pub async fn cmd_check_agent_ready(id: String) -> Result<agents::AgentStatus, String> {
-    agents::check_agent_ready(&id)
-        .ok_or_else(|| format!("Unknown agent: {}", id))
+    agents::check_agent_ready(&id).ok_or_else(|| format!("Unknown agent: {}", id))
 }
 
 #[tauri::command]
@@ -950,7 +1000,10 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(event_bus: crate::event_bus::EventBus, lsp_manager: Arc<lsp::LspManager>) -> Arc<Self> {
+    pub fn new(
+        event_bus: crate::event_bus::EventBus,
+        lsp_manager: Arc<lsp::LspManager>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             ssh_connections: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             lsp_manager,
@@ -970,7 +1023,9 @@ impl AppState {
     }
 
     pub fn set_pty_title(&self, pty_id: &str, title: &str) {
-        self.pty_titles.lock().insert(pty_id.to_string(), title.to_string());
+        self.pty_titles
+            .lock()
+            .insert(pty_id.to_string(), title.to_string());
     }
 
     pub fn clear_pty_state(&self, pty_id: &str) {
@@ -1010,16 +1065,19 @@ impl AppState {
     }
 
     pub fn emit_status(&self, project_id: &str, status: ConnectionStatus, error: Option<String>) {
-        self.event_bus.emit("ssh_connection_status", ConnectionStatusEvent {
-            project_id: project_id.to_string(),
-            status: match status {
-                ConnectionStatus::Connected => "connected".to_string(),
-                ConnectionStatus::Disconnected => "disconnected".to_string(),
-                ConnectionStatus::Reconnecting => "reconnecting".to_string(),
-                ConnectionStatus::Error => "error".to_string(),
+        self.event_bus.emit(
+            "ssh_connection_status",
+            ConnectionStatusEvent {
+                project_id: project_id.to_string(),
+                status: match status {
+                    ConnectionStatus::Connected => "connected".to_string(),
+                    ConnectionStatus::Disconnected => "disconnected".to_string(),
+                    ConnectionStatus::Reconnecting => "reconnecting".to_string(),
+                    ConnectionStatus::Error => "error".to_string(),
+                },
+                error,
             },
-            error,
-        });
+        );
     }
 }
 
@@ -1043,10 +1101,7 @@ async fn save_projects(
     crate::commands::save_projects(state.inner().as_ref(), projects).await
 }
 
-pub async fn cmd_save_expanded_projects(
-    _state: &AppState,
-    ids: Vec<String>,
-) -> Result<(), String> {
+pub async fn cmd_save_expanded_projects(_state: &AppState, ids: Vec<String>) -> Result<(), String> {
     let config_path = crate::config::app_config_dir()?;
     std::fs::create_dir_all(&config_path)
         .map_err(|e| format!("Failed to create config directory: {}", e))?;
@@ -1099,9 +1154,7 @@ pub async fn cmd_load_projects(_state: &AppState) -> Result<Vec<Project>, String
 }
 
 #[tauri::command]
-async fn load_projects(
-    state: tauri::State<'_, Arc<AppState>>,
-) -> Result<Vec<Project>, String> {
+async fn load_projects(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Project>, String> {
     crate::commands::load_projects(state.inner().as_ref()).await
 }
 
@@ -1145,8 +1198,7 @@ pub async fn cmd_load_editor_tabs(
     }
     let content = std::fs::read_to_string(&file_path)
         .map_err(|e| format!("Failed to read editor tabs file: {}", e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse editor tabs file: {}", e))
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse editor tabs file: {}", e))
 }
 
 #[tauri::command]
@@ -1283,7 +1335,8 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
         (branch, status)
     }
 
-    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
+    let repo =
+        Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
 
     let repo_path = Path::new(repo_path);
     let repo_path_canon = repo_path
@@ -1291,7 +1344,12 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
         .map_err(|e| format!("Failed to canonicalize repository path: {}", e))?;
 
     let common_dir_output = std::process::Command::new("git")
-        .args(["-C", repo_path.to_str().unwrap_or(""), "rev-parse", "--git-common-dir"])
+        .args([
+            "-C",
+            repo_path.to_str().unwrap_or(""),
+            "rev-parse",
+            "--git-common-dir",
+        ])
         .output()
         .map_err(|e| format!("Failed to run git rev-parse: {}", e))?;
     if !common_dir_output.status.success() {
@@ -1317,9 +1375,10 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
     let main_repo_owned = if is_current_main {
         None
     } else {
-        Some(Repository::open(&main_path).map_err(|e| {
-            format!("Failed to open main worktree repository: {}", e)
-        })?)
+        Some(
+            Repository::open(&main_path)
+                .map_err(|e| format!("Failed to open main worktree repository: {}", e))?,
+        )
     };
     let main_repo = main_repo_owned.as_ref().unwrap_or(&repo);
 
@@ -1342,12 +1401,16 @@ fn list_worktrees_local(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
         locked: false,
     });
 
-    let worktrees = repo.worktrees().map_err(|e| format!("Failed to list worktrees: {}", e))?;
+    let worktrees = repo
+        .worktrees()
+        .map_err(|e| format!("Failed to list worktrees: {}", e))?;
 
     for wt_name_opt in worktrees.iter() {
         let wt_name = wt_name_opt.ok_or("Failed to read worktree name")?;
 
-        let wt = repo.find_worktree(wt_name).map_err(|e| format!("Failed to find worktree: {}", e))?;
+        let wt = repo
+            .find_worktree(wt_name)
+            .map_err(|e| format!("Failed to find worktree: {}", e))?;
 
         let wt_path = wt.path().to_path_buf();
         let wt_path_canon = wt_path.canonicalize().unwrap_or_else(|_| wt_path.clone());
@@ -1404,6 +1467,27 @@ fn deduplicate_worktree_ids(worktrees: &mut Vec<WorktreeInfo>) {
 #[cfg(test)]
 mod worktree_id_tests {
     use super::*;
+
+    #[test]
+    fn fallback_worktree_name_kebab_cases_branch() {
+        assert_eq!(fallback_worktree_name("feat/login-flow", &[]), "feat-login-flow");
+        assert_eq!(fallback_worktree_name("Release/V2!", &[]), "release-v2");
+        assert_eq!(fallback_worktree_name("---", &[]), "worktree");
+        // Collisions get a random 4-char hex suffix.
+        let name = fallback_worktree_name("main", &["main".to_string()]);
+        let suffix = name.strip_prefix("main-").expect("suffix separator");
+        assert_eq!(suffix.len(), 4);
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn dedupe_worktree_name_avoids_existing_with_random_suffix() {
+        let existing = vec!["fix-bug".to_string(), "fix-bug-1".to_string()];
+        let name = dedupe_worktree_name("fix-bug".to_string(), &existing);
+        assert!(name.starts_with("fix-bug-"));
+        assert!(!existing.contains(&name));
+        assert_eq!(dedupe_worktree_name("new-name".to_string(), &existing), "new-name");
+    }
 
     fn wt(id: &str) -> WorktreeInfo {
         WorktreeInfo {
@@ -1468,7 +1552,16 @@ mod worktree_id_tests {
         std::fs::write(main_path.join("file.txt"), "hello").unwrap();
         run(&main_path, &["add", "file.txt"]);
         run(&main_path, &["commit", "-m", "init"]);
-        run(&main_path, &["worktree", "add", wt_path.to_str().unwrap(), "-b", "feature"]);
+        run(
+            &main_path,
+            &[
+                "worktree",
+                "add",
+                wt_path.to_str().unwrap(),
+                "-b",
+                "feature",
+            ],
+        );
 
         let worktrees = list_worktrees_local(main_path.to_str().unwrap()).unwrap();
         let ids: std::collections::HashSet<_> = worktrees.iter().map(|w| w.id.clone()).collect();
@@ -1481,10 +1574,8 @@ mod worktree_id_tests {
 
     #[test]
     fn runs_post_create_command_in_new_worktree_cwd() {
-        let base = std::env::temp_dir().join(format!(
-            "agent-ide-setup-cmd-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("agent-ide-setup-cmd-test-{}", uuid::Uuid::new_v4()));
         let main_path = base.join("repo");
         let wt_path = base.join("worktrees").join("repo").join("feat");
         std::fs::create_dir_all(&main_path).unwrap();
@@ -1509,12 +1600,19 @@ mod worktree_id_tests {
         // Command completes in the new worktree's cwd and writes a marker there.
         let marker = format!("{}/SETUP_OK", wt_path.clone().to_str().unwrap());
         run_setup_command_local(&worktree_path, "touch SETUP_OK").unwrap();
-        assert!(std::path::Path::new(&marker).exists(), "marker not created in worktree");
+        assert!(
+            std::path::Path::new(&marker).exists(),
+            "marker not created in worktree"
+        );
         std::fs::remove_file(&marker).unwrap();
 
         // Non-zero exit propagates as an error.
         let err = run_setup_command_local(&worktree_path, "exit 3").unwrap_err();
-        assert!(err.contains("Setup command failed"), "unexpected error: {}", err);
+        assert!(
+            err.contains("Setup command failed"),
+            "unexpected error: {}",
+            err
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1555,7 +1653,8 @@ fn add_worktree_local(
     let args = if let Some(base) = base_branch {
         // The chosen branch is already checked out elsewhere (git forbids a
         // second checkout of the same branch), so derive a new branch from it.
-        let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
+        let repo =
+            Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
         let base_exists = repo.find_branch(base, BranchType::Local).is_ok()
             || repo.find_branch(base, BranchType::Remote).is_ok();
         if !base_exists {
@@ -1565,7 +1664,8 @@ fn add_worktree_local(
     } else if new_branch {
         vec!["worktree", "add", "-b", branch, &worktree_path]
     } else {
-        let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
+        let repo =
+            Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
         let branch_exists = repo.find_branch(branch, BranchType::Local).is_ok()
             || repo.find_branch(branch, BranchType::Remote).is_ok();
         if !branch_exists {
@@ -1580,7 +1680,10 @@ fn add_worktree_local(
 
 /// Resolve the branch for a given worktree path by parsing
 /// `git worktree list --porcelain` output.
-fn resolve_worktree_branch_local(repo_path: &str, worktree_path: &str) -> Result<Option<String>, String> {
+fn resolve_worktree_branch_local(
+    repo_path: &str,
+    worktree_path: &str,
+) -> Result<Option<String>, String> {
     let output = run_git_command(repo_path, &["worktree", "list", "--porcelain"])?;
     let mut current_worktree: Option<&str> = None;
     for line in output.lines() {
@@ -1599,7 +1702,12 @@ fn resolve_worktree_branch_local(repo_path: &str, worktree_path: &str) -> Result
     Ok(None)
 }
 
-fn remove_worktree_local(repo_path: &str, worktree_path: &str, force: bool, delete_branch: bool) -> Result<(), String> {
+fn remove_worktree_local(
+    repo_path: &str,
+    worktree_path: &str,
+    force: bool,
+    delete_branch: bool,
+) -> Result<(), String> {
     let branch_to_delete = if delete_branch {
         resolve_worktree_branch_local(repo_path, worktree_path)?
     } else {
@@ -1614,7 +1722,10 @@ fn remove_worktree_local(repo_path: &str, worktree_path: &str, force: bool, dele
 
     if let Err(e) = run_git_command(repo_path, &args) {
         if force && e.contains("locked") {
-            run_git_command(repo_path, &["worktree", "remove", "--force", "--force", worktree_path])?;
+            run_git_command(
+                repo_path,
+                &["worktree", "remove", "--force", "--force", worktree_path],
+            )?;
         } else {
             return Err(e);
         }
@@ -1628,14 +1739,20 @@ fn remove_worktree_local(repo_path: &str, worktree_path: &str, force: bool, dele
 }
 
 fn list_branches_local(repo_path: &str) -> Result<Vec<BranchInfo>, String> {
-    let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
+    let repo =
+        Repository::open(repo_path).map_err(|e| format!("Failed to open repository: {}", e))?;
 
     let mut branches = Vec::new();
 
-    let branches_iter = repo.branches(None).map_err(|e| format!("Failed to list branches: {}", e))?;
+    let branches_iter = repo
+        .branches(None)
+        .map_err(|e| format!("Failed to list branches: {}", e))?;
     for branch_result in branches_iter {
         let (branch, bt) = branch_result.map_err(|e| format!("Failed to read branch: {}", e))?;
-        if let Some(name) = branch.name().map_err(|e| format!("Failed to get branch name: {}", e))? {
+        if let Some(name) = branch
+            .name()
+            .map_err(|e| format!("Failed to get branch name: {}", e))?
+        {
             if name != "origin/HEAD" {
                 branches.push(BranchInfo {
                     name: name.to_string(),
@@ -1662,7 +1779,10 @@ async fn run_ssh_command(
 
     info!("run_ssh_command: executing '{}'", script);
 
-    let mut channel = conn.session.lock().await
+    let mut channel = conn
+        .session
+        .lock()
+        .await
         .channel_open_session()
         .await
         .map_err(|e| format!("Failed to open channel: {}", e))?;
@@ -1689,7 +1809,9 @@ async fn run_ssh_command(
                 }
             }
             russh::ChannelMsg::Eof => {}
-            russh::ChannelMsg::ExitStatus { exit_status: status } => {
+            russh::ChannelMsg::ExitStatus {
+                exit_status: status,
+            } => {
                 exit_status = Some(status);
             }
             russh::ChannelMsg::Close => {
@@ -1704,7 +1826,12 @@ async fn run_ssh_command(
 
     match exit_status {
         Some(0) => Ok(stdout.trim().to_string()),
-        Some(code) => Err(format!("{} failed (exit {}): {}", label, code, stderr.trim())),
+        Some(code) => Err(format!(
+            "{} failed (exit {}): {}",
+            label,
+            code,
+            stderr.trim()
+        )),
         None => Err(format!("{}: no exit status received", label)),
     }
 }
@@ -1811,7 +1938,9 @@ echo 'WT_STATES_END'"#,
                     stdout.push_str(&String::from_utf8_lossy(&data));
                 }
             }
-            russh::ChannelMsg::ExitStatus { exit_status: status } => {
+            russh::ChannelMsg::ExitStatus {
+                exit_status: status,
+            } => {
                 exit_status = Some(status);
                 break;
             }
@@ -1821,10 +1950,7 @@ echo 'WT_STATES_END'"#,
     }
 
     if exit_status != Some(0) {
-        return Err(format!(
-            "Failed to list worktrees: {}",
-            stderr.trim()
-        ));
+        return Err(format!("Failed to list worktrees: {}", stderr.trim()));
     }
 
     let mut worktrees = Vec::new();
@@ -1997,7 +2123,13 @@ async fn resolve_worktree_branch_ssh(
     worktree_path: &str,
     state: &AppState,
 ) -> Result<Option<String>, String> {
-    let output = run_git_command_ssh(project_id, repo_path, &["worktree", "list", "--porcelain"], state).await?;
+    let output = run_git_command_ssh(
+        project_id,
+        repo_path,
+        &["worktree", "list", "--porcelain"],
+        state,
+    )
+    .await?;
     let mut current_worktree: Option<&str> = None;
     for line in output.lines() {
         if let Some(path) = line.strip_prefix("worktree ") {
@@ -2050,7 +2182,13 @@ async fn remove_worktree_ssh(
     }
 
     if let Some(branch_name) = branch_to_delete {
-        run_git_command_ssh(project_id, repo_path, &["branch", "-D", &branch_name], state).await?;
+        run_git_command_ssh(
+            project_id,
+            repo_path,
+            &["branch", "-D", &branch_name],
+            state,
+        )
+        .await?;
     }
 
     Ok(())
@@ -2061,7 +2199,10 @@ async fn list_branches_ssh(
     repo_path: &str,
     state: &AppState,
 ) -> Result<Vec<BranchInfo>, String> {
-    info!("list_branches_ssh: project_id={} repo_path={}", project_id, repo_path);
+    info!(
+        "list_branches_ssh: project_id={} repo_path={}",
+        project_id, repo_path
+    );
     let mut branches = Vec::new();
 
     let local_output = run_git_command_ssh(
@@ -2124,7 +2265,10 @@ pub async fn cmd_git_worktree_list(
 
     match &project.connection {
         Connection::Local { path } => list_worktrees_local(path),
-        Connection::Ssh { .. } => Err("SSH worktree listing requires async execution. Use git_worktree_list_async instead.".to_string()),
+        Connection::Ssh { .. } => Err(
+            "SSH worktree listing requires async execution. Use git_worktree_list_async instead."
+                .to_string(),
+        ),
     }
 }
 
@@ -2139,12 +2283,18 @@ async fn git_worktree_list(
 fn get_repo_path(project: &Project) -> String {
     match &project.connection {
         Connection::Local { path } => path.clone(),
-        Connection::Ssh { path: Some(path), .. } => path.clone(),
+        Connection::Ssh {
+            path: Some(path), ..
+        } => path.clone(),
         Connection::Ssh { username, .. } => {
-            let worktree = project.worktrees.iter().find(|w| w.is_main).or(project.worktrees.first());
-            worktree.map(|w| w.path.clone()).unwrap_or_else(|| {
-                format!("{}/{}", username, project.name)
-            })
+            let worktree = project
+                .worktrees
+                .iter()
+                .find(|w| w.is_main)
+                .or(project.worktrees.first());
+            worktree
+                .map(|w| w.path.clone())
+                .unwrap_or_else(|| format!("{}/{}", username, project.name))
         }
     }
 }
@@ -2176,6 +2326,48 @@ async fn git_worktree_list_async(
     crate::commands::git_worktree_list_async(state.inner().as_ref(), project_id).await
 }
 
+/// Append a short random suffix to `base` until the name is unique among
+/// `existing`.
+fn dedupe_worktree_name(base: String, existing: &[String]) -> String {
+    if !existing.contains(&base) {
+        return base;
+    }
+    loop {
+        let suffix = &uuid::Uuid::new_v4().simple().to_string()[..4];
+        let candidate = format!("{}-{}", base, suffix);
+        if !existing.contains(&candidate) {
+            return candidate;
+        }
+    }
+}
+
+/// Branch-derived fallback for an undefined worktree name: kebab-case the
+/// branch (e.g. `feat/login` → `feat-login`), deduped like generated names.
+fn fallback_worktree_name(branch: &str, existing: &[String]) -> String {
+    let mapped: String = branch
+        .replace('/', "-")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let base: String = mapped
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let base = if base.is_empty() {
+        "worktree".to_string()
+    } else {
+        base.chars().take(40).collect()
+    };
+    dedupe_worktree_name(base, existing)
+}
+
 pub async fn cmd_git_worktree_add_async(
     state: &AppState,
     project_id: String,
@@ -2184,7 +2376,10 @@ pub async fn cmd_git_worktree_add_async(
     new_branch: Option<bool>,
     base_branch: Option<String>,
     command: Option<String>,
-) -> Result<(), String> {
+    prompt: Option<String>,
+    agent_id: Option<String>,
+    model: Option<String>,
+) -> Result<String, String> {
     let projects = crate::commands::load_projects(state).await?;
     let project = projects
         .iter()
@@ -2195,10 +2390,48 @@ pub async fn cmd_git_worktree_add_async(
     let base_branch = base_branch.filter(|b| !b.trim().is_empty());
     let command = command.filter(|c| !c.trim().is_empty());
 
+    // Undefined worktree name: derive one from the initial prompt via the
+    // selected agent CLI; on failure fall back to a branch-derived name.
+    // Generated names are deduped against the project's existing worktrees.
+    let existing_names: Vec<String> = project.worktrees.iter().map(|w| w.id.clone()).collect();
+    let name = if name.trim().is_empty() {
+        match (agent_id.as_deref().filter(|a| !a.trim().is_empty()), prompt.as_deref().filter(|p| !p.trim().is_empty())) {
+            (Some(agent), Some(task_prompt)) => {
+                let cwd = match &project.connection {
+                    Connection::Local { path } => Some(path.clone()),
+                    Connection::Ssh { .. } => None,
+                };
+                match agents::generate_worktree_name(agent, model.as_deref(), task_prompt, cwd).await {
+                    Ok(generated) => dedupe_worktree_name(generated, &existing_names),
+                    Err(e) => {
+                        warn!(agent = %agent, error = %e, "AI worktree name generation failed; using branch-derived name");
+                        fallback_worktree_name(&branch, &existing_names)
+                    }
+                }
+            }
+            _ => fallback_worktree_name(&branch, &existing_names),
+        }
+    } else {
+        name
+    };
+    // Derived-branch callers pass the name as the branch; when both are
+    // empty the generated name names both the worktree and its branch.
+    let branch = if branch.trim().is_empty() {
+        name.clone()
+    } else {
+        branch
+    };
+
     match &project.connection {
         Connection::Local { path: repo_path } => {
             let worktree_path = compute_worktree_path(repo_path, &name)?;
-            add_worktree_local(repo_path, &branch, &name, new_branch, base_branch.as_deref())?;
+            add_worktree_local(
+                repo_path,
+                &branch,
+                &name,
+                new_branch,
+                base_branch.as_deref(),
+            )?;
             if let Some(cmd) = &command {
                 run_setup_command_local(&worktree_path, cmd)?;
             }
@@ -2231,7 +2464,7 @@ pub async fn cmd_git_worktree_add_async(
         }
     }
 
-    Ok(())
+    Ok(name)
 }
 
 #[tauri::command]
@@ -2242,8 +2475,11 @@ async fn git_worktree_add_async(
     new_branch: Option<bool>,
     base_branch: Option<String>,
     command: Option<String>,
+    prompt: Option<String>,
+    agent_id: Option<String>,
+    model: Option<String>,
     state: tauri::State<'_, Arc<AppState>>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     crate::commands::git_worktree_add_async(
         state.inner().as_ref(),
         project_id,
@@ -2252,6 +2488,9 @@ async fn git_worktree_add_async(
         new_branch,
         base_branch,
         command,
+        prompt,
+        agent_id,
+        model,
     )
     .await
 }
@@ -2278,7 +2517,15 @@ pub async fn cmd_git_worktree_remove_async(
         }
         Connection::Ssh { .. } => {
             let repo_path = get_repo_path(project);
-            remove_worktree_ssh(&project_id, &repo_path, &worktree_path, force, state, delete_branch).await
+            remove_worktree_ssh(
+                &project_id,
+                &repo_path,
+                &worktree_path,
+                force,
+                state,
+                delete_branch,
+            )
+            .await
         }
     }
 }
@@ -2328,10 +2575,7 @@ async fn git_branches_list_async(
     crate::commands::git_branches_list_async(state.inner().as_ref(), project_id).await
 }
 
-fn filter_available_branches(
-    branches: Vec<BranchInfo>,
-    assigned: &[String],
-) -> Vec<BranchInfo> {
+fn filter_available_branches(branches: Vec<BranchInfo>, assigned: &[String]) -> Vec<BranchInfo> {
     let assigned_set: HashSet<&str> = assigned.iter().map(|s| s.as_str()).collect();
     let local_names: HashSet<String> = branches
         .iter()
@@ -2379,11 +2623,12 @@ fn fetch_remotes_local(repo_path: &str) -> Result<(), String> {
     run_git_command(repo_path, &["fetch", "--all", "--prune"]).map(|_| ())
 }
 
-fn list_branches_available_for_worktrees_local(
-    repo_path: &str,
-) -> Result<Vec<BranchInfo>, String> {
+fn list_branches_available_for_worktrees_local(repo_path: &str) -> Result<Vec<BranchInfo>, String> {
     if let Err(e) = fetch_remotes_local(repo_path) {
-        warn!("list_branches_available_for_worktrees_local: fetch failed: {}", e);
+        warn!(
+            "list_branches_available_for_worktrees_local: fetch failed: {}",
+            e
+        );
     }
     let branches = list_branches_local(repo_path)?;
     let assigned = list_worktree_branch_names_local(repo_path)?;
@@ -2395,7 +2640,13 @@ async fn list_worktree_branch_names_ssh(
     repo_path: &str,
     state: &AppState,
 ) -> Result<Vec<String>, String> {
-    let output = run_git_command_ssh(project_id, repo_path, &["worktree", "list", "--porcelain"], state).await?;
+    let output = run_git_command_ssh(
+        project_id,
+        repo_path,
+        &["worktree", "list", "--porcelain"],
+        state,
+    )
+    .await?;
     Ok(parse_worktree_branch_names(&output))
 }
 
@@ -2415,7 +2666,10 @@ async fn list_branches_available_for_worktrees_ssh(
     state: &AppState,
 ) -> Result<Vec<BranchInfo>, String> {
     if let Err(e) = fetch_remotes_ssh(project_id, repo_path, state).await {
-        warn!("list_branches_available_for_worktrees_ssh: fetch failed: {}", e);
+        warn!(
+            "list_branches_available_for_worktrees_ssh: fetch failed: {}",
+            e
+        );
     }
     let branches = list_branches_ssh(project_id, repo_path, state).await?;
     let assigned = list_worktree_branch_names_ssh(project_id, repo_path, state).await?;
@@ -2446,7 +2700,8 @@ async fn git_branches_available_for_worktrees_async(
     project_id: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Vec<BranchInfo>, String> {
-    crate::commands::git_branches_available_for_worktrees_async(state.inner().as_ref(), project_id).await
+    crate::commands::git_branches_available_for_worktrees_async(state.inner().as_ref(), project_id)
+        .await
 }
 fn one_password_agent_socket() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
@@ -2454,13 +2709,19 @@ fn one_password_agent_socket() -> Option<PathBuf> {
         if let Ok(home) = std::env::var("HOME") {
             let legacy = PathBuf::from(&home)
                 .join("Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock");
-            info!("one_password_agent_socket: checking legacy path {:?}", legacy);
+            info!(
+                "one_password_agent_socket: checking legacy path {:?}",
+                legacy
+            );
             if legacy.exists() {
                 info!("one_password_agent_socket: found legacy path");
                 return Some(legacy);
             }
             let symlink = PathBuf::from(&home).join(".1password/agent.sock");
-            info!("one_password_agent_socket: checking symlink path {:?}", symlink);
+            info!(
+                "one_password_agent_socket: checking symlink path {:?}",
+                symlink
+            );
             if symlink.exists() {
                 info!("one_password_agent_socket: found symlink path");
                 return Some(symlink);
@@ -2472,7 +2733,10 @@ fn one_password_agent_socket() -> Option<PathBuf> {
     {
         if let Ok(home) = std::env::var("HOME") {
             let socket = PathBuf::from(&home).join(".1password/agent.sock");
-            info!("one_password_agent_socket: checking linux home path {:?}", socket);
+            info!(
+                "one_password_agent_socket: checking linux home path {:?}",
+                socket
+            );
             if socket.exists() {
                 info!("one_password_agent_socket: found linux home path");
                 return Some(socket);
@@ -2480,7 +2744,10 @@ fn one_password_agent_socket() -> Option<PathBuf> {
         }
         if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
             let socket = PathBuf::from(&xdg).join("1password/agent.sock");
-            info!("one_password_agent_socket: checking xdg runtime path {:?}", socket);
+            info!(
+                "one_password_agent_socket: checking xdg runtime path {:?}",
+                socket
+            );
             if socket.exists() {
                 info!("one_password_agent_socket: found xdg runtime path");
                 return Some(socket);
@@ -2512,7 +2779,10 @@ async fn connect_ssh_with_sftp(
     password: Option<&str>,
     init_sftp: bool,
 ) -> Result<(client::Handle<ClientHandler>, Option<SftpSession>), String> {
-    info!("connect_ssh: host={} port={} username={} auth_method={}", host, port, username, auth_method);
+    info!(
+        "connect_ssh: host={} port={} username={} auth_method={}",
+        host, port, username, auth_method
+    );
     let config = Arc::new(client::Config::default());
 
     let connect_timeout = if auth_method == "agent" {
@@ -2521,7 +2791,10 @@ async fn connect_ssh_with_sftp(
         Duration::from_secs(15)
     };
 
-    info!("connect_ssh: starting TCP connection with timeout {:?}", connect_timeout);
+    info!(
+        "connect_ssh: starting TCP connection with timeout {:?}",
+        connect_timeout
+    );
     let mut session = tokio::time::timeout(
         connect_timeout,
         client::connect(config, (host, port), ClientHandler),
@@ -2556,28 +2829,28 @@ async fn connect_ssh_with_sftp(
         "agent" => {
             info!("connect_ssh: starting agent auth");
             let agent_path = one_password_agent_socket()
-                .or_else(|| std::env::var("SSH_AUTH_SOCK").ok().filter(|s| !s.is_empty()).map(PathBuf::from))
+                .or_else(|| {
+                    std::env::var("SSH_AUTH_SOCK")
+                        .ok()
+                        .filter(|s| !s.is_empty())
+                        .map(PathBuf::from)
+                })
                 .ok_or("No 1Password agent socket found and SSH_AUTH_SOCK is not set")?;
 
             info!("connect_ssh: selected agent socket {:?}", agent_path);
             info!("connect_ssh: connecting to agent socket");
-            let stream = UnixStream::connect(&agent_path)
-                .await
-                .map_err(|e| {
-                    warn!("connect_ssh: failed to connect to agent socket: {}", e);
-                    format!("Failed to connect to SSH agent socket: {}", e)
-                })?;
+            let stream = UnixStream::connect(&agent_path).await.map_err(|e| {
+                warn!("connect_ssh: failed to connect to agent socket: {}", e);
+                format!("Failed to connect to SSH agent socket: {}", e)
+            })?;
             info!("connect_ssh: agent socket connected");
             let mut agent = AgentClient::connect(stream);
             info!("connect_ssh: requesting agent identities");
 
-            let identities = agent
-                .request_identities()
-                .await
-                .map_err(|e| {
-                    warn!("connect_ssh: request_identities failed: {}", e);
-                    format!("Failed to get identities from SSH agent: {}", e)
-                })?;
+            let identities = agent.request_identities().await.map_err(|e| {
+                warn!("connect_ssh: request_identities failed: {}", e);
+                format!("Failed to get identities from SSH agent: {}", e)
+            })?;
             info!("connect_ssh: {} identities returned", identities.len());
             if identities.is_empty() {
                 warn!("connect_ssh: agent has no identities");
@@ -2590,7 +2863,12 @@ async fn connect_ssh_with_sftp(
                 let comment = key.comment();
                 info!("connect_ssh: trying key '{}'", comment);
                 let result = session
-                    .authenticate_publickey_with(username.to_string(), key.clone(), None, &mut agent)
+                    .authenticate_publickey_with(
+                        username.to_string(),
+                        key.clone(),
+                        None,
+                        &mut agent,
+                    )
                     .await;
                 match result {
                     Ok(auth) if auth.success() => {
@@ -2644,30 +2922,24 @@ async fn connect_ssh_with_sftp(
     }
 
     info!("connect_ssh: requesting sftp subsystem");
-    channel
-        .request_subsystem(true, "sftp")
-        .await
-        .map_err(|e| {
-            warn!("connect_ssh: request_subsystem failed: {}", e);
-            format!("Failed to request SFTP subsystem: {}", e)
-        })?;
+    channel.request_subsystem(true, "sftp").await.map_err(|e| {
+        warn!("connect_ssh: request_subsystem failed: {}", e);
+        format!("Failed to request SFTP subsystem: {}", e)
+    })?;
     info!("connect_ssh: sftp subsystem requested");
 
     info!("connect_ssh: initializing SFTP with 10s timeout");
     let stream = channel.into_stream();
-    let sftp = tokio::time::timeout(
-        Duration::from_secs(10),
-        SftpSession::new(stream),
-    )
-    .await
-    .map_err(|_| {
-        warn!("connect_ssh: SFTP initialization timed out");
-        "SFTP initialization timed out".to_string()
-    })?
-    .map_err(|e| {
-        warn!("connect_ssh: SFTP initialization failed: {}", e);
-        format!("Failed to initialize SFTP: {}", e)
-    })?;
+    let sftp = tokio::time::timeout(Duration::from_secs(10), SftpSession::new(stream))
+        .await
+        .map_err(|_| {
+            warn!("connect_ssh: SFTP initialization timed out");
+            "SFTP initialization timed out".to_string()
+        })?
+        .map_err(|e| {
+            warn!("connect_ssh: SFTP initialization failed: {}", e);
+            format!("Failed to initialize SFTP: {}", e)
+        })?;
     info!("connect_ssh: SFTP initialized");
     Ok((session, Some(sftp)))
 }
@@ -2678,7 +2950,10 @@ async fn list_ssh_agent_keys() -> Result<Vec<String>, String> {
 
     let sockets: Vec<Option<PathBuf>> = vec![
         one_password_agent_socket(),
-        std::env::var("SSH_AUTH_SOCK").ok().filter(|s| !s.is_empty()).map(PathBuf::from),
+        std::env::var("SSH_AUTH_SOCK")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from),
     ];
 
     for socket in sockets.into_iter().flatten() {
@@ -2688,24 +2963,41 @@ async fn list_ssh_agent_keys() -> Result<Vec<String>, String> {
                 info!("list_ssh_agent_keys: connected to {:?}", socket);
                 match AgentClient::connect(stream).request_identities().await {
                     Ok(keys) => {
-                        info!("list_ssh_agent_keys: got {} keys from {:?}", keys.len(), socket);
+                        info!(
+                            "list_ssh_agent_keys: got {} keys from {:?}",
+                            keys.len(),
+                            socket
+                        );
                         let comments: Vec<String> = keys
                             .iter()
                             .filter_map(|k| {
                                 let c = k.comment();
-                                if c.is_empty() { None } else { Some(c.to_string()) }
+                                if c.is_empty() {
+                                    None
+                                } else {
+                                    Some(c.to_string())
+                                }
                             })
                             .collect();
                         return Ok(comments);
                     }
                     Err(e) => {
-                        warn!("list_ssh_agent_keys: request_identities failed for {:?}: {}", socket, e);
-                        last_error = Some(format!("Failed to list identities from {:?}: {}", socket, e));
+                        warn!(
+                            "list_ssh_agent_keys: request_identities failed for {:?}: {}",
+                            socket, e
+                        );
+                        last_error = Some(format!(
+                            "Failed to list identities from {:?}: {}",
+                            socket, e
+                        ));
                     }
                 }
             }
             Err(e) => {
-                warn!("list_ssh_agent_keys: failed to connect to {:?}: {}", socket, e);
+                warn!(
+                    "list_ssh_agent_keys: failed to connect to {:?}: {}",
+                    socket, e
+                );
                 last_error = Some(format!("Failed to connect to {:?}: {}", socket, e));
             }
         }
@@ -2774,7 +3066,12 @@ pub async fn cmd_ssh_agent_info() -> Result<SshAgentInfo, String> {
                                 if !comment.is_empty() {
                                     pub_key_comments.push(comment.to_string());
                                 } else {
-                                    pub_key_comments.push(path.file_name().unwrap_or_default().to_string_lossy().to_string());
+                                    pub_key_comments.push(
+                                        path.file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy()
+                                            .to_string(),
+                                    );
                                 }
                             }
                         }
@@ -2827,7 +3124,10 @@ pub async fn cmd_ssh_test_connection(
         password.as_deref(),
     )
     .await?;
-    info!("ssh_test_connection: connect succeeded (sftp={}), disconnecting", sftp.is_some());
+    info!(
+        "ssh_test_connection: connect succeeded (sftp={}), disconnecting",
+        sftp.is_some()
+    );
     let _ = tokio::time::timeout(
         Duration::from_secs(5),
         session.disconnect(Disconnect::ByApplication, "", "en"),
@@ -2848,7 +3148,17 @@ async fn ssh_connect(
     password: Option<String>,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    cmd_ssh_connect(state.inner().as_ref(), project_id, host, port, username, auth_method, key_path, password).await
+    cmd_ssh_connect(
+        state.inner().as_ref(),
+        project_id,
+        host,
+        port,
+        username,
+        auth_method,
+        key_path,
+        password,
+    )
+    .await
 }
 
 pub async fn cmd_ssh_connect(
@@ -2861,7 +3171,10 @@ pub async fn cmd_ssh_connect(
     key_path: Option<String>,
     password: Option<String>,
 ) -> Result<(), String> {
-    info!("ssh_connect: project_id={} host={} port={} username={} auth_method={}", project_id, host, port, username, auth_method);
+    info!(
+        "ssh_connect: project_id={} host={} port={} username={} auth_method={}",
+        project_id, host, port, username, auth_method
+    );
     {
         let connections = state.ssh_connections.lock().await;
         if let Some(conn) = connections.get(&project_id) {
@@ -2913,15 +3226,21 @@ pub async fn cmd_ssh_connect(
         }
     };
 
-    info!("ssh_connect: connect succeeded, storing connection (sftp={})", sftp.is_some());
+    info!(
+        "ssh_connect: connect succeeded, storing connection (sftp={})",
+        sftp.is_some()
+    );
     let mut connections = state.ssh_connections.lock().await;
-    connections.insert(project_id.clone(), SshConnection {
-        session: Arc::new(Mutex::new(session)),
-        sftp: sftp.map(Arc::new),
-        credentials,
-        status: ConnectionStatus::Connected,
-        reconnect_attempts: 0,
-    });
+    connections.insert(
+        project_id.clone(),
+        SshConnection {
+            session: Arc::new(Mutex::new(session)),
+            sftp: sftp.map(Arc::new),
+            credentials,
+            status: ConnectionStatus::Connected,
+            reconnect_attempts: 0,
+        },
+    );
     state.emit_status(&project_id, ConnectionStatus::Connected, None);
 
     Ok(())
@@ -2935,16 +3254,18 @@ async fn ssh_disconnect(
     cmd_ssh_disconnect(state.inner().as_ref(), project_id).await
 }
 
-pub async fn cmd_ssh_disconnect(
-    state: &AppState,
-    project_id: String,
-) -> Result<(), String> {
+pub async fn cmd_ssh_disconnect(state: &AppState, project_id: String) -> Result<(), String> {
     info!("ssh_disconnect: project_id={}", project_id);
     state.lsp_manager.stop_project(&project_id).await;
     let mut connections = state.ssh_connections.lock().await;
     if let Some(conn) = connections.remove(&project_id) {
         info!("ssh_disconnect: disconnecting session");
-        let _ = conn.session.lock().await.disconnect(Disconnect::ByApplication, "", "en").await;
+        let _ = conn
+            .session
+            .lock()
+            .await
+            .disconnect(Disconnect::ByApplication, "", "en")
+            .await;
         info!("ssh_disconnect: session disconnected");
     }
     Ok(())
@@ -2964,7 +3285,10 @@ pub async fn cmd_ssh_list_directory(
     project_id: String,
     path: String,
 ) -> Result<Vec<SshDirEntry>, String> {
-    info!("ssh_list_directory: project_id={} path={}", project_id, path);
+    info!(
+        "ssh_list_directory: project_id={} path={}",
+        project_id, path
+    );
     let connections = state.ssh_connections.lock().await;
     let conn = connections
         .get(&project_id)
@@ -3029,49 +3353,34 @@ pub async fn cmd_ssh_check_git(
 }
 
 #[tauri::command]
-async fn ssh_store_password(
-    project_id: String,
-    password: String,
-) -> Result<(), String> {
+async fn ssh_store_password(project_id: String, password: String) -> Result<(), String> {
     cmd_ssh_store_password(project_id, password).await
 }
 
-pub async fn cmd_ssh_store_password(
-    project_id: String,
-    password: String,
-) -> Result<(), String> {
+pub async fn cmd_ssh_store_password(project_id: String, password: String) -> Result<(), String> {
     info!("ssh_store_password: project_id={}", project_id);
     crate::secrets::set_secret(&format!("ssh-password-{}", project_id), &password)
 }
 
 #[tauri::command]
-async fn ssh_get_password(
-    project_id: String,
-) -> Result<Option<String>, String> {
+async fn ssh_get_password(project_id: String) -> Result<Option<String>, String> {
     cmd_ssh_get_password(project_id).await
 }
 
-pub async fn cmd_ssh_get_password(
-    project_id: String,
-) -> Result<Option<String>, String> {
+pub async fn cmd_ssh_get_password(project_id: String) -> Result<Option<String>, String> {
     info!("ssh_get_password: project_id={}", project_id);
     crate::secrets::get_secret(&format!("ssh-password-{}", project_id))
 }
 
 #[tauri::command]
-async fn ssh_delete_password(
-    project_id: String,
-) -> Result<(), String> {
+async fn ssh_delete_password(project_id: String) -> Result<(), String> {
     cmd_ssh_delete_password(project_id).await
 }
 
-pub async fn cmd_ssh_delete_password(
-    project_id: String,
-) -> Result<(), String> {
+pub async fn cmd_ssh_delete_password(project_id: String) -> Result<(), String> {
     info!("ssh_delete_password: project_id={}", project_id);
     crate::secrets::delete_secret(&format!("ssh-password-{}", project_id))
 }
-
 
 async fn start_health_check(state: Arc<AppState>) {
     let mut interval = tokio::time::interval(Duration::from_secs(30));
@@ -3189,7 +3498,14 @@ async fn ensure_ssh_connection(project_id: &str, state: &AppState) -> Result<(),
                 .find(|p| p.id == project_id)
                 .ok_or("Project not found")?;
             match &project.connection {
-                Connection::Ssh { host, port, username, auth_method, key_path, .. } => {
+                Connection::Ssh {
+                    host,
+                    port,
+                    username,
+                    auth_method,
+                    key_path,
+                    ..
+                } => {
                     let password = secrets::get_secret(project_id).ok().flatten();
                     SshCredentials {
                         host: host.clone(),
@@ -3237,7 +3553,10 @@ async fn ensure_ssh_connection(project_id: &str, state: &AppState) -> Result<(),
             Ok(())
         }
         Err(e) => {
-            warn!("ensure_ssh_connection: failed to connect {}: {}", project_id, e);
+            warn!(
+                "ensure_ssh_connection: failed to connect {}: {}",
+                project_id, e
+            );
             state.emit_status(project_id, ConnectionStatus::Error, Some(e.clone()));
             Err(format!("Failed to establish SSH connection: {}", e))
         }
@@ -3266,7 +3585,10 @@ async fn check_and_reconnect(project_id: &str, state: &AppState) {
     };
 
     if needs_reconnect {
-        info!("health_check: connection {} dropped, attempting reconnect", project_id);
+        info!(
+            "health_check: connection {} dropped, attempting reconnect",
+            project_id
+        );
         state.emit_status(project_id, ConnectionStatus::Reconnecting, None);
 
         let credentials = {
@@ -3311,9 +3633,16 @@ async fn check_and_reconnect(project_id: &str, state: &AppState) {
                         info!("health_check: giving up on {} after 10 retries", project_id);
                     } else {
                         let delay = std::cmp::min(1 << conn.reconnect_attempts, 30);
-                        info!("health_check: retrying {} in {}s (attempt {}/{})", project_id, delay, conn.reconnect_attempts, 10);
+                        info!(
+                            "health_check: retrying {} in {}s (attempt {}/{})",
+                            project_id, delay, conn.reconnect_attempts, 10
+                        );
                         conn.status = ConnectionStatus::Reconnecting;
-                        state.emit_status(project_id, ConnectionStatus::Reconnecting, Some(format!("Reconnecting in {}s...", delay)));
+                        state.emit_status(
+                            project_id,
+                            ConnectionStatus::Reconnecting,
+                            Some(format!("Reconnecting in {}s...", delay)),
+                        );
                         let state_clone = state.clone();
                         let project_id_clone = project_id.to_string();
                         let credentials_clone = credentials.clone();
@@ -3322,7 +3651,9 @@ async fn check_and_reconnect(project_id: &str, state: &AppState) {
                             tokio::time::sleep(Duration::from_secs(delay as u64)).await;
                             let mut connections = state_clone.ssh_connections.lock().await;
                             if let Some(conn) = connections.get_mut(&project_id_clone) {
-                                if conn.status == ConnectionStatus::Reconnecting && conn.reconnect_attempts == attempt {
+                                if conn.status == ConnectionStatus::Reconnecting
+                                    && conn.reconnect_attempts == attempt
+                                {
                                     drop(connections);
                                     let result = connect_ssh(
                                         &credentials_clone.host,
@@ -3335,26 +3666,49 @@ async fn check_and_reconnect(project_id: &str, state: &AppState) {
                                     .await;
                                     match result {
                                         Ok((session, sftp)) => {
-                                            let mut connections = state_clone.ssh_connections.lock().await;
-                                            if let Some(conn) = connections.get_mut(&project_id_clone) {
+                                            let mut connections =
+                                                state_clone.ssh_connections.lock().await;
+                                            if let Some(conn) =
+                                                connections.get_mut(&project_id_clone)
+                                            {
                                                 conn.session = Arc::new(Mutex::new(session));
                                                 conn.sftp = sftp.map(Arc::new);
                                                 conn.status = ConnectionStatus::Connected;
                                                 conn.reconnect_attempts = 0;
-                                                state_clone.emit_status(&project_id_clone, ConnectionStatus::Connected, None);
-                                                info!("health_check: reconnected {} on retry", project_id_clone);
+                                                state_clone.emit_status(
+                                                    &project_id_clone,
+                                                    ConnectionStatus::Connected,
+                                                    None,
+                                                );
+                                                info!(
+                                                    "health_check: reconnected {} on retry",
+                                                    project_id_clone
+                                                );
                                             }
                                         }
                                         Err(e) => {
-                                            let mut connections = state_clone.ssh_connections.lock().await;
-                                            if let Some(conn) = connections.get_mut(&project_id_clone) {
+                                            let mut connections =
+                                                state_clone.ssh_connections.lock().await;
+                                            if let Some(conn) =
+                                                connections.get_mut(&project_id_clone)
+                                            {
                                                 conn.reconnect_attempts += 1;
                                                 if conn.reconnect_attempts >= 10 {
                                                     conn.status = ConnectionStatus::Error;
-                                                    state_clone.emit_status(&project_id_clone, ConnectionStatus::Error, Some(e));
+                                                    state_clone.emit_status(
+                                                        &project_id_clone,
+                                                        ConnectionStatus::Error,
+                                                        Some(e),
+                                                    );
                                                 } else {
                                                     conn.status = ConnectionStatus::Reconnecting;
-                                                    state_clone.emit_status(&project_id_clone, ConnectionStatus::Reconnecting, Some(format!("Reconnect failed, will retry...")));
+                                                    state_clone.emit_status(
+                                                        &project_id_clone,
+                                                        ConnectionStatus::Reconnecting,
+                                                        Some(format!(
+                                                            "Reconnect failed, will retry..."
+                                                        )),
+                                                    );
                                                 }
                                             }
                                         }
@@ -3376,8 +3730,7 @@ pub fn run_pty_daemon(daemonize: bool) -> Result<(), String> {
     }
     #[cfg(unix)]
     if daemonize {
-        let daemonize = daemonize::Daemonize::new()
-            .working_directory(config_dir);
+        let daemonize = daemonize::Daemonize::new().working_directory(config_dir);
         if let Err(e) = daemonize.start() {
             eprintln!("Failed to daemonize: {}", e);
             std::process::exit(1);
@@ -3437,7 +3790,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let event_bus = crate::event_bus::EventBus::Tauri(app.handle().clone());
-            let state = crate::AppState::new(event_bus.clone(), Arc::new(lsp::LspManager::default()));
+            let state =
+                crate::AppState::new(event_bus.clone(), Arc::new(lsp::LspManager::default()));
             app.manage(state.clone());
             crate::notification::set_event_bus(event_bus.clone());
 
@@ -3529,20 +3883,19 @@ pub fn run() {
             lsp::lsp_list,
             lsp::lsp_server_available,
         ])
-        .on_window_event(|window, event| {
-            match event {
-                tauri::WindowEvent::CloseRequested { api, .. } => {
-                    api.prevent_close();
-                }
-                tauri::WindowEvent::Focused(true) => {
-                    if let Some(badge) =
-                        window.app_handle().try_state::<Arc<crate::badge::DockBadge>>()
-                    {
-                        badge.clear();
-                    }
-                }
-                _ => {}
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
             }
+            tauri::WindowEvent::Focused(true) => {
+                if let Some(badge) = window
+                    .app_handle()
+                    .try_state::<Arc<crate::badge::DockBadge>>()
+                {
+                    badge.clear();
+                }
+            }
+            _ => {}
         })
         .build(context)
         .expect("error while building tauri application")
@@ -3576,7 +3929,10 @@ mod tests {
         fs::write(user_dir.join("app.ts"), "").unwrap();
 
         let fs = LocalFileSystem;
-        let results = fs.search_files(dir.path().to_str().unwrap(), "app user", 10).await.unwrap();
+        let results = fs
+            .search_files(dir.path().to_str().unwrap(), "app user", 10)
+            .await
+            .unwrap();
 
         assert!(
             results.iter().any(|p| p.ends_with("AppUser.tsx")),
@@ -3609,7 +3965,10 @@ mod tests {
         fs::write(dir.path().join("apricot.ts"), "").unwrap();
 
         let fs = LocalFileSystem;
-        let results = fs.search_files(dir.path().to_str().unwrap(), "app", 10).await.unwrap();
+        let results = fs
+            .search_files(dir.path().to_str().unwrap(), "app", 10)
+            .await
+            .unwrap();
 
         assert!(
             results.iter().any(|p| p.ends_with("main.ts")),

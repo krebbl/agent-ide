@@ -25,7 +25,7 @@ interface ProjectStore {
   setActiveWorktree: (projectId: string, worktreeId: string) => Promise<void>;
   removeWorktree: (projectId: string, worktreePath: string, force?: boolean, deleteBranch?: boolean) => Promise<void>;
   refreshWorktrees: (projectId: string) => Promise<void>;
-  addWorktree: (projectId: string, branch: string, name: string, newBranch: boolean, baseBranch?: string, command?: string | null) => Promise<void>;
+  addWorktree: (projectId: string, branch: string, name: string, newBranch: boolean, baseBranch?: string, command?: string | null, prompt?: string, agentId?: string, model?: string | null) => Promise<Worktree | undefined>;
   cleanupMergedWorktrees: (projectId: string) => Promise<void>;
   reorderProjects: (fromIndex: number, toIndex: number) => Promise<void>;
 }
@@ -284,9 +284,24 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     }
   },
 
-  addWorktree: async (projectId: string, branch: string, name: string, newBranch: boolean, baseBranch?: string, command?: string | null) => {
-    await invoke("git_worktree_add_async", { projectId, branch, name, newBranch, baseBranch: baseBranch ?? null, command: command ?? null });
+  addWorktree: async (projectId: string, branch: string, name: string, newBranch: boolean, baseBranch?: string, command?: string | null, prompt?: string, agentId?: string, model?: string | null) => {
+    // The backend resolves an empty name (AI-generated from the prompt) and
+    // returns the final name it created.
+    const createdName = await invoke<string>("git_worktree_add_async", {
+      projectId,
+      branch,
+      name,
+      newBranch,
+      baseBranch: baseBranch ?? null,
+      command: command ?? null,
+      prompt: prompt ?? null,
+      agentId: agentId ?? null,
+      model: model ?? null,
+    });
     await get().refreshWorktrees(projectId);
+    return get()
+      .projects.find((p) => p.id === projectId)
+      ?.worktrees.find((w) => w.id === createdName);
   },
 
   removeWorktree: async (projectId: string, worktreePath: string, force = false, deleteBranch = false) => {

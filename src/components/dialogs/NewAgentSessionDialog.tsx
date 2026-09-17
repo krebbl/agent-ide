@@ -21,22 +21,6 @@ interface NewAgentSessionDialogProps {
 // catalogue in agents.rs) when more coding CLIs should be launchable.
 const SUPPORTED_AGENTS: AgentId[] = ["claude", "omp", "opencode"];
 
-function generateWorktreeName(branch: string, existingNames: string[]): string {
-  const base = branch.replace(/\//g, "-").replace(/[^a-zA-Z0-9-_]/g, "");
-  let name = base;
-  let i = 1;
-  while (existingNames.includes(name)) {
-    name = `${base}-${i}`;
-    i++;
-  }
-  return name;
-}
-
-function randomWorktreeName(): string {
-  const suffix = crypto.randomUUID().slice(0, 8);
-  return `wt-${suffix}`;
-}
-
 function worktreeLabel(w: { id: string; branch: string; path: string; isMain: boolean }): string {
   if (w.isMain) return "local";
   return w.path.split(/[\\/]/).filter(Boolean).pop() || w.id;
@@ -68,25 +52,16 @@ export default function NewAgentSessionDialog({
     prompt,
     selectedBranch,
     worktreeName,
-    worktreeNameDirty,
     createNew,
     setupCommand,
   } = draft;
 
   const project = projects.find((p) => p.id === projectId);
   const worktrees = project?.worktrees ?? [];
-  const existingNames = worktrees.map((w) => w.id);
-  const prevBranchRef = useRef(selectedBranch);
+  const prevBranchRef = useRef<string | undefined>(undefined);
 
   const existingWorktree = worktrees.find((w) => w.branch === selectedBranch);
   const willCreate = Boolean(selectedBranch) && (createNew || !existingWorktree);
-  // Auto-fill only for branches with no worktree yet. For the local/main
-  // branch or branches that already have a worktree the field stays empty
-  // and the name is generated on submit when left blank.
-  const autoName = willCreate && !existingWorktree;
-  const effectiveWorktreeName = autoName
-    ? worktreeName || generateWorktreeName(selectedBranch, existingNames)
-    : worktreeName;
 
   useEffect(() => {
     // Installed agents are loaded once at app startup (main.tsx) and cached
@@ -171,18 +146,14 @@ export default function NewAgentSessionDialog({
       .finally(() => setBranchesLoading(false));
   }, [projectId]);
 
+  // Fires on mount too (ref starts undefined): whenever the branch selection
+  // is (re)established, default to creating a new worktree and clear the
+  // name so the backend regenerates it.
   useEffect(() => {
     if (prevBranchRef.current === selectedBranch) return;
     prevBranchRef.current = selectedBranch;
-    updateDraft({ createNew: false, worktreeNameDirty: false, worktreeName: "" });
+    updateDraft({ createNew: true, worktreeNameDirty: false, worktreeName: "" });
   }, [selectedBranch]);
-
-  useEffect(() => {
-    if (autoName && !worktreeNameDirty) {
-      updateDraft({ worktreeName: generateWorktreeName(selectedBranch, existingNames) });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBranch, autoName, worktreeNameDirty, existingNames]);
 
   const agentOptions = agents.map((a) => ({
     value: a.id,
@@ -233,29 +204,35 @@ export default function NewAgentSessionDialog({
 
       let worktreeId: string;
       if (willCreate) {
-        // Empty name falls back to a random name; when the branch already
-        // has a worktree this becomes the derived branch.
-        const finalName = effectiveWorktreeName.trim() || randomWorktreeName();
-        if (existingWorktree) {
-          // Branch is checked out elsewhere; git forbids a second checkout of
-          // the same branch, so derive a new branch from it.
-          await addWorktree(
-            projectId,
-            finalName,
-            finalName,
-            false,
-            selectedBranch,
-            setupCommand,
-          );
-        } else {
-          await addWorktree(projectId, selectedBranch, finalName, false, undefined, setupCommand);
-        }
-        const refreshed = useProjectStore.getState().projects.find((p) => p.id === projectId);
-        const created = refreshed?.worktrees.find((w) => w.id === finalName);
+        // Empty name lets the backend derive one from the prompt via the
+        // selected agent (branch-derived fallback on failure). When the
+        // branch already has a worktree this becomes the derived branch.
+        const finalName = worktreeName.trim();
+        const created = existingWorktree
+          ? await addWorktree(
+              projectId,
+              finalName,
+              finalName,
+              false,
+              selectedBranch,
+              setupCommand,
+              prompt.trim(),
+              selectedAgentId,
+              selectedModel || null,
+            )
+          : await addWorktree(
+              projectId,
+              selectedBranch,
+              finalName,
+              false,
+              undefined,
+              setupCommand,
+              prompt.trim(),
+              selectedAgentId,
+              selectedModel || null,
+            );
         if (!created) {
-          throw new Error(
-            `Worktree "${finalName}" was not found after creation`,
-          );
+          throw new Error("Worktree was not found after creation");
         }
         worktreeId = created.id;
       } else {
@@ -314,7 +291,7 @@ export default function NewAgentSessionDialog({
             {loading ? (
               <span className="flex items-center gap-2">
                 <Loader2 size={14} className="animate-spin" />
-                Starting...
+                {willCreate && !worktreeName.trim() ? "Generating name..." : "Starting..."}
               </span>
             ) : (
               "Start Session"
@@ -405,7 +382,7 @@ export default function NewAgentSessionDialog({
                       });
                     }}
                     pattern="[a-zA-Z0-9_-]*"
-                    placeholder="random name"
+                    placeholder="auto-generated from prompt"
                     className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
                   />
                 </div>
@@ -435,7 +412,7 @@ export default function NewAgentSessionDialog({
                     });
                   }}
                   pattern="[a-zA-Z0-9_-]*"
-                  placeholder="random name"
+                  placeholder="auto-generated from prompt"
                   className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
                 />
               </div>
