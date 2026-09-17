@@ -176,12 +176,14 @@ export interface JiraComment {
   author: string;
   created: string;
   body: string;
+  bodyHtml: string | null;
 }
 
 export interface JiraIssue {
   key: string;
   summary: string;
   description: string | null;
+  descriptionHtml: string | null;
   status: string;
   issueType: string;
   priority: string | null;

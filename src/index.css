@@ -60,3 +60,53 @@ html, body, #root {
 .animate-blink {
   animation: blink 0.8s ease-in-out infinite;
 }
+
+.jira-rendered h1, .jira-rendered h2, .jira-rendered h3,
+.jira-rendered h4, .jira-rendered h5, .jira-rendered h6 {
+  margin: 0.5em 0 0.25em;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.jira-rendered h1 { font-size: 1.25em; }
+.jira-rendered h2 { font-size: 1.15em; }
+.jira-rendered h3 { font-size: 1.05em; }
+.jira-rendered p { margin: 0.25em 0; }
+.jira-rendered ul, .jira-rendered ol { margin: 0.25em 0; padding-left: 1.4em; }
+.jira-rendered ul { list-style: disc; }
+.jira-rendered ol { list-style: decimal; }
+.jira-rendered li { margin: 0.1em 0; }
+.jira-rendered a { color: var(--color-blue); text-decoration: underline; }
+.jira-rendered code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.95em;
+  background: var(--color-surface0);
+  border-radius: 3px;
+  padding: 0.05em 0.3em;
+}
+.jira-rendered pre {
+  background: var(--color-crust);
+  border: 1px solid var(--color-surface0);
+  border-radius: 4px;
+  padding: 0.5em;
+  margin: 0.4em 0;
+  overflow-x: auto;
+}
+.jira-rendered pre code { background: none; padding: 0; }
+.jira-rendered blockquote {
+  border-left: 3px solid var(--color-surface1);
+  margin: 0.4em 0;
+  padding: 0.1em 0.75em;
+  color: var(--color-subtext0);
+}
+.jira-rendered table {
+  border-collapse: collapse;
+  margin: 0.4em 0;
+  max-width: 100%;
+}
+.jira-rendered th, .jira-rendered td {
+  border: 1px solid var(--color-surface1);
+  padding: 0.25em 0.5em;
+  text-align: left;
+}
+.jira-rendered th { background: var(--color-surface0); font-weight: 600; }
+.jira-rendered hr { border: none; border-top: 1px solid var(--color-surface0); margin: 0.6em 0; }

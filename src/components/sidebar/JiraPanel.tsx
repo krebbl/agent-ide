@@ -5,6 +5,7 @@ import { useJiraStore } from "../../stores/jiraStore";
 import { useUiStore } from "../../stores/uiStore";
 import { JiraIssue } from "../../types";
 import { openUrl } from "../../utils/openUrl";
+import { sanitizeHtml } from "../../utils/sanitizeHtml";
 
 function formatDateTime(iso: string): string {
   if (!iso) return "";
@@ -72,10 +73,17 @@ function IssueView({ issue }: { issue: JiraIssue }) {
         <MetaRow label="Created" value={formatDateTime(issue.created)} />
         <MetaRow label="Updated" value={formatDateTime(issue.updated)} />
       </div>
-      {issue.description && (
-        <div className="whitespace-pre-wrap break-words rounded border border-[var(--color-surface0)] bg-[var(--color-mantle)] p-2 text-xs leading-relaxed text-[var(--color-subtext1)]">
-          {issue.description}
-        </div>
+      {issue.descriptionHtml ? (
+        <div
+          className="jira-rendered rounded border border-[var(--color-surface0)] bg-[var(--color-mantle)] p-2 text-xs leading-relaxed text-[var(--color-subtext1)]"
+          dangerouslySetInnerHTML={{ __html: sanitizeHtml(issue.descriptionHtml) }}
+        />
+      ) : (
+        issue.description && (
+          <div className="whitespace-pre-wrap break-words rounded border border-[var(--color-surface0)] bg-[var(--color-mantle)] p-2 text-xs leading-relaxed text-[var(--color-subtext1)]">
+            {issue.description}
+          </div>
+        )
       )}
       <div className="flex items-center gap-1.5 border-t border-[var(--color-surface0)] pt-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-subtext1)]">
         Comments ({issue.comments.length})
@@ -90,9 +98,16 @@ function IssueView({ issue }: { issue: JiraIssue }) {
               <span className="font-medium text-[var(--color-subtext1)]">{comment.author}</span>
               <span className="text-[var(--color-overlay1)]">{formatDateTime(comment.created)}</span>
             </div>
-            <div className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-[var(--color-text)]">
-              {comment.body}
-            </div>
+            {comment.bodyHtml ? (
+              <div
+                className="jira-rendered mt-1 text-xs leading-relaxed text-[var(--color-text)]"
+                dangerouslySetInnerHTML={{ __html: sanitizeHtml(comment.bodyHtml) }}
+              />
+            ) : (
+              <div className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-[var(--color-text)]">
+                {comment.body}
+              </div>
+            )}
           </div>
         ))}
       </div>

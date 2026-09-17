@@ -12,6 +12,7 @@ pub struct JiraComment {
     pub author: String,
     pub created: String,
     pub body: String,
+    pub body_html: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +21,7 @@ pub struct JiraIssue {
     pub key: String,
     pub summary: String,
     pub description: Option<String>,
+    pub description_html: Option<String>,
     pub status: String,
     pub issue_type: String,
     pub priority: Option<String>,
@@ -131,15 +133,25 @@ fn parse_issue(key: &str, site_url: &str, payload: &serde_json::Value) -> Result
         .ok_or_else(|| format!("Unexpected Jira response for {}", key))?;
 
     let empty = Vec::new();
+    let rendered_comments = payload
+        .pointer("/renderedFields/comment/comments")
+        .and_then(|c| c.as_array())
+        .cloned()
+        .unwrap_or_default();
     let comments = fields
         .pointer("/comment/comments")
         .and_then(|c| c.as_array())
         .unwrap_or(&empty)
         .iter()
-        .map(|c| JiraComment {
+        .enumerate()
+        .map(|(i, c)| JiraComment {
             author: json_str(c, "/author/displayName").unwrap_or_else(|| "Unknown".to_string()),
             created: json_str(c, "/created").unwrap_or_default(),
             body: json_str(c, "/body").unwrap_or_default(),
+            body_html: rendered_comments
+                .get(i)
+                .and_then(|rc| json_str(rc, "/body"))
+                .filter(|s| !s.trim().is_empty()),
         })
         .collect();
 
@@ -157,6 +169,8 @@ fn parse_issue(key: &str, site_url: &str, payload: &serde_json::Value) -> Result
         key: key.to_string(),
         summary: json_str(fields, "/summary").unwrap_or_default(),
         description: json_str(fields, "/description").filter(|s| !s.trim().is_empty()),
+        description_html: json_str(payload, "/renderedFields/description")
+            .filter(|s| !s.trim().is_empty()),
         status: json_str(fields, "/status/name").unwrap_or_else(|| "Unknown".to_string()),
         issue_type: json_str(fields, "/issuetype/name").unwrap_or_else(|| "Unknown".to_string()),
         priority: json_str(fields, "/priority/name"),
@@ -182,7 +196,7 @@ async fn fetch_issue(
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
     let url = format!(
-        "{}/rest/api/2/issue/{}?fields=summary,description,status,issuetype,priority,assignee,reporter,labels,created,updated,comment",
+        "{}/rest/api/2/issue/{}?fields=summary,description,status,issuetype,priority,assignee,reporter,labels,created,updated,comment&expand=renderedFields",
         site_url, key
     );
     let resp = client
@@ -297,11 +311,16 @@ pub async fn cmd_jira_issue_for_branch(
     };
 
     match fetch_issue(&config.site_url, &config.email, &token, &ticket_key).await {
-        Ok(issue) => Ok(JiraIssueResult {
-            issue: Some(issue),
-            ticket_key: Some(ticket_key),
-            error: None,
-        }),
+        Ok(issue) => {
+            if issue.description_html.is_none() {
+                tracing::debug!("Jira: no rendered fields returned for {}", ticket_key);
+            }
+            Ok(JiraIssueResult {
+                issue: Some(issue),
+                ticket_key: Some(ticket_key),
+                error: None,
+            })
+        }
         Err(e) => Ok(JiraIssueResult {
             issue: None,
             ticket_key: Some(ticket_key),
