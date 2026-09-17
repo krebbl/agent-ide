@@ -4,7 +4,6 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { usePrStore } from "../../stores/prStore";
-import PrBadge from "../ui/PrBadge";
 import AddProjectDialog from "../dialogs/AddProjectDialog";
 import AddWorktreeDialog from "../dialogs/AddWorktreeDialog";
 import NewAgentSessionDialog from "../dialogs/NewAgentSessionDialog";
@@ -751,16 +750,24 @@ export default function LeftSidebar() {
   const {
     projects,
     activeProjectId,
+    selectedWorktreeId,
     expandedProjectIds,
     setActiveProject,
     loadProjects,
     removeProject,
+    removeWorktree,
     toggleProjectExpanded,
     reorderProjects,
+    setActiveWorktree,
   } = useProjectStore();
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [dragActiveId, setDragActiveId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [showAgentDialog, setShowAgentDialog] = useState(false);
+  const [agentWorktree, setAgentWorktree] = useState<{
+    project: Project;
+    worktree: Worktree;
+  } | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } })
@@ -833,61 +840,33 @@ export default function LeftSidebar() {
   }, []);
 
   const sessions = useTerminalStore.getState().sessions;
-  const prCache = usePrStore((s) => s.cache);
-  const projectNameById = new Map(projects.map((p) => [p.id, p.name]));
-  const branchById = new Map(
-    projects.flatMap((p) =>
-      p.worktrees.map((w) => [`${p.id}:${w.id}`, w.branch]),
-    ),
-  );
-
-  // React to new busy/agent store updates AND to time passing: a session
-  // that stays busy crosses the long-running threshold without any store
-  // mutation, so re-evaluate while any candidate session exists.
-  useEffect(() => {
-    const id = setInterval(() => {
-      const s = useTerminalStore.getState().sessions;
-      const hasCandidate = s.some(
-        (x) => x.projectId && (x.agentActive || x.isBusy || x.processRunning),
-      );
-      if (hasCandidate) setSessionTick((t) => t + 1);
-    }, 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  const activeSessions = sessions
-    .filter((s) => s.projectId)
-    .filter((s) => {
-      if (s.agentName == null) return false;
-      return (
-        s.agentActive ||
-        s.isBusy === true ||
-        s.processRunning === true ||
-        s.needsInput
-      );
-    })
-    .sort((a, b) => {
-      const aBranch =
-        branchById.get(`${a.projectId}:${a.worktreeId}`) ?? "";
-      const bBranch =
-        branchById.get(`${b.projectId}:${b.worktreeId}`) ?? "";
-      return (
-        aBranch.localeCompare(bBranch) ||
-        (a.createdAt ?? 0) - (b.createdAt ?? 0) ||
-        a.title.localeCompare(b.title)
-      );
-    });
   void sessionTick;
 
-  // Active agents may live in collapsed projects whose PR cache was never
+  // One entry per worktree with at least one open agent or terminal session.
+  // Presence in the store means the session is open; removeSession drops it.
+  const activeWorktrees = (() => {
+    const seen = new Set<string>();
+    const entries: { project: Project; worktree: Worktree }[] = [];
+    for (const s of sessions) {
+      if (!s.projectId || !s.worktreeId) continue;
+      const key = `${s.projectId}:${s.worktreeId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const project = projects.find((p) => p.id === s.projectId);
+      const worktree = project?.worktrees.find((w) => w.id === s.worktreeId);
+      if (project && worktree) entries.push({ project, worktree });
+    }
+    return entries.sort(
+      (a, b) =>
+        a.worktree.branch.localeCompare(b.worktree.branch) ||
+        a.project.name.localeCompare(b.project.name),
+    );
+  })();
+
+  // Active worktrees may live in collapsed projects whose PR cache was never
   // populated by ProjectItem. Ensure PR info exists for their branches.
-  const prFetchKey = activeSessions
-    .map((s) => {
-      if (!s.projectId) return "";
-      const branch = branchById.get(`${s.projectId}:${s.worktreeId}`);
-      return branch ? `${s.projectId}:${branch}` : "";
-    })
-    .filter(Boolean)
+  const prFetchKey = activeWorktrees
+    .map(({ project, worktree }) => `${project.id}:${worktree.branch}`)
     .sort()
     .join("|");
   useEffect(() => {
@@ -920,69 +899,41 @@ export default function LeftSidebar() {
       onDragEnd={handleDragEnd}
     >
       <div className="flex h-full flex-col">
-        {activeSessions.length > 0 ? (
+        {activeWorktrees.length > 0 ? (
           <div className="border-b border-[var(--color-surface0)] py-1">
             <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-subtext1)]">
               Active
             </div>
-            {activeSessions.map((session) => {
-              const projectName =
-                projectNameById.get(session.projectId ?? "") ?? "";
-              const isAgent =
-                session.agentActive === true || session.agentName != null;
-              const branch =
-                branchById.get(
-                  `${session.projectId}:${session.worktreeId}`,
-                ) ?? "";
-              const pr = branch
-                ? prCache[`${session.projectId}:${branch}`]?.pr
-                : undefined;
-              return (
-                <button
-                  key={`agent:${session.id}`}
-                  onClick={() => {
-                    const tStore = useTerminalStore.getState();
-                    if (session.hasUnseenActivity) {
-                      tStore.markSessionSeen(session.id);
-                    }
-                    tStore.focusSession(session.id);
-                  }}
-                  className="flex w-full items-start gap-2 px-3 py-1 text-left text-xs text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/50"
-                  title={`${isAgent ? session.agentName ?? "agent" : "terminal"} — ${session.title}${projectName ? ` — ${projectName}` : ""}${session.isBusy || session.processRunning ? " (busy)" : ""}`}
-                >
-                  {isAgent ? (
-                    <Bot
-                      size={10}
-                      className={`mt-0.5 shrink-0 ${
-                        session.isBusy || session.processRunning
-                          ? "animate-blink text-[var(--color-green)]"
-                          : session.hasUnseenActivity
-                            ? "text-[var(--color-green)]"
-                            : "text-[var(--color-mauve)]"
-                      }`}
-                    />
-                  ) : (
-                    <Terminal size={10} className={`mt-0.5 shrink-0 ${session.isBusy || session.processRunning ? "text-[var(--color-blue)]" : "text-[var(--color-overlay1)]"}`} />
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span className="flex w-full items-center gap-2">
-                      <span className="truncate">{session.title}</span>
-                      {projectName && (
-                        <span className="shrink-0 text-[10px] text-[var(--color-overlay1)]">
-                          {projectName}
-                        </span>
-                      )}
-                    </span>
-                    {branch && (
-                      <span className="flex w-full items-center gap-1.5 text-[10px] text-[var(--color-overlay1)]">
-                        <span className="truncate">{branch}</span>
-                        {pr && <PrBadge pr={pr} />}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              );
-            })}
+            {activeWorktrees.map(({ project, worktree: wt }) => (
+              <WorktreeItem
+                key={`active:${project.id}:${wt.id}`}
+                worktree={wt}
+                projectId={project.id}
+                projectType={project.type}
+                isActive={
+                  wt.id === selectedWorktreeId && project.id === activeProjectId
+                }
+                onActivate={() => {
+                  const tStore = useTerminalStore.getState();
+                  tStore.sessions
+                    .filter(
+                      (s) =>
+                        s.projectId === project.id &&
+                        s.worktreeId === wt.id &&
+                        s.hasUnseenActivity,
+                    )
+                    .forEach((s) => tStore.markSessionSeen(s.id));
+                  setActiveWorktree(project.id, wt.id);
+                }}
+                onRemove={(force, deleteBranch) =>
+                  removeWorktree(project.id, wt.path, force, deleteBranch)
+                }
+                onStartAgent={() => {
+                  setAgentWorktree({ project, worktree: wt });
+                  setShowAgentDialog(true);
+                }}
+              />
+            ))}
           </div>
         ) : null}
         <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-[var(--color-surface0)] px-3 min-w-0">
@@ -1041,6 +992,13 @@ export default function LeftSidebar() {
         </SortableContext>
 
         {showAddDialog && <AddProjectDialog onClose={() => setShowAddDialog(false)} />}
+        {showAgentDialog && agentWorktree && (
+          <NewAgentSessionDialog
+            projectId={agentWorktree.project.id}
+            initialWorktreeId={agentWorktree.worktree.id}
+            onClose={() => setShowAgentDialog(false)}
+          />
+        )}
       </div>
     </DndContext>
   );

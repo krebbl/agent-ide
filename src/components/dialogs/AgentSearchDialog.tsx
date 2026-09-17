@@ -36,8 +36,7 @@ export default function AgentSearchDialog({
     [projects],
   );
 
-  // Same visibility rule as the Active section in LeftSidebar: a session
-  // counts as an active agent session when an agent was started in it and it
+  // An agent session counts as active when an agent was started in it and it
   // is still alive (running, busy, or waiting for input). Most recently used
   // first, so the default selection ("previous session") is the entry after
   // the currently focused one.
