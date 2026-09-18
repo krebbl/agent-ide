@@ -581,14 +581,12 @@ function ProjectItem({
   isExpanded,
   onToggle,
   onSelect,
-  onRemove,
 }: {
   project: Project;
   isActive: boolean;
   isExpanded: boolean;
   onToggle: () => void;
   onSelect: () => void;
-  onRemove: () => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } =
     useSortable({ id: project.id });
@@ -800,16 +798,6 @@ function ProjectItem({
           >
             {isWorktreeLoading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
           </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onRemove();
-            }}
-            className="text-[var(--color-overlay0)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-[var(--color-red)]"
-            title="Remove project"
-          >
-            <Trash2 size={12} />
-          </button>
         </div>
       </div>
       {isExpanded && (
@@ -877,7 +865,6 @@ export default function LeftSidebar() {
     expandedProjectIds,
     setActiveProject,
     loadProjects,
-    removeProject,
     removeWorktree,
     toggleProjectExpanded,
     reorderProjects,
@@ -1103,7 +1090,6 @@ export default function LeftSidebar() {
                       isExpanded={expandedProjectIds.has(project.id)}
                       onToggle={() => handleToggle(project.id)}
                       onSelect={() => setActiveProject(project.id)}
-                      onRemove={() => removeProject(project.id)}
                     />
                   </div>
                   {showBelow && (

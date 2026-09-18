@@ -22,12 +22,14 @@ export default function ProjectSettingsDialog() {
   const config = useJiraStore((s) => (projectId ? s.configs[projectId] : undefined));
   const saveConfig = useJiraStore((s) => s.saveConfig);
   const updateProject = useProjectStore((s) => s.updateProject);
+  const removeProject = useProjectStore((s) => s.removeProject);
 
   const [siteUrl, setSiteUrl] = useState(config?.siteUrl ?? project?.jiraConfig?.siteUrl ?? "");
   const [email, setEmail] = useState(config?.email ?? project?.jiraConfig?.email ?? "");
   const [apiToken, setApiToken] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   if (!projectId || !project) return null;
 
@@ -103,6 +105,25 @@ export default function ProjectSettingsDialog() {
           />
         </label>
         {error && <div className="text-xs text-[var(--color-red)]">{error}</div>}
+      </div>
+      <div className="mt-2 flex flex-col gap-2 border-t border-[var(--color-surface0)] pt-3">
+        <SectionLabel>Danger zone</SectionLabel>
+        <p className="text-xs text-[var(--color-subtext1)]">
+          Removes the project from the list. Worktrees and files on disk are kept.
+        </p>
+        <button
+          onClick={() => {
+            if (!confirmRemove) {
+              setConfirmRemove(true);
+              return;
+            }
+            closeProjectSettings();
+            void removeProject(projectId);
+          }}
+          className="w-fit rounded bg-[var(--color-red)] px-3 py-1.5 text-xs font-medium text-[var(--color-crust)] transition-opacity hover:opacity-90"
+        >
+          {confirmRemove ? "Click again to confirm" : "Remove project"}
+        </button>
       </div>
     </Dialog>
   );
