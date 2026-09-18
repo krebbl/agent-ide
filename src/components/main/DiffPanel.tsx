@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DiffEditor } from "@monaco-editor/react";
 import {
   AlertCircle,
+  ChevronRight,
   FilePlus2,
   FileQuestion,
   GitCompare,
@@ -17,7 +18,7 @@ import { languageFromPath } from "../../stores/editorStore";
 import { useDiffStore, diffSelectionState } from "../../stores/diffStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { useUiStore } from "../../stores/uiStore";
-import type { DiffCommentSide, DiffFileStatus } from "../../types";
+import type { DiffCommentSide, DiffFileEntry, DiffFileStatus } from "../../types";
 
 const STATUS_STYLES: Record<DiffFileStatus, { color: string; label: string }> = {
   added: { color: "text-[var(--color-green)]", label: "A" },
@@ -30,6 +31,143 @@ const STATUS_STYLES: Record<DiffFileStatus, { color: string; label: string }> = 
 interface Draft {
   side: DiffCommentSide;
   line: number;
+}
+
+interface FileTreeNode {
+  name: string;
+  /** Full repo-relative path (files) or directory path (folders). */
+  path: string;
+  children: FileTreeNode[];
+  file?: DiffFileEntry;
+}
+
+function buildFileTree(files: DiffFileEntry[]): FileTreeNode[] {
+  const root: FileTreeNode[] = [];
+  const dirs = new Map<string, FileTreeNode>();
+  const ensureDir = (parts: string[], depth: number): FileTreeNode[] => {
+    let level = root;
+    let key = "";
+    for (let i = 0; i < depth; i++) {
+      key = key ? `${key}/${parts[i]}` : parts[i];
+      let node = dirs.get(key);
+      if (!node) {
+        node = { name: parts[i], path: key, children: [] };
+        dirs.set(key, node);
+        level.push(node);
+      }
+      level = node.children;
+    }
+    return level;
+  };
+  for (const file of files) {
+    const parts = file.path.split("/");
+    const level = ensureDir(parts, parts.length - 1);
+    level.push({
+      name: parts[parts.length - 1],
+      path: file.path,
+      children: [],
+      file,
+    });
+  }
+  const sort = (nodes: FileTreeNode[]) => {
+    nodes.sort((a, b) => {
+      const aDir = a.children.length > 0 ? 0 : 1;
+      const bDir = b.children.length > 0 ? 0 : 1;
+      if (aDir !== bDir) return aDir - bDir;
+      return a.name.localeCompare(b.name);
+    });
+    nodes.forEach((n) => {
+      if (n.children.length > 0) sort(n.children);
+    });
+  };
+  sort(root);
+  return root;
+}
+
+function countFiles(node: FileTreeNode): number {
+  if (node.children.length === 0) return 1;
+  return node.children.reduce((n, c) => n + countFiles(c), 0);
+}
+
+function TreeRow({
+  node,
+  depth,
+  collapsedDirs,
+  toggleDir,
+  selectedPath,
+  filesWithComments,
+  selectFile,
+}: {
+  node: FileTreeNode;
+  depth: number;
+  collapsedDirs: Set<string>;
+  toggleDir: (path: string) => void;
+  selectedPath: string | null;
+  filesWithComments: Set<string>;
+  selectFile: (path: string) => void;
+}) {
+  const indent = { paddingLeft: `${10 + depth * 12}px` };
+  if (node.children.length > 0) {
+    const collapsed = collapsedDirs.has(node.path);
+    return (
+      <div>
+        <button
+          onClick={() => toggleDir(node.path)}
+          className="flex w-full items-center gap-1 py-1.5 pr-3 text-left text-xs text-[var(--color-subtext0)] transition-colors hover:bg-[var(--color-surface0)]/60"
+          style={indent}
+        >
+          <ChevronRight
+            size={12}
+            className={`shrink-0 text-[var(--color-overlay1)] transition-transform ${collapsed ? "" : "rotate-90"}`}
+          />
+          <span className="min-w-0 flex-1 truncate">{node.name}</span>
+          <span className="shrink-0 text-[10px] text-[var(--color-overlay0)]">
+            {countFiles(node)}
+          </span>
+        </button>
+        {!collapsed &&
+          node.children.map((child) => (
+            <TreeRow
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              collapsedDirs={collapsedDirs}
+              toggleDir={toggleDir}
+              selectedPath={selectedPath}
+              filesWithComments={filesWithComments}
+              selectFile={selectFile}
+            />
+          ))}
+      </div>
+    );
+  }
+  const file = node.file;
+  if (!file) return null;
+  const style = STATUS_STYLES[file.status] ?? STATUS_STYLES.modified;
+  const isActive = file.path === selectedPath;
+  return (
+    <button
+      onClick={() => selectFile(file.path)}
+      className={`flex w-full items-center gap-2 pr-3 py-1.5 text-left text-xs transition-colors ${
+        isActive
+          ? "bg-[var(--color-surface0)] text-[var(--color-text)]"
+          : "text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/60"
+      }`}
+      style={indent}
+      title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+    >
+      <span className={`font-mono text-[10px] ${style.color}`}>{style.label}</span>
+      <span className="min-w-0 flex-1 truncate font-mono">{node.name}</span>
+      {(file.insertions > 0 || file.deletions > 0) && (
+        <span className="shrink-0 font-mono text-[10px] text-[var(--color-overlay0)]">
+          +{file.insertions} −{file.deletions}
+        </span>
+      )}
+      {filesWithComments.has(file.path) && (
+        <MessageSquarePlus size={11} className="shrink-0 text-[var(--color-blue)]" />
+      )}
+    </button>
+  );
 }
 
 export default function DiffPanel() {
@@ -87,6 +225,23 @@ export default function DiffPanel() {
 
   const content = selectedPath ? diffCache[selectedPath] : undefined;
   const fileComments = comments.filter((c) => c.file === selectedPath);
+  const filesWithComments = useMemo(
+    () => new Set(comments.map((c) => c.file)),
+    [comments],
+  );
+  const fileTree = useMemo(() => buildFileTree(files), [files]);
+  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(() => new Set());
+  const toggleDir = (path: string) => {
+    setCollapsedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  };
 
   const applyDecorations = useCallback(() => {
     const editor = diffEditorRef.current;
@@ -150,8 +305,6 @@ export default function DiffPanel() {
       setSaving(false);
     }
   };
-
-  const fileName = (path: string) => path.split("/").pop() ?? path;
 
   return (
     <div className="flex h-full w-full flex-col bg-[var(--color-base)]">
@@ -226,33 +379,18 @@ export default function DiffPanel() {
                 : "No uncommitted changes"}
             </p>
           )}
-          {files.map((f) => {
-            const style = STATUS_STYLES[f.status] ?? STATUS_STYLES.modified;
-            const isActive = f.path === selectedPath;
-            return (
-              <button
-                key={f.path}
-                onClick={() => selectFile(f.path).catch(() => {})}
-                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
-                  isActive
-                    ? "bg-[var(--color-surface0)] text-[var(--color-text)]"
-                    : "text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]/60"
-                }`}
-                title={f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}
-              >
-                <span className={`font-mono text-[10px] ${style.color}`}>{style.label}</span>
-                <span className="min-w-0 flex-1 truncate font-mono">{fileName(f.path)}</span>
-                {(f.insertions > 0 || f.deletions > 0) && (
-                  <span className="shrink-0 font-mono text-[10px] text-[var(--color-overlay0)]">
-                    +{f.insertions} −{f.deletions}
-                  </span>
-                )}
-                {comments.some((c) => c.file === f.path) && (
-                  <MessageSquarePlus size={11} className="shrink-0 text-[var(--color-blue)]" />
-                )}
-              </button>
-            );
-          })}
+          {fileTree.map((node) => (
+            <TreeRow
+              key={node.path}
+              node={node}
+              depth={0}
+              collapsedDirs={collapsedDirs}
+              toggleDir={toggleDir}
+              selectedPath={selectedPath}
+              filesWithComments={filesWithComments}
+              selectFile={selectFile}
+            />
+          ))}
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col">
