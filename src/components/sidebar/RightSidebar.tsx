@@ -7,6 +7,10 @@ import FileTree from "./FileTree";
 import JiraPanel from "./JiraPanel";
 import LoadingOverlay from "../ui/LoadingOverlay";
 import { useUiStore } from "../../stores/uiStore";
+import { usePrStore } from "../../stores/prStore";
+import { GitPullRequest } from "lucide-react";
+import { openUrl } from "../../utils/openUrl";
+import { prChangesUrl } from "../../utils/prUrl";
 
 export default function RightSidebar() {
   const { setRoot } = useFileTreeStore();
@@ -19,6 +23,28 @@ export default function RightSidebar() {
   const worktreeLoading = useUiStore((s) => s.worktreeLoading);
   const rightSidebarTab = useUiStore((s) => s.rightSidebarTab);
   const setRightSidebarTab = useUiStore((s) => s.setRightSidebarTab);
+
+  const prProject = activeProjectId
+    ? projects.find((p) => p.id === activeProjectId)
+    : projects.find((p) => p.worktrees.length > 0);
+  const prWorktree = prProject
+    ? prProject.activeWorktreeId
+      ? prProject.worktrees.find((w) => w.id === prProject.activeWorktreeId)
+      : prProject.worktrees.find((w) => w.isMain)
+    : undefined;
+  const prEntry = usePrStore((s) =>
+    prProject && prWorktree ? s.cache[`${prProject.id}:${prWorktree.branch}`] : undefined,
+  );
+  const changesUrl = prEntry?.pr ? prChangesUrl(prEntry.pr) : null;
+  const prProjectId = prProject?.id;
+  const prBranch = prWorktree?.branch;
+  const prProjectType = prProject?.type;
+
+  useEffect(() => {
+    if (!prProjectId || !prBranch) return;
+    if (prProjectType === "ssh" && connectionStatus !== "connected") return;
+    void usePrStore.getState().fetchPrForBranch(prProjectId, prBranch);
+  }, [prProjectId, prBranch, prProjectType, connectionStatus]);
 
   useEffect(() => {
     // Use activeProjectId to select the correct project
@@ -87,6 +113,25 @@ export default function RightSidebar() {
             {tab.label}
           </button>
         ))}
+        <button
+          onClick={() => {
+            if (!changesUrl) return;
+            void openUrl(changesUrl).catch(() => {});
+          }}
+          disabled={!changesUrl}
+          className={`ml-auto transition-colors ${
+            changesUrl
+              ? "text-[var(--color-subtext1)] hover:text-[var(--color-text)]"
+              : "cursor-not-allowed text-[var(--color-overlay0)]"
+          }`}
+          title={
+            prEntry?.pr
+              ? `Open PR changes (${prEntry.pr.provider})`
+              : "No pull request for this branch"
+          }
+        >
+          <GitPullRequest size={14} />
+        </button>
       </div>
       <div
         className="relative flex-1 overflow-hidden"
