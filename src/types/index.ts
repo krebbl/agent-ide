@@ -1,5 +1,44 @@
 export type ProjectType = "local" | "ssh";
 
+export type DiffFileStatus =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "conflicted";
+
+export interface DiffFileEntry {
+  path: string;
+  oldPath: string | null;
+  status: DiffFileStatus;
+  insertions: number;
+  deletions: number;
+}
+
+export interface DiffFileContent {
+  path: string;
+  base: string | null;
+  modified: string | null;
+  binary: boolean;
+}
+
+export type DiffCommentSide = "base" | "modified";
+
+export interface DiffComment {
+  id: string;
+  projectId: string;
+  branch: string;
+  file: string;
+  side: DiffCommentSide;
+  line: number;
+  anchorHash: string;
+  body: string;
+  createdAt: number;
+  updatedAt: number;
+  resolvedLine: number | null;
+  orphan: boolean;
+}
+
 export interface LocalConnection {
   type: "local";
   path: string;

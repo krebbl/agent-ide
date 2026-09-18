@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Bot, Terminal, FolderOpen, Copy, CopyCheck, Pencil, AlertCircle, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge, BrushCleaning, Settings } from "lucide-react";
+import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, GitCompare, CircleDot, ArrowUp, ArrowDown, Bot, Terminal, FolderOpen, Copy, CopyCheck, Pencil, AlertCircle, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge, BrushCleaning, Settings } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
+import { useDiffStore } from "../../stores/diffStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { usePrStore } from "../../stores/prStore";
@@ -101,6 +102,11 @@ function WorktreeContextMenu({
       .getState()
       .addSession(worktree.path, projectType, projectId, worktree.id)
       .catch(() => {});
+    onClose();
+  };
+
+  const handleShowChanges = () => {
+    useDiffStore.getState().openFor(projectId, worktree.id);
     onClose();
   };
 
@@ -266,6 +272,13 @@ function WorktreeContextMenu({
       >
         <Bot size={12} />
         Start Agent Session
+      </button>
+      <button
+        onClick={handleShowChanges}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)]"
+      >
+        <GitCompare size={12} />
+        Show Changes
       </button>
       <button
         onClick={handleOpenInFileManager}

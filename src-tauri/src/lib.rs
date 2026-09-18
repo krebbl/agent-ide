@@ -3,6 +3,7 @@ mod agents;
 mod badge;
 pub mod commands;
 pub mod config;
+mod diff;
 pub mod event_bus;
 mod jira;
 pub mod lsp;
@@ -729,7 +730,7 @@ async fn sftp_remove_recursive(sftp: Arc<SftpSession>, path: &str) -> Result<(),
         .map_err(|e| format!("Failed to remove directory {}: {}", path, e))
 }
 
-async fn get_fs_provider(
+pub(crate) async fn get_fs_provider(
     project_id: &str,
     state: &AppState,
 ) -> Result<Box<dyn FileSystemProvider>, String> {
@@ -1285,7 +1286,7 @@ fn run_setup_command_local(worktree_path: &str, command: &str) -> Result<(), Str
 }
 
 /// Shell-escape a string: wrap in single quotes, escape any embedded single quotes
-fn shell_escape(s: &str) -> String {
+pub(crate) fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\"'\"'"))
 }
 
@@ -2478,6 +2479,79 @@ async fn git_worktree_list_async(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Vec<WorktreeInfo>, String> {
     crate::commands::git_worktree_list_async(state.inner().as_ref(), project_id).await
+}
+
+#[tauri::command]
+async fn git_diff_summary(
+    project_id: String,
+    worktree_path: String,
+    base_branch: Option<String>,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<crate::diff::DiffFileEntry>, String> {
+    crate::diff::cmd_git_diff_summary(state.inner().as_ref(), project_id, worktree_path, base_branch)
+        .await
+}
+
+#[tauri::command]
+async fn git_file_diff(
+    project_id: String,
+    worktree_path: String,
+    path: String,
+    base_branch: Option<String>,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<crate::diff::DiffFileContent, String> {
+    crate::diff::cmd_git_file_diff(state.inner().as_ref(), project_id, worktree_path, path, base_branch)
+        .await
+}
+
+#[tauri::command]
+async fn diff_comments_list(
+    project_id: String,
+    branch: String,
+    worktree_path: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<crate::diff::DiffComment>, String> {
+    crate::diff::cmd_diff_comments_list(state.inner().as_ref(), project_id, branch, worktree_path)
+        .await
+}
+
+#[tauri::command]
+async fn diff_comment_add(
+    project_id: String,
+    branch: String,
+    file: String,
+    side: String,
+    line: u32,
+    body: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<crate::diff::DiffComment>, String> {
+    crate::diff::cmd_diff_comment_add(
+        state.inner().as_ref(),
+        project_id,
+        branch,
+        file,
+        side,
+        line,
+        body,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn diff_comment_update(
+    comment_id: String,
+    body: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<crate::diff::DiffComment>, String> {
+    crate::diff::cmd_diff_comment_update(state.inner().as_ref(), comment_id, body).await
+}
+
+#[tauri::command]
+async fn diff_comment_delete(
+    comment_id: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<crate::diff::DiffComment>, String> {
+    crate::diff::cmd_diff_comment_delete(state.inner().as_ref(), comment_id).await
 }
 
 /// Append a short random suffix to `base` until the name is unique among
@@ -4035,6 +4109,12 @@ pub fn run() {
             git_worktree_rename_async,
             git_branches_list_async,
             git_branches_available_for_worktrees_async,
+            git_diff_summary,
+            git_file_diff,
+            diff_comments_list,
+            diff_comment_add,
+            diff_comment_update,
+            diff_comment_delete,
             ssh_agent_info,
             ssh_test_connection,
             ssh_connect,
