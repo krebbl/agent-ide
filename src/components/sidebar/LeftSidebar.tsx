@@ -753,16 +753,6 @@ function ProjectItem({
           <button
             onClick={(e) => {
               e.stopPropagation();
-              useUiStore.getState().openProjectSettings(project.id);
-            }}
-            className="text-[var(--color-overlay0)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-[var(--color-text)]"
-            title="Project settings"
-          >
-            <Settings size={12} />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
               setShowAddDialog(true);
             }}
             className="text-[var(--color-overlay0)] hover:text-[var(--color-blue)]"
@@ -797,6 +787,16 @@ function ProjectItem({
             title="Refresh worktrees"
           >
             {isWorktreeLoading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              useUiStore.getState().openProjectSettings(project.id);
+            }}
+            className="text-[var(--color-overlay0)] hover:text-[var(--color-text)]"
+            title="Project settings"
+          >
+            <Settings size={12} />
           </button>
         </div>
       </div>
