@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Bot, Terminal, FolderOpen, Copy, CopyCheck, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge, BrushCleaning, Settings } from "lucide-react";
+import { FolderPlus, ChevronRight, ChevronDown, Trash2, Loader2, GitBranch, CircleDot, ArrowUp, ArrowDown, Bot, Terminal, FolderOpen, Copy, CopyCheck, Pencil, AlertCircle, RefreshCw, Plus, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, GitMerge, BrushCleaning, Settings } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import { useTerminalStore } from "../../stores/terminalStore";
@@ -46,6 +46,32 @@ function WorktreeContextMenu({
   const [deleteBranch, setDeleteBranch] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [showRename, setShowRename] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  const currentName = worktree.isMain
+    ? "local"
+    : worktree.path.split(/[\\/]/).pop() || worktree.id;
+
+  const handleRename = async () => {
+    const name = renameValue.trim();
+    if (!name || name === currentName) {
+      onClose();
+      return;
+    }
+    setRenaming(true);
+    setRenameError(null);
+    try {
+      await useProjectStore.getState().renameWorktree(projectId, worktree.path, name);
+      onClose();
+    } catch (e) {
+      setRenameError(String(e));
+    } finally {
+      setRenaming(false);
+    }
+  };
 
   const handleRemove = async (force: boolean) => {
     setRemoving(true);
@@ -82,6 +108,78 @@ function WorktreeContextMenu({
     // TODO: open file manager at worktree.path
     onClose();
   };
+
+  if (showRename) {
+    return (
+      <Dialog
+        title="Rename Worktree"
+        icon={<Pencil size={16} className="text-[var(--color-blue)]" />}
+        width="480px"
+        onClose={onClose}
+        onCmdEnter={handleRename}
+        footer={
+          <>
+            <button
+              onClick={onClose}
+              className="rounded-md px-4 py-2 text-sm text-[var(--color-overlay1)] hover:bg-[var(--color-surface0)]"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleRename}
+              disabled={renaming || !renameValue.trim()}
+              className="rounded-md bg-[var(--color-blue)] px-4 py-2 text-sm font-medium text-[var(--color-crust)] transition-colors hover:bg-[var(--color-blue)]/80 disabled:opacity-50"
+            >
+              {renaming ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 size={14} className="animate-spin" />
+                  Renaming...
+                </span>
+              ) : (
+                "Rename"
+              )}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">
+              Path
+            </label>
+            <p
+              className="truncate font-mono text-xs text-[var(--color-overlay1)]"
+              title={worktree.path}
+            >
+              {worktree.path}
+            </p>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">
+              Worktree Name
+            </label>
+            <input
+              type="text"
+              autoFocus
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onFocus={(e) => e.target.select()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !renaming) handleRename();
+              }}
+              className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] focus:border-[var(--color-blue)] focus:outline-none"
+            />
+            {renameError && (
+              <div className="mt-1.5 flex items-center gap-1.5 text-xs text-[var(--color-peach)]">
+                <AlertCircle size={12} />
+                {renameError}
+              </div>
+            )}
+          </div>
+        </div>
+      </Dialog>
+    );
+  }
 
   if (showConfirm) {
     return (
@@ -182,6 +280,19 @@ function WorktreeContextMenu({
       >
         {copied ? <CopyCheck size={12} className="text-[var(--color-green)]" /> : <Copy size={12} />}
         {copied ? "Copied!" : "Copy Path"}
+      </button>
+      <button
+        onClick={() => {
+          setRenameValue(currentName);
+          setRenameError(null);
+          setShowRename(true);
+        }}
+        disabled={worktree.isMain}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-[var(--color-subtext0)] hover:bg-[var(--color-surface0)] disabled:opacity-50 disabled:cursor-not-allowed"
+        title={worktree.isMain ? "Cannot rename the main worktree" : undefined}
+      >
+        <Pencil size={12} />
+        Rename Worktree
       </button>
       <div className="my-1 border-t border-[var(--color-surface0)]" />
       <div className="relative group/remove">

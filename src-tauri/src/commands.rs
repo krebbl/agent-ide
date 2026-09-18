@@ -17,6 +17,7 @@ pub use crate::{
     cmd_git_worktree_list as git_worktree_list,
     cmd_git_worktree_list_async as git_worktree_list_async,
     cmd_git_worktree_remove_async as git_worktree_remove_async,
+    cmd_git_worktree_rename_async as git_worktree_rename_async,
     cmd_list_agent_models as list_agent_models, cmd_list_local_dir as list_local_dir,
     cmd_load_editor_tabs as load_editor_tabs, cmd_load_expanded_projects as load_expanded_projects,
     cmd_load_projects as load_projects, cmd_save_editor_tabs as save_editor_tabs,
@@ -138,6 +139,9 @@ pub async fn dispatch(state: &AppState, command: &str, payload: Value) -> Result
         }
         "git_worktree_remove_async" => {
             cmd_state!(GitWorktreeRemoveAsyncReq, git_worktree_remove_async, [project_id: String, worktree_path: String, force: Option<bool>, delete_branch: Option<bool>])
+        }
+        "git_worktree_rename_async" => {
+            cmd_state!(GitWorktreeRenameAsyncReq, git_worktree_rename_async, [project_id: String, worktree_path: String, new_name: String])
         }
         "git_branches_list_async" => {
             cmd_state!(GitBranchesListAsyncReq, git_branches_list_async, [project_id: String])

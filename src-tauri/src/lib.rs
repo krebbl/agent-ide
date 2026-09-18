@@ -1477,6 +1477,86 @@ fn deduplicate_worktree_ids(worktrees: &mut Vec<WorktreeInfo>) {
 }
 
 #[cfg(test)]
+mod worktree_rename_tests {
+    use super::*;
+
+    fn run_git(dir: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("failed to run git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn temp_repo() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "agent-ide-rename-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        run_git(&dir, &["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("file.txt"), "hello").unwrap();
+        run_git(&dir, &["add", "."]);
+        run_git(
+            &dir,
+            &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"],
+        );
+        dir
+    }
+
+    #[test]
+    fn rename_worktree_local_moves_directory() {
+        let repo = temp_repo();
+        let old_path = compute_worktree_path(repo.to_str().unwrap(), "wt-old").unwrap();
+        run_git(&repo, &["worktree", "add", "-b", "feat", &old_path]);
+
+        let new_path = rename_worktree_local(repo.to_str().unwrap(), &old_path, "wt-new").unwrap();
+
+        assert_eq!(
+            new_path,
+            compute_worktree_path(repo.to_str().unwrap(), "wt-new").unwrap()
+        );
+        assert!(!Path::new(&old_path).exists(), "old directory should be gone");
+        assert!(Path::new(&new_path).exists(), "new directory should exist");
+        let listing = run_git_command(repo.to_str().unwrap(), &["worktree", "list"]).unwrap();
+        assert!(listing.contains(&new_path), "worktree list should show {}", new_path);
+
+        std::fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
+    fn rename_worktree_local_rejects_bad_names() {
+        let repo = temp_repo();
+        let old_path = compute_worktree_path(repo.to_str().unwrap(), "wt").unwrap();
+        run_git(&repo, &["worktree", "add", "-b", "feat", &old_path]);
+
+        assert!(rename_worktree_local(repo.to_str().unwrap(), &old_path, "a/b").is_err());
+        assert!(rename_worktree_local(repo.to_str().unwrap(), &old_path, "  ").is_err());
+        assert!(rename_worktree_local(repo.to_str().unwrap(), &old_path, "..").is_err());
+        // Name unchanged → the directory still exists at the old path.
+        assert!(Path::new(&old_path).exists());
+
+        std::fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
+    fn rename_worktree_local_rejects_main_worktree() {
+        let repo = temp_repo();
+        let result = rename_worktree_local(repo.to_str().unwrap(), repo.to_str().unwrap(), "x");
+        assert!(result.is_err(), "main worktree must not be movable");
+
+        std::fs::remove_dir_all(&repo).unwrap();
+    }
+}
+
+#[cfg(test)]
 mod worktree_id_tests {
     use super::*;
 
@@ -1748,6 +1828,40 @@ fn remove_worktree_local(
     }
 
     Ok(())
+}
+
+/// Validate a worktree rename target: trim to a single safe path segment.
+fn validate_worktree_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Worktree name cannot be empty".to_string());
+    }
+    if name == "." || name == ".." {
+        return Err(format!("Invalid worktree name '{}'", name));
+    }
+    if name.contains('/') || name.contains('\\') || name.contains('\0') {
+        return Err("Worktree name cannot contain path separators".to_string());
+    }
+    Ok(name.to_string())
+}
+
+/// Move a worktree directory with `git worktree move`, preserving the
+/// worktree's admin name (id). Returns the new worktree path.
+fn rename_worktree_local(
+    repo_path: &str,
+    worktree_path: &str,
+    new_name: &str,
+) -> Result<String, String> {
+    let new_name = validate_worktree_name(new_name)?;
+    let new_path = compute_worktree_path(repo_path, &new_name)?;
+    if new_path == worktree_path {
+        return Ok(new_path);
+    }
+    if Path::new(&new_path).exists() {
+        return Err(format!("Path '{}' already exists", new_path));
+    }
+    run_git_command(repo_path, &["worktree", "move", worktree_path, &new_path])?;
+    Ok(new_path)
 }
 
 fn list_branches_local(repo_path: &str) -> Result<Vec<BranchInfo>, String> {
@@ -2206,6 +2320,34 @@ async fn remove_worktree_ssh(
     Ok(())
 }
 
+/// Move a worktree directory on the remote host, preserving the worktree's
+/// admin name (id). Returns the new worktree path.
+async fn rename_worktree_ssh(
+    project_id: &str,
+    repo_path: &str,
+    worktree_path: &str,
+    new_name: &str,
+    state: &AppState,
+) -> Result<String, String> {
+    let new_name = validate_worktree_name(new_name)?;
+    let new_path = compute_worktree_path(repo_path, &new_name)?;
+    if new_path == worktree_path {
+        return Ok(new_path);
+    }
+    let fs = get_fs_provider(project_id, state).await?;
+    if fs.exists(&new_path).await {
+        return Err(format!("Path '{}' already exists", new_path));
+    }
+    run_git_command_ssh(
+        project_id,
+        repo_path,
+        &["worktree", "move", worktree_path, &new_path],
+        state,
+    )
+    .await?;
+    Ok(new_path)
+}
+
 async fn list_branches_ssh(
     project_id: &str,
     repo_path: &str,
@@ -2556,6 +2698,45 @@ async fn git_worktree_remove_async(
         worktree_path,
         force,
         delete_branch,
+    )
+    .await
+}
+
+pub async fn cmd_git_worktree_rename_async(
+    state: &AppState,
+    project_id: String,
+    worktree_path: String,
+    new_name: String,
+) -> Result<String, String> {
+    let projects = crate::commands::load_projects(state).await?;
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or("Project not found")?;
+
+    match &project.connection {
+        Connection::Local { path: repo_path } => {
+            rename_worktree_local(repo_path, &worktree_path, &new_name)
+        }
+        Connection::Ssh { .. } => {
+            let repo_path = get_repo_path(project);
+            rename_worktree_ssh(&project_id, &repo_path, &worktree_path, &new_name, state).await
+        }
+    }
+}
+
+#[tauri::command]
+async fn git_worktree_rename_async(
+    project_id: String,
+    worktree_path: String,
+    new_name: String,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    crate::commands::git_worktree_rename_async(
+        state.inner().as_ref(),
+        project_id,
+        worktree_path,
+        new_name,
     )
     .await
 }
@@ -3851,6 +4032,7 @@ pub fn run() {
             git_worktree_list_async,
             git_worktree_add_async,
             git_worktree_remove_async,
+            git_worktree_rename_async,
             git_branches_list_async,
             git_branches_available_for_worktrees_async,
             ssh_agent_info,

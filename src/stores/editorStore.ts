@@ -130,6 +130,7 @@ interface EditorState {
   closeFile: (path: string) => void;
   closeUnderPath: (path: string) => void;
   remapPath: (oldPath: string, newPath: string) => void;
+  renameWorktree: (projectId: string, oldPath: string, newPath: string) => void;
   closeAll: () => void;
   setActive: (path: string) => void;
   updateContent: (path: string, content: string) => void;
@@ -260,6 +261,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       ),
       activePath: s.activePath ? remap(s.activePath) : s.activePath,
     }));
+  },
+  renameWorktree: (projectId, oldPath, newPath) => {
+    const oldKey = `${projectId}:${oldPath}`;
+    const newKey = `${projectId}:${newPath}`;
+    const stored = tabsByWorktree[oldKey];
+    if (stored) {
+      const remap = (p: string) =>
+        p === oldPath || p.startsWith(oldPath + "/")
+          ? newPath + p.slice(oldPath.length)
+          : p;
+      tabsByWorktree[newKey] = {
+        openPaths: stored.openPaths.map(remap),
+        activePath: stored.activePath ? remap(stored.activePath) : null,
+      };
+      delete tabsByWorktree[oldKey];
+    }
+    if (get().worktreeKey === oldKey) {
+      set({ worktreeKey: newKey });
+      get().remapPath(oldPath, newPath);
+    }
+    schedulePersist();
   },
   openFile: async (projectId, path) => {
     const existing = get().openFiles.find((f) => f.path === path);

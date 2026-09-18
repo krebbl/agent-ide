@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { invoke, listen } from "../services/ipc";
 import { Project, Worktree } from "../types";
 import { useTerminalStore } from "./terminalStore";
+import { useEditorStore } from "./editorStore";
 import { usePrStore } from "./prStore";
 
 interface ProjectStore {
@@ -24,6 +25,7 @@ interface ProjectStore {
   applyWorktrees: (projectId: string, raw: Worktree[]) => void;
   setActiveWorktree: (projectId: string, worktreeId: string) => Promise<void>;
   removeWorktree: (projectId: string, worktreePath: string, force?: boolean, deleteBranch?: boolean) => Promise<void>;
+  renameWorktree: (projectId: string, worktreePath: string, newName: string) => Promise<string>;
   refreshWorktrees: (projectId: string) => Promise<void>;
   addWorktree: (projectId: string, branch: string, name: string, newBranch: boolean, baseBranch?: string, command?: string | null, prompt?: string, agentId?: string, model?: string | null) => Promise<Worktree | undefined>;
   cleanupMergedWorktrees: (projectId: string) => Promise<void>;
@@ -321,6 +323,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     }
 
     await get().refreshWorktrees(projectId);
+  },
+
+  renameWorktree: async (projectId, worktreePath, newName) => {
+    // The worktree id (and thus terminal sessions and editor tab keys)
+    // survives `git worktree move`; only the path changes.
+    const newPath = await invoke<string>("git_worktree_rename_async", {
+      projectId,
+      worktreePath,
+      newName,
+    });
+
+    await get().refreshWorktrees(projectId);
+    useEditorStore.getState().renameWorktree(projectId, worktreePath, newPath);
+    return newPath;
   },
 
   cleanupMergedWorktrees: async (projectId: string) => {
