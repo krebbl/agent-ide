@@ -43,7 +43,7 @@ function WorktreeContextMenu({
 }) {
   const [copied, setCopied] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
-  const [deleteBranch, setDeleteBranch] = useState(false);
+  const [deleteBranch, setDeleteBranch] = useState(true);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
   const [showRename, setShowRename] = useState(false);
@@ -183,26 +183,55 @@ function WorktreeContextMenu({
 
   if (showConfirm) {
     return (
-      <div className="fixed inset-0 z-[60]" onClick={onClose}>
-        <div
-          className="absolute z-[61] rounded-md border border-[var(--color-surface0)] bg-[var(--color-mantle)] p-3 shadow-xl"
-          onClick={(e) => e.stopPropagation()}
-          style={{ top: "50%", left: "50%", transform: "translate(-50%, -50%)" }}
-        >
-          <p className="mb-2 text-xs text-[var(--color-text)]">
-            Remove worktree <span className="font-mono">{worktree.path}</span>?
+      <Dialog
+        title="Remove Worktree"
+        icon={<Trash2 size={16} className="text-[var(--color-red)]" />}
+        width="420px"
+        danger
+        onClose={onClose}
+        footer={
+          <>
+            <button
+              onClick={() => setShowConfirm(false)}
+              className="rounded-md px-4 py-2 text-sm text-[var(--color-overlay1)] hover:bg-[var(--color-surface0)]"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => handleRemove(false)}
+              disabled={worktree.status === "dirty" || worktree.locked || removing}
+              className="rounded-md bg-[var(--color-red)]/20 px-4 py-2 text-sm text-[var(--color-red)] hover:bg-[var(--color-red)]/30 disabled:opacity-50"
+            >
+              Remove
+            </button>
+            {(worktree.status === "dirty" || worktree.locked || removeError) && (
+              <button
+                onClick={() => handleRemove(true)}
+                disabled={removing}
+                className="rounded-md bg-[var(--color-peach)]/20 px-4 py-2 text-sm text-[var(--color-peach)] hover:bg-[var(--color-peach)]/30 disabled:opacity-50"
+              >
+                Force Remove
+              </button>
+            )}
+          </>
+        }
+      >
+        <div className="space-y-2">
+          <p className="text-sm text-[var(--color-text)]">
+            Remove worktree{" "}
+            <span className="break-all font-mono text-xs">{worktree.path}</span>?
           </p>
           {worktree.status === "dirty" && (
-            <p className="mb-2 text-xs text-[var(--color-yellow)]">
+            <p className="text-xs text-[var(--color-yellow)]">
               This worktree has uncommitted changes.
             </p>
           )}
           {worktree.locked && (
-            <p className="mb-2 text-xs text-[var(--color-yellow)]">
+            <p className="text-xs text-[var(--color-yellow)]">
               This worktree is locked. Removing it will override the lock.
             </p>
           )}
-          <label className="mb-3 flex items-start gap-2 cursor-pointer">
+          <label className="flex cursor-pointer items-start gap-2 pt-1">
             <input
               type="checkbox"
               checked={deleteBranch}
@@ -214,34 +243,10 @@ function WorktreeContextMenu({
             </span>
           </label>
           {removeError && (
-            <p className="mb-2 max-w-xs text-xs text-[var(--color-red)]">{removeError}</p>
+            <p className="text-xs text-[var(--color-red)]">{removeError}</p>
           )}
-          <div className="flex gap-2">
-            <button
-              onClick={() => handleRemove(false)}
-              disabled={worktree.status === "dirty" || worktree.locked || removing}
-              className="rounded-md bg-[var(--color-red)]/20 px-3 py-1 text-xs text-[var(--color-red)] hover:bg-[var(--color-red)]/30 disabled:opacity-50"
-            >
-              Remove
-            </button>
-            {(worktree.status === "dirty" || worktree.locked || removeError) && (
-              <button
-                onClick={() => handleRemove(true)}
-                disabled={removing}
-                className="rounded-md bg-[var(--color-peach)]/20 px-3 py-1 text-xs text-[var(--color-peach)] hover:bg-[var(--color-peach)]/30 disabled:opacity-50"
-              >
-                Force Remove
-              </button>
-            )}
-            <button
-              onClick={() => { setShowConfirm(false); }}
-              className="rounded-md bg-[var(--color-surface0)] px-3 py-1 text-xs text-[var(--color-overlay1)] hover:bg-[var(--color-surface1)]"
-            >
-              Cancel
-            </button>
-          </div>
         </div>
-      </div>
+      </Dialog>
     );
   }
 
