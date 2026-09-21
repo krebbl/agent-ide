@@ -4150,6 +4150,7 @@ pub fn run() {
             build_agent_command,
             pr_info::pr_for_branch,
             pr_info::pr_list_for_repo,
+            pr_info::pr_threads_for_branch,
             jira::jira_get_config,
             jira::jira_set_config,
             jira::jira_issue_for_branch,

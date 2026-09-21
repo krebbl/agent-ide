@@ -1,5 +1,5 @@
 import { invoke } from "./ipc";
-import { PrInfo, PrInfoResult } from "../types";
+import { PrInfo, PrInfoResult, PrThreadsResult } from "../types";
 
 export async function prForBranch(
   projectId: string,
@@ -10,4 +10,11 @@ export async function prForBranch(
 
 export async function prListForRepo(projectId: string): Promise<PrInfo[]> {
   return await invoke<PrInfo[]>("pr_list_for_repo", { projectId });
+}
+
+export async function prThreadsForBranch(
+  projectId: string,
+  prNumber: string,
+): Promise<PrThreadsResult> {
+  return await invoke<PrThreadsResult>("pr_threads_for_branch", { projectId, prNumber });
 }

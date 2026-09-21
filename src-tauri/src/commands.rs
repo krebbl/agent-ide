@@ -46,6 +46,7 @@ pub use crate::pty::{
 
 pub use crate::pr_info::{
     cmd_pr_for_branch as pr_for_branch, cmd_pr_list_for_repo as pr_list_for_repo,
+    cmd_pr_threads_for_branch as pr_threads_for_branch,
 };
 
 pub use crate::jira::{
@@ -224,6 +225,9 @@ pub async fn dispatch(state: &AppState, command: &str, payload: Value) -> Result
             cmd_state!(PrForBranchReq, pr_for_branch, [project_id: String, branch: String])
         }
         "pr_list_for_repo" => cmd_state!(PrListForRepoReq, pr_list_for_repo, [project_id: String]),
+        "pr_threads_for_branch" => {
+            cmd_state!(PrThreadsForBranchReq, pr_threads_for_branch, [project_id: String, pr_number: String])
+        }
         "jira_get_config" => {
             cmd_state!(JiraGetConfigReq, jira_get_config, [project_id: String])
         }

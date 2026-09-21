@@ -173,6 +173,30 @@ export type PrProvider = "github" | "bitbucket";
 
 export type CheckStatus = "success" | "pending" | "failure" | "unknown";
 
+export type PrReviewState =
+  | "approved"
+  | "changes_requested"
+  | "commented"
+  | "dismissed"
+  | "pending";
+
+export interface PrReview {
+  author: string;
+  state: PrReviewState;
+  submittedAt: string;
+}
+
+export interface PrComment {
+  id: string;
+  author: string;
+  body: string;
+  createdAt: string;
+  outdated: boolean;
+  resolved: boolean;
+  filePath: string | null;
+  viewerReplied: boolean;
+}
+
 export interface PrInfo {
   number: string;
   title: string;
@@ -185,11 +209,21 @@ export interface PrInfo {
   updatedAt: string;
   provider: PrProvider;
   checkStatus: CheckStatus;
+  reviews: PrReview[];
+  reviewRequests: string[];
+  comments: PrComment[];
+  viewerLogin: string | null;
 }
 
 export interface PrInfoResult {
   pr: PrInfo | null;
   provider: string | null;
+  error: string | null;
+}
+
+export interface PrThreadsResult {
+  comments: PrComment[];
+  viewerLogin: string | null;
   error: string | null;
 }
 

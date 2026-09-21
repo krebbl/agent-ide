@@ -5,6 +5,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useConnectionStatusStore } from "../../stores/connectionStatusStore";
 import FileTree from "./FileTree";
 import JiraPanel from "./JiraPanel";
+import PrPanel from "./PrPanel";
 import LoadingOverlay from "../ui/LoadingOverlay";
 import { useUiStore } from "../../stores/uiStore";
 import { usePrStore } from "../../stores/prStore";
@@ -92,8 +93,9 @@ export default function RightSidebar() {
       });
   }, [activeProjectId, projects, setRoot, connectionStatus]);
 
-  const tabs: Array<{ id: "files" | "jira"; label: string }> = [
+  const tabs: Array<{ id: "files" | "pr" | "jira"; label: string }> = [
     { id: "files", label: "Files" },
+    { id: "pr", label: "PR" },
     { id: "jira", label: "Jira" },
   ];
 
@@ -139,6 +141,12 @@ export default function RightSidebar() {
       >
         <FileTree />
         {worktreeLoading && <LoadingOverlay label="Loading files…" />}
+      </div>
+      <div
+        className="flex-1 overflow-hidden"
+        style={{ display: rightSidebarTab === "pr" ? undefined : "none" }}
+      >
+        <PrPanel />
       </div>
       <div
         className="flex-1 overflow-hidden"

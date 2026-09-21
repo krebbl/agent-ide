@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 export type FocusedZone = "editor" | "terminal" | null;
-export type RightSidebarTab = "files" | "jira";
+export type RightSidebarTab = "files" | "pr" | "jira";
 
 interface UiState {
   rightSidebarVisible: boolean;
