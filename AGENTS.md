@@ -139,7 +139,7 @@ When generating tool calls, you must only call the explicitly provided tools. Do
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **feature-file-search** (1940 symbols, 3785 relationships, 168 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **agent-ide** (2846 symbols, 6000 relationships, 247 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -162,10 +162,10 @@ This project is indexed by GitNexus as **feature-file-search** (1940 symbols, 37
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/feature-file-search/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/feature-file-search/clusters` | All functional areas |
-| `gitnexus://repo/feature-file-search/processes` | All execution flows |
-| `gitnexus://repo/feature-file-search/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/agent-ide/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/agent-ide/clusters` | All functional areas |
+| `gitnexus://repo/agent-ide/processes` | All execution flows |
+| `gitnexus://repo/agent-ide/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 
