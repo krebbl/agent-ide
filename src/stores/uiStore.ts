@@ -17,8 +17,6 @@ interface UiState {
   projectSettingsProjectId: string | null;
   openProjectSettings: (projectId: string) => void;
   closeProjectSettings: () => void;
-  diffPanelOpen: boolean;
-  setDiffPanelOpen: (open: boolean) => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -36,6 +34,4 @@ export const useUiStore = create<UiState>((set) => ({
   projectSettingsProjectId: null,
   openProjectSettings: (projectId) => set({ projectSettingsProjectId: projectId }),
   closeProjectSettings: () => set({ projectSettingsProjectId: null }),
-  diffPanelOpen: false,
-  setDiffPanelOpen: (open) => set({ diffPanelOpen: open }),
 }));

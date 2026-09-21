@@ -56,12 +56,6 @@ pub use crate::jira::{
 
 pub use crate::cmd_ssh_agent_info as ssh_agent_info;
 
-pub use crate::diff::{
-    cmd_diff_comment_add as diff_comment_add, cmd_diff_comment_delete as diff_comment_delete,
-    cmd_diff_comment_update as diff_comment_update, cmd_diff_comments_list as diff_comments_list,
-    cmd_git_diff_summary as git_diff_summary, cmd_git_file_diff as git_file_diff,
-};
-
 pub async fn dispatch(state: &AppState, command: &str, payload: Value) -> Result<Value, String> {
     macro_rules! cmd_state {
         ($req:ident, $fn:path, [$($field:ident: $ty:ty),*$(,)?]) => {{
@@ -155,24 +149,6 @@ pub async fn dispatch(state: &AppState, command: &str, payload: Value) -> Result
         }
         "git_branches_available_for_worktrees_async" => {
             cmd_state!(GitBranchesAvailableForWorktreesAsyncReq, git_branches_available_for_worktrees_async, [project_id: String])
-        }
-        "git_diff_summary" => {
-            cmd_state!(GitDiffSummaryReq, git_diff_summary, [project_id: String, worktree_path: String, base_branch: Option<String>])
-        }
-        "git_file_diff" => {
-            cmd_state!(GitFileDiffReq, git_file_diff, [project_id: String, worktree_path: String, path: String, base_branch: Option<String>])
-        }
-        "diff_comments_list" => {
-            cmd_state!(DiffCommentsListReq, diff_comments_list, [project_id: String, branch: String, worktree_path: String])
-        }
-        "diff_comment_add" => {
-            cmd_state!(DiffCommentAddReq, diff_comment_add, [project_id: String, branch: String, file: String, side: String, line: u32, body: String])
-        }
-        "diff_comment_update" => {
-            cmd_state!(DiffCommentUpdateReq, diff_comment_update, [comment_id: String, body: String])
-        }
-        "diff_comment_delete" => {
-            cmd_state!(DiffCommentDeleteReq, diff_comment_delete, [comment_id: String])
         }
         "ssh_agent_info" => {
             let res = ssh_agent_info().await?;

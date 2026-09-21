@@ -1,9 +1,8 @@
-import { GitCompare, Info, PanelBottom, PanelRight } from "lucide-react";
+import { Info, PanelBottom, PanelRight } from "lucide-react";
 import { useLspStore, type LspServerStatus } from "../../stores/lspStore";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { useEditorStore, languageFromPath } from "../../stores/editorStore";
-import { useDiffStore } from "../../stores/diffStore";
 import { useUiStore } from "../../stores/uiStore";
 import { restartServer, serverKeyForPath } from "../../services/lsp/coordinator";
 
@@ -31,7 +30,6 @@ export default function StatusBar() {
   const noLspForActive =
     activePath !== null && serverKeyForPath(activePath) === null;
   const { rightSidebarVisible, toggleRightSidebar } = useUiStore();
-  const diffPanelOpen = useUiStore((s) => s.diffPanelOpen);
 
   return (
     <div className="flex h-6 shrink-0 items-center border-t border-[var(--color-surface0)] bg-[var(--color-crust)] px-3 text-xs text-[var(--color-subtext0)]">
@@ -61,23 +59,6 @@ export default function StatusBar() {
         </span>
       )}
       <div className="ml-auto flex items-center gap-3">
-        <button
-          className={`transition-colors ${
-            diffPanelOpen
-              ? "text-[var(--color-blue)]"
-              : "text-[var(--color-overlay1)]"
-          } hover:text-[var(--color-blue)]`}
-          title={diffPanelOpen ? "Hide changes panel" : "Show changes for active worktree"}
-          onClick={() => {
-            if (diffPanelOpen) {
-              useDiffStore.getState().close();
-            } else if (activeProjectId) {
-              useDiffStore.getState().openFor(activeProjectId);
-            }
-          }}
-        >
-          <GitCompare size={13} />
-        </button>
         <button
           className={`transition-colors ${
             rightSidebarVisible
