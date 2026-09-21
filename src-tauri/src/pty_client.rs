@@ -503,3 +503,7 @@ pub fn daemon_pid_path() -> PathBuf {
 pub fn daemon_persistence_path() -> PathBuf {
     daemon_config_dir().join("terminal_sessions.json")
 }
+
+pub fn daemon_agent_history_path() -> PathBuf {
+    daemon_config_dir().join(crate::agent_history::FILE_NAME)
+}

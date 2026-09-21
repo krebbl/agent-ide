@@ -1,3 +1,4 @@
+pub mod agent_history;
 mod agent_detect;
 mod agents;
 mod badge;
@@ -964,6 +965,48 @@ async fn build_agent_command(
     prompt: String,
 ) -> Result<Vec<String>, String> {
     crate::commands::build_agent_command(agent_id, model, prompt).await
+}
+
+pub async fn cmd_recent_agent_sessions(
+    cwd: String,
+) -> Result<Vec<agent_history::ConversationEntry>, String> {
+    let entries = agent_history::for_cwd(&pty_client::daemon_agent_history_path(), &cwd);
+    // Only conversations that can actually be resumed: an exact-resume
+    // capable agent whose binary is installed.
+    Ok(entries
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .agent
+                .as_deref()
+                .and_then(|agent| agents::resume_command(agent, &entry.conversation_id).ok())
+                .and_then(|argv| argv.first().cloned())
+                .and_then(|binary| agents::find_real_binary(&binary))
+                .is_some()
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn recent_agent_sessions(
+    cwd: String,
+) -> Result<Vec<agent_history::ConversationEntry>, String> {
+    crate::commands::recent_agent_sessions(cwd).await
+}
+
+pub async fn cmd_resume_agent_command(
+    agent_id: String,
+    conversation_id: String,
+) -> Result<Vec<String>, String> {
+    agents::resume_command(&agent_id, &conversation_id)
+}
+
+#[tauri::command]
+async fn resume_agent_command(
+    agent_id: String,
+    conversation_id: String,
+) -> Result<Vec<String>, String> {
+    crate::commands::resume_agent_command(agent_id, conversation_id).await
 }
 
 use remote_ssh::ClientHandler;
@@ -4068,6 +4111,8 @@ pub fn run() {
             check_agents_ready,
             list_agent_models,
             build_agent_command,
+            recent_agent_sessions,
+            resume_agent_command,
             pr_info::pr_for_branch,
             pr_info::pr_list_for_repo,
             pr_info::pr_threads_for_branch,

@@ -1,7 +1,8 @@
 use serde_json;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::{mpsc, Mutex as TokioMutex};
@@ -143,7 +144,7 @@ impl SshManager {
         key_path: Option<String>,
         password: Option<String>,
     ) {
-        let mut projects = self.projects.lock().unwrap();
+        let mut projects = self.projects.lock();
         projects.insert(
             project_id,
             SshProject {
@@ -160,7 +161,7 @@ impl SshManager {
 
     async fn ensure_connection(&self, project_id: &str) -> Result<SessionHandle, String> {
         let project = {
-            let projects = self.projects.lock().unwrap();
+            let projects = self.projects.lock();
             projects
                 .get(project_id)
                 .ok_or("SSH project not registered")?
@@ -178,7 +179,7 @@ impl SshManager {
         .await?;
 
         let session = Arc::new(TokioMutex::new(session));
-        let mut projects = self.projects.lock().unwrap();
+        let mut projects = self.projects.lock();
         if let Some(p) = projects.get_mut(project_id) {
             p.session = Some(session.clone());
         }
@@ -210,6 +211,9 @@ pub struct PtyDaemon {
     /// Directory of SessionStart marker files (`<pty-id>.conversation`)
     /// written by the agent hook; watched for live conversation switches.
     marker_dir: PathBuf,
+    /// Cross-restart history of live agent conversations (id, agent, cwd)
+    /// the frontend uses to offer resuming a worktree's last session.
+    history_path: PathBuf,
     client_tx: Arc<Mutex<Option<mpsc::UnboundedSender<DaemonEvent>>>>,
     event_tx: mpsc::Sender<(String, EngineEvent)>,
     _event_rx_handle: Option<tokio::task::JoinHandle<()>>,
@@ -240,10 +244,12 @@ impl PtyDaemon {
             .map(|p| p.join("agent-session-markers"))
             .unwrap_or_else(|| persistence_path.with_extension("markers"));
         let _ = agents::ensure_session_id_shims(&shim_dir, &marker_dir);
+        let history_path = crate::agent_history::path_for(&persistence_path);
 
         Self {
             socket_path,
             marker_dir,
+            history_path,
             sessions,
             persistence_path,
             shim_dir: Some(shim_dir),
@@ -271,16 +277,18 @@ impl PtyDaemon {
                 let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
                 loop {
                     tick.tick().await;
-                    for (session_id, conversation_id) in daemon.refresh_conversation_markers() {
+                    let changed = daemon.refresh_conversation_markers();
+                    for (session_id, conversation_id) in &changed {
                         info!(session_id = %session_id, conversation_id = ?conversation_id, "agent conversation changed");
-                        PtyDaemon::send_to_client(
+                        let _ = PtyDaemon::send_to_client(
                             &daemon.client_tx,
                             DaemonEvent::Conversation {
-                                session_id,
-                                conversation_id,
+                                session_id: session_id.clone(),
+                                conversation_id: conversation_id.clone(),
                             },
                         );
                     }
+                    daemon.record_conversation_history(&changed);
                     PtyDaemon::persist(&daemon.sessions, &daemon.persistence_path);
                 }
             });
@@ -297,7 +305,7 @@ impl PtyDaemon {
                     let client_tx_cell = Arc::clone(&daemon.client_tx);
 
                     let (client_tx, mut client_rx) = mpsc::unbounded_channel::<DaemonEvent>();
-                    *client_tx_cell.lock().unwrap() = Some(client_tx);
+                    *client_tx_cell.lock() = Some(client_tx);
                     let ssh_manager = Arc::clone(&daemon.ssh_manager);
 
                     let (read_half, mut write_half) = stream.into_split();
@@ -331,7 +339,7 @@ impl PtyDaemon {
                                         // lock guard: the request handler may
                                         // await (remote probes), and holding a
                                         // guard across await is not Send.
-                                        let client_tx_opt = client_tx_cell.lock().unwrap().clone();
+                                        let client_tx_opt = client_tx_cell.lock().clone();
                                         daemon
                                             .handle_request(
                                                 req,
@@ -367,7 +375,7 @@ impl PtyDaemon {
         persistence_path: PathBuf,
     ) {
         while let Some((session_id, ev)) = event_rx.recv().await {
-            let mut map = sessions.lock().unwrap();
+            let mut map = sessions.lock();
             let mut dirty = false;
             let event = match ev {
                 EngineEvent::Output(data) => {
@@ -528,7 +536,7 @@ impl PtyDaemon {
         client_tx: &Arc<Mutex<Option<mpsc::UnboundedSender<DaemonEvent>>>>,
         event: DaemonEvent,
     ) -> Result<(), String> {
-        let guard = client_tx.lock().unwrap();
+        let guard = client_tx.lock();
         if let Some(tx) = guard.as_ref() {
             tx.send(event)
                 .map_err(|_| "client disconnected".to_string())
@@ -556,7 +564,7 @@ impl PtyDaemon {
                 worktree_id,
                 argv,
             } => {
-                if sessions.lock().unwrap().contains_key(&session_id) {
+                if sessions.lock().contains_key(&session_id) {
                     warn!(session_id, "session already exists");
                     return;
                 }
@@ -605,7 +613,7 @@ impl PtyDaemon {
                 };
                 meta.pgid = engine.process_group_id();
 
-                let mut map = sessions.lock().unwrap();
+                let mut map = sessions.lock();
                 map.insert(
                     session_id.clone(),
                     DaemonSession {
@@ -635,7 +643,7 @@ impl PtyDaemon {
                 attach,
                 argv,
             } => {
-                if sessions.lock().unwrap().contains_key(&session_id) {
+                if sessions.lock().contains_key(&session_id) {
                     warn!(session_id, "session already exists");
                     return;
                 }
@@ -664,7 +672,7 @@ impl PtyDaemon {
                 // established are not silently dropped. A Resize lands in
                 // meta.cols/rows and is applied to the engine once spawn completes.
                 {
-                    let mut map = sessions.lock().unwrap();
+                    let mut map = sessions.lock();
                     map.insert(
                         session_id.clone(),
                         DaemonSession {
@@ -687,7 +695,7 @@ impl PtyDaemon {
                     let ssh_session = match ssh_manager.ensure_connection(&project_id).await {
                         Ok(s) => s,
                         Err(e) => {
-                            let mut map = sessions.lock().unwrap();
+                            let mut map = sessions.lock();
                             map.remove(&session_id);
                             drop(map);
                             PtyDaemon::persist(&sessions, &persistence_path);
@@ -715,7 +723,7 @@ impl PtyDaemon {
                     {
                         Ok(e) => e,
                         Err(e) => {
-                            let mut map = sessions.lock().unwrap();
+                            let mut map = sessions.lock();
                             map.remove(&session_id);
                             drop(map);
                             PtyDaemon::persist(&sessions, &persistence_path);
@@ -729,7 +737,7 @@ impl PtyDaemon {
                         }
                     };
 
-                    let mut map = sessions.lock().unwrap();
+                    let mut map = sessions.lock();
                     if let Some(session) = map.get_mut(&session_id) {
                         if session.engine.is_none() {
                             let (latest_cols, latest_rows) = (session.meta.cols, session.meta.rows);
@@ -778,7 +786,7 @@ impl PtyDaemon {
             }
             DaemonRequest::Write { session_id, data } => {
                 use base64::{engine::general_purpose::STANDARD, Engine as _};
-                let mut map = sessions.lock().unwrap();
+                let mut map = sessions.lock();
                 if let Some(session) = map.get_mut(&session_id) {
                     if let Some(engine) = session.engine.as_ref() {
                         if let Ok(bytes) = STANDARD.decode(&data) {
@@ -794,7 +802,7 @@ impl PtyDaemon {
                 cols,
                 rows,
             } => {
-                let mut map = sessions.lock().unwrap();
+                let mut map = sessions.lock();
                 if let Some(session) = map.get_mut(&session_id) {
                     if let Some(engine) = session.engine.as_ref() {
                         let _ = engine.resize(cols, rows);
@@ -813,7 +821,7 @@ impl PtyDaemon {
                 // when the persisted dimensions already match, so the shell
                 // (or tmux pane) redraws into the live client.
                 let (engine, cols, rows) = {
-                    let map = sessions.lock().unwrap();
+                    let map = sessions.lock();
                     match map.get(&session_id) {
                         Some(session) => (
                             session.engine.as_ref().map(Arc::clone),
@@ -837,7 +845,7 @@ impl PtyDaemon {
                 }
             }
             DaemonRequest::Kill { session_id } => {
-                let mut map = sessions.lock().unwrap();
+                let mut map = sessions.lock();
                 if let Some(session) = map.get_mut(&session_id) {
                     if let Some(engine) = session.engine.take() {
                         let _ = engine.kill();
@@ -849,14 +857,14 @@ impl PtyDaemon {
             }
             DaemonRequest::ListSessions => {
                 if let Some(tx) = client_tx {
-                    let map = sessions.lock().unwrap();
+                    let map = sessions.lock();
                     let list: Vec<SessionMeta> = map.values().map(|s| s.meta.clone()).collect();
                     let _ = tx.send(DaemonEvent::SessionList { sessions: list });
                 }
             }
             DaemonRequest::AttachAll => {
                 if let Some(tx) = client_tx {
-                    let map = sessions.lock().unwrap();
+                    let map = sessions.lock();
                     let list: Vec<SessionMeta> = map.values().map(|s| s.meta.clone()).collect();
                     for meta in &list {
                         let _ = tx.send(DaemonEvent::StateSnapshot {
@@ -873,7 +881,7 @@ impl PtyDaemon {
                 // a remote probe can take seconds and must not block the
                 // daemon's other requests.
                 let engine = {
-                    let map = sessions.lock().unwrap();
+                    let map = sessions.lock();
                     map.get(&session_id)
                         .and_then(|s| s.engine.as_ref().map(Arc::clone))
                 };
@@ -896,6 +904,34 @@ impl PtyDaemon {
                 }
             }
         }
+    }
+
+    /// Persist live conversations into the cross-restart history file so
+    /// the frontend can offer "resume session" for a worktree even after
+    /// its terminal is closed. `changed` carries the marker switches from
+    /// this tick: those entries get a fresh `last_active_at`; the rest of
+    /// the live sessions only backfill a missing agent name (e.g. the
+    /// process scan detected the agent after the marker fired).
+    fn record_conversation_history(&self, changed: &[(String, Option<String>)]) {
+        let map = self.sessions.lock();
+        let updates: Vec<crate::agent_history::Upsert> = map
+            .values()
+            .filter_map(|s| {
+                let conversation_id = s.meta.conversation_id.as_ref()?.clone();
+                let cwd = s.meta.cwd.as_ref()?.clone();
+                let bump_active = changed
+                    .iter()
+                    .any(|(session_id, conv)| *session_id == s.meta.session_id && conv.is_some());
+                Some(crate::agent_history::Upsert {
+                    cwd,
+                    agent: s.meta.agent_name.clone(),
+                    conversation_id,
+                    bump_active,
+                })
+            })
+            .collect();
+        drop(map);
+        crate::agent_history::upsert_all(&self.history_path, &updates);
     }
 
     /// Live conversation id recorded by the SessionStart marker hook for this
@@ -961,7 +997,7 @@ impl PtyDaemon {
                 slot.1 = parse_marker(&data).map(|(id, _, _)| id);
             }
         }
-        let mut map = self.sessions.lock().unwrap();
+        let mut map = self.sessions.lock();
         for (pty_id, (conversation, startup)) in by_pty {
             let live = conversation.map(|m| m.id).or(startup);
             let Some(session) = map.get_mut(&pty_id) else {
@@ -981,7 +1017,7 @@ impl PtyDaemon {
         }
         let content = std::fs::read_to_string(&self.persistence_path).unwrap_or_default();
         let persisted: Vec<SessionMeta> = serde_json::from_str(&content).unwrap_or_default();
-        let mut map = self.sessions.lock().unwrap();
+        let mut map = self.sessions.lock();
         let mut backfill = Self::now_ms();
         for mut meta in persisted {
             // Legacy rows (created before this field existed) lack a
@@ -1058,7 +1094,7 @@ impl PtyDaemon {
 
         tokio::spawn(async move {
             let to_respawn: Vec<SessionMeta> = {
-                let map = sessions.lock().unwrap();
+                let map = sessions.lock();
                 map.values()
                     .filter(|s| {
                         s.meta.session_type == "ssh"
@@ -1101,7 +1137,7 @@ impl PtyDaemon {
                     }
                 };
 
-                let mut map = sessions.lock().unwrap();
+                let mut map = sessions.lock();
                 if let Some(session) = map.get_mut(&session_id) {
                     if session.engine.is_none() {
                         let (latest_cols, latest_rows) = (session.meta.cols, session.meta.rows);
@@ -1129,7 +1165,7 @@ impl PtyDaemon {
     }
 
     fn persist(sessions: &Arc<Mutex<HashMap<String, DaemonSession>>>, persistence_path: &PathBuf) {
-        let map = sessions.lock().unwrap();
+        let map = sessions.lock();
         let list: Vec<SessionMeta> = map.values().map(|s| s.meta.clone()).collect();
         drop(map);
         if let Some(parent) = persistence_path.parent() {
@@ -1185,9 +1221,9 @@ mod tests {
     async fn spinner_title_drives_busy_state() {
         let (event_tx, event_rx) = mpsc::channel(16);
         let (client_tx, mut client_rx) = mpsc::unbounded_channel();
-        let client_cell = Arc::new(std::sync::Mutex::new(Some(client_tx)));
-        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
-        sessions.lock().unwrap().insert(
+        let client_cell = Arc::new(parking_lot::Mutex::new(Some(client_tx)));
+        let sessions = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        sessions.lock().insert(
             "s1".to_string(),
             DaemonSession {
                 meta: SessionMeta {
@@ -1255,9 +1291,9 @@ mod tests {
         // must NOT clear busy.
         let (event_tx, event_rx) = mpsc::channel(16);
         let (client_tx, mut client_rx) = mpsc::unbounded_channel();
-        let client_cell = Arc::new(std::sync::Mutex::new(Some(client_tx)));
-        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
-        sessions.lock().unwrap().insert(
+        let client_cell = Arc::new(parking_lot::Mutex::new(Some(client_tx)));
+        let sessions = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        sessions.lock().insert(
             "s2".to_string(),
             DaemonSession {
                 meta: SessionMeta {
@@ -1309,7 +1345,7 @@ mod tests {
         assert!(client_rx.recv().await.is_none());
     }
     struct RecordingEngine {
-        resizes: std::sync::Mutex<Vec<(u16, u16)>>,
+        resizes: parking_lot::Mutex<Vec<(u16, u16)>>,
     }
 
     #[async_trait::async_trait]
@@ -1318,7 +1354,7 @@ mod tests {
             Ok(())
         }
         fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
-            self.resizes.lock().unwrap().push((cols, rows));
+            self.resizes.lock().push((cols, rows));
             Ok(())
         }
         fn kill(&self) -> Result<(), String> {
@@ -1349,6 +1385,44 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn record_conversation_history_persists_marker_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = PtyDaemon::new(dir.path().join("sock"), dir.path().join("persist.json"));
+        let mut meta = nudge_test_meta("s1");
+        meta.cwd = Some("/repo".to_string());
+        meta.conversation_id = Some("conv-1".to_string());
+        daemon
+            .sessions
+            .lock()
+            .insert("s1".to_string(), DaemonSession { meta, engine: None, title_busy: false });
+
+        // Marker switch this tick: entry recorded, agent still undetected.
+        daemon.record_conversation_history(&[("s1".to_string(), Some("conv-1".to_string()))]);
+        let entries = crate::agent_history::for_cwd(&daemon.history_path, "/repo");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].conversation_id, "conv-1");
+        assert_eq!(entries[0].agent, None);
+        assert!(entries[0].last_active_at > 0);
+
+        // Agent detection caught up later: the entry is backfilled.
+        daemon.sessions.lock().get_mut("s1").unwrap().meta.agent_name = Some("claude".to_string());
+        daemon.record_conversation_history(&[]);
+        let entries = crate::agent_history::for_cwd(&daemon.history_path, "/repo");
+        assert_eq!(entries[0].agent.as_deref(), Some("claude"));
+
+        // Sessions without a conversation or cwd are never recorded.
+        daemon.sessions.lock().clear();
+        let mut stray = nudge_test_meta("s2");
+        stray.cwd = Some("/other".to_string());
+        daemon
+            .sessions
+            .lock()
+            .insert("s2".to_string(), DaemonSession { meta: stray, engine: None, title_busy: false });
+        daemon.record_conversation_history(&[("s2".to_string(), Some("conv-2".to_string()))]);
+        assert!(crate::agent_history::for_cwd(&daemon.history_path, "/other").is_empty());
+    }
+
+    #[tokio::test]
     async fn refresh_conversation_markers_updates_session() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = PtyDaemon::new(dir.path().join("sock"), dir.path().join("persist.json"));
@@ -1357,7 +1431,7 @@ mod tests {
             r#"{"session_id":"conv-1","source":"resume"}"#,
         )
         .unwrap();
-        daemon.sessions.lock().unwrap().insert(
+        daemon.sessions.lock().insert(
             "s9".to_string(),
             DaemonSession {
                 meta: nudge_test_meta("s9"),
@@ -1375,7 +1449,6 @@ mod tests {
             daemon
                 .sessions
                 .lock()
-                .unwrap()
                 .get("s9")
                 .unwrap()
                 .meta
@@ -1398,7 +1471,7 @@ mod tests {
             r#"{"session_id":"conv-oc","agent":"opencode","pid":4194304}"#,
         )
         .unwrap();
-        daemon.sessions.lock().unwrap().insert(
+        daemon.sessions.lock().insert(
             "s10".to_string(),
             DaemonSession {
                 meta: SessionMeta {
@@ -1416,7 +1489,6 @@ mod tests {
             daemon
                 .sessions
                 .lock()
-                .unwrap()
                 .get("s10")
                 .unwrap()
                 .meta
@@ -1440,7 +1512,7 @@ mod tests {
             ),
         )
         .unwrap();
-        daemon.sessions.lock().unwrap().insert(
+        daemon.sessions.lock().insert(
             "s11".to_string(),
             DaemonSession {
                 meta: nudge_test_meta("s11"),
@@ -1460,12 +1532,12 @@ mod tests {
     async fn nudge_resizes_away_and_back_to_force_repaint() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = PtyDaemon::new(dir.path().join("sock"), dir.path().join("persist.json"));
-        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let sessions = Arc::new(parking_lot::Mutex::new(HashMap::new()));
         let (event_tx, _event_rx) = mpsc::channel(16);
         let engine = Arc::new(RecordingEngine {
-            resizes: std::sync::Mutex::new(Vec::new()),
+            resizes: parking_lot::Mutex::new(Vec::new()),
         });
-        sessions.lock().unwrap().insert(
+        sessions.lock().insert(
             "s1".to_string(),
             DaemonSession {
                 meta: nudge_test_meta("s1"),
@@ -1490,7 +1562,7 @@ mod tests {
 
         // Same-size resizes generate no SIGWINCH, so the nudge must step the
         // size away and back to force the shell/tmux to repaint.
-        assert_eq!(*engine.resizes.lock().unwrap(), vec![(80, 23), (80, 24)]);
+        assert_eq!(*engine.resizes.lock(), vec![(80, 23), (80, 24)]);
     }
 
     #[tokio::test]
@@ -1498,7 +1570,7 @@ mod tests {
         use base64::{engine::general_purpose::STANDARD, Engine as _};
         let dir = tempfile::tempdir().unwrap();
         let daemon = PtyDaemon::new(dir.path().join("sock"), dir.path().join("persist.json"));
-        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let sessions = Arc::new(parking_lot::Mutex::new(HashMap::new()));
         let (event_tx, mut event_rx) = mpsc::channel(256);
         let ssh_manager = Arc::new(SshManager::new());
         let persistence = dir.path().join("persist.json");
@@ -1590,7 +1662,7 @@ mod tests {
 
         let daemon = PtyDaemon::new(dir.path().join("sock"), persistence.clone());
         daemon.load_sessions();
-        let map = daemon.sessions.lock().unwrap();
+        let map = daemon.sessions.lock();
         let restored = map.get("s1").expect("restored session");
         // Live flags belong to the previous daemon run; agent_name is
         // sticky session history.
@@ -1748,9 +1820,9 @@ mod tests {
     async fn agent_sighting_seeds_conversation_from_pin() {
         let (event_tx, event_rx) = mpsc::channel(16);
         let (client_tx, _client_rx) = mpsc::unbounded_channel();
-        let client_cell = Arc::new(std::sync::Mutex::new(Some(client_tx)));
-        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
-        sessions.lock().unwrap().insert(
+        let client_cell = Arc::new(parking_lot::Mutex::new(Some(client_tx)));
+        let sessions = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        sessions.lock().insert(
             "s5".to_string(),
             DaemonSession {
                 meta: nudge_test_meta("s5"),
@@ -1780,7 +1852,7 @@ mod tests {
         drop(event_tx);
         broadcaster.await.unwrap();
 
-        let map = sessions.lock().unwrap();
+        let map = sessions.lock();
         let meta = &map.get("s5").unwrap().meta;
         // Before any in-app switch, the live conversation is the pinned id.
         assert_eq!(meta.conversation_id.as_deref(), Some("pinned-9"));
@@ -1789,9 +1861,9 @@ mod tests {
     async fn first_agent_sighting_stores_command_as_argv() {
         let (event_tx, event_rx) = mpsc::channel(16);
         let (client_tx, _client_rx) = mpsc::unbounded_channel();
-        let client_cell = Arc::new(std::sync::Mutex::new(Some(client_tx)));
-        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
-        sessions.lock().unwrap().insert(
+        let client_cell = Arc::new(parking_lot::Mutex::new(Some(client_tx)));
+        let sessions = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        sessions.lock().insert(
             "s3".to_string(),
             DaemonSession {
                 meta: nudge_test_meta("s3"),
@@ -1825,7 +1897,7 @@ mod tests {
         drop(event_tx);
         broadcaster.await.unwrap();
 
-        let map = sessions.lock().unwrap();
+        let map = sessions.lock();
         let meta = &map.get("s3").unwrap().meta;
         // The command the user typed becomes the session's restore command;
         // live flag clears with the agent, history persists.
@@ -1844,7 +1916,7 @@ mod tests {
     async fn nudge_without_engine_is_noop() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = PtyDaemon::new(dir.path().join("sock"), dir.path().join("persist.json"));
-        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let sessions = Arc::new(parking_lot::Mutex::new(HashMap::new()));
         let (event_tx, _event_rx) = mpsc::channel(16);
         let ssh_manager = Arc::new(SshManager::new());
 

@@ -15,6 +15,7 @@ import { useTerminalStore, collectLeaves, findLeaf } from "../../stores/terminal
 import { useProjectStore } from "../../stores/projectStore";
 import { useUiStore } from "../../stores/uiStore";
 import SplitPaneContainer from "./SplitPaneContainer";
+import RecentAgentSessions from "./RecentAgentSessions";
 import TabStrip from "../ui/TabStrip";
 
 
@@ -95,6 +96,14 @@ export default function TerminalZone({
 
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const selectedWorktreeId = useProjectStore((s) => s.selectedWorktreeId);
+  const activeProject = useProjectStore((s) =>
+    s.projects.find((p) => p.id === s.activeProjectId),
+  );
+  const selectedWorktreePath = useMemo(
+    () =>
+      activeProject?.worktrees.find((w) => w.id === selectedWorktreeId)?.path ?? null,
+    [activeProject, selectedWorktreeId],
+  );
 
   const visibleTabs = useMemo(
     () =>
@@ -335,6 +344,15 @@ export default function TerminalZone({
                 ? "No terminal sessions for this worktree"
                 : "Select a worktree to open a terminal"}
             </span>
+            {canAddTerminal &&
+              activeProject?.type === "local" &&
+              selectedWorktreePath && (
+                <RecentAgentSessions
+                  worktreePath={selectedWorktreePath}
+                  projectId={activeProjectId}
+                  worktreeId={selectedWorktreeId}
+                />
+              )}
             {canAddTerminal && (
               <button
                 onClick={handleNewTerminal}

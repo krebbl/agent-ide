@@ -1,5 +1,5 @@
 import { invoke } from "./ipc";
-import { AgentId, AgentModel, AgentStatus } from "../types";
+import { AgentId, AgentModel, AgentStatus, AgentConversationSummary } from "../types";
 
 export async function checkAgentReady(id: AgentId): Promise<AgentStatus> {
   return await invoke<AgentStatus>("check_agent_ready", { id });
@@ -22,5 +22,21 @@ export async function buildAgentCommand(
     agentId,
     model,
     prompt,
+  });
+}
+
+export async function listRecentAgentConversations(
+  cwd: string,
+): Promise<AgentConversationSummary[]> {
+  return await invoke<AgentConversationSummary[]>("recent_agent_sessions", { cwd });
+}
+
+export async function buildAgentResumeCommand(
+  agentId: string,
+  conversationId: string,
+): Promise<string[]> {
+  return await invoke<string[]>("resume_agent_command", {
+    agentId,
+    conversationId,
   });
 }

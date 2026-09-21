@@ -387,6 +387,25 @@ fn sanitize_worktree_name(raw: &str) -> Option<String> {
         .last()
 }
 
+/// argv that launches `agent` resumed onto a specific conversation, e.g.
+/// `claude --resume <id>`. Only agents with exact-resume support (see
+/// `exact_resume_flag`) are accepted; the binary is resolved by the terminal
+/// PATH, whose shims pass resume flags through to the real CLI.
+pub fn resume_command(agent_id: &str, conversation_id: &str) -> Result<Vec<String>, String> {
+    let agent = builtin_agents()
+        .into_iter()
+        .find(|a| a.id == agent_id)
+        .ok_or_else(|| format!("Unknown agent: {}", agent_id))?;
+    let binary = agent
+        .command
+        .first()
+        .cloned()
+        .ok_or_else(|| format!("Agent {} has no binary", agent_id))?;
+    let flag = exact_resume_flag(agent_id)
+        .ok_or_else(|| format!("Agent {} cannot resume a specific conversation", agent_id))?;
+    Ok(vec![binary, flag.to_string(), conversation_id.to_string()])
+}
+
 /// Exact-resume flag: resumes a SPECIFIC conversation by id, for agents
 /// whose CLI supports it (verified per `--help`). Agents without exact
 /// resume return `None`.
@@ -1185,6 +1204,22 @@ mod tests {
             .filter(|m| !m.selector.trim().is_empty())
             .count();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn resume_command_builds_exact_resume_argv() {
+        assert_eq!(
+            resume_command("claude", "abc-123").unwrap(),
+            vec!["claude".to_string(), "--resume".to_string(), "abc-123".to_string()]
+        );
+        assert_eq!(
+            resume_command("omp", "abc-123").unwrap(),
+            vec!["omp".to_string(), "--resume".to_string(), "abc-123".to_string()]
+        );
+        // Agents without exact-resume support are rejected, not silently
+        // resumed fuzzily.
+        assert!(resume_command("codex", "abc-123").is_err());
+        assert!(resume_command("unknown", "abc-123").is_err());
     }
 
     #[test]

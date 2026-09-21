@@ -128,6 +128,14 @@ export type AgentId =
   | "copilot"
   | "cursor-agent";
 
+export interface AgentConversationSummary {
+  agent: string;
+  conversationId: string;
+  cwd: string;
+  firstSeenAt: number;
+  lastActiveAt: number;
+}
+
 export type PrState = "open" | "merged" | "closed" | "draft";
 
 export type PrProvider = "github" | "bitbucket";

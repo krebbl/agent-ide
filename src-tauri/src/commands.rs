@@ -22,6 +22,8 @@ pub use crate::{
     cmd_load_editor_tabs as load_editor_tabs, cmd_load_expanded_projects as load_expanded_projects,
     cmd_load_projects as load_projects, cmd_save_editor_tabs as save_editor_tabs,
     cmd_save_expanded_projects as save_expanded_projects, cmd_save_projects as save_projects,
+    cmd_recent_agent_sessions as recent_agent_sessions,
+    cmd_resume_agent_command as resume_agent_command,
     cmd_ssh_check_git as ssh_check_git, cmd_ssh_connect as ssh_connect,
     cmd_ssh_delete_password as ssh_delete_password, cmd_ssh_disconnect as ssh_disconnect,
     cmd_ssh_get_password as ssh_get_password, cmd_ssh_list_directory as ssh_list_directory,
@@ -107,6 +109,12 @@ pub async fn dispatch(state: &AppState, command: &str, payload: Value) -> Result
         "list_agent_models" => cmd_plain!(ListAgentModelsReq, list_agent_models, [id: String]),
         "build_agent_command" => {
             cmd_plain!(BuildAgentCommandReq, build_agent_command, [agent_id: String, model: Option<String>, prompt: String])
+        }
+        "recent_agent_sessions" => {
+            cmd_plain!(RecentAgentSessionsReq, recent_agent_sessions, [cwd: String])
+        }
+        "resume_agent_command" => {
+            cmd_plain!(ResumeAgentCommandReq, resume_agent_command, [agent_id: String, conversation_id: String])
         }
         "save_projects" => cmd_state!(SaveProjectsReq, save_projects, [projects: Vec<Project>]),
         "load_projects" => {
