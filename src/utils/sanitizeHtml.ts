@@ -3,6 +3,7 @@ const ALLOWED_TAGS = new Set([
   "UL", "OL", "LI", "BLOCKQUOTE",
   "A", "STRONG", "B", "EM", "I", "U", "S", "STRIKE", "DEL",
   "CODE", "PRE", "TT", "SUB", "SUP",
+  "INPUT", "IMG",
   "TABLE", "THEAD", "TBODY", "TFOOT", "TR", "TH", "TD",
   "SPAN", "DIV",
 ]);
@@ -50,12 +51,31 @@ function sanitizeNode(node: Element, out: Node, doc: Document) {
       copy.setAttribute("target", "_blank");
       copy.setAttribute("rel", "noreferrer");
     }
+    if (tag === "INPUT") {
+      for (const attr of ["type", "checked", "disabled"]) {
+        const v = el.getAttribute(attr);
+        if (v !== null) copy.setAttribute(attr, v);
+      }
+    }
+    if (tag === "IMG") {
+      const src = el.getAttribute("src");
+      const safe = src ? safeUrl(src) : null;
+      if (!safe) continue;
+      copy.setAttribute("src", safe);
+      for (const attr of ["alt", "title"]) {
+        const v = el.getAttribute(attr);
+        if (v !== null) copy.setAttribute(attr, v);
+      }
+      copy.setAttribute("style", "max-width:100%; height:auto;");
+    }
     const style = el.getAttribute("style");
-    if (style) {
+    if (style && tag !== "IMG") {
       const cleaned = safeStyle(style);
       if (cleaned) copy.setAttribute("style", cleaned);
     }
-    if (tag === "TH" || tag === "TD") copy.setAttribute("colSpan", el.getAttribute("colspan") ?? "");
+    if ((tag === "TH" || tag === "TD") && el.hasAttribute("colspan")) {
+      copy.setAttribute("colSpan", el.getAttribute("colspan") ?? "");
+    }
     sanitizeNode(el, copy, doc);
     out.appendChild(copy);
   }

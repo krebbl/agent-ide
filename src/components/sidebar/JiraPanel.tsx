@@ -91,7 +91,7 @@ function IssueView({
       </div>
       {issue.descriptionHtml ? (
         <div
-          className="jira-rendered rounded border border-[var(--color-surface0)] bg-[var(--color-mantle)] p-2 text-xs leading-relaxed text-[var(--color-subtext1)]"
+          className="rendered-markdown rounded border border-[var(--color-surface0)] bg-[var(--color-mantle)] p-2 text-xs leading-relaxed text-[var(--color-subtext1)]"
           dangerouslySetInnerHTML={{ __html: sanitizeHtml(issue.descriptionHtml) }}
         />
       ) : (
@@ -116,7 +116,7 @@ function IssueView({
             </div>
             {comment.bodyHtml ? (
               <div
-                className="jira-rendered mt-1 text-xs leading-relaxed text-[var(--color-text)]"
+                className="rendered-markdown mt-1 text-xs leading-relaxed text-[var(--color-text)]"
                 dangerouslySetInnerHTML={{ __html: sanitizeHtml(comment.bodyHtml) }}
               />
             ) : (

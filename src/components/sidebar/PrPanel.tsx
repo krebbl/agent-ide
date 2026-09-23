@@ -6,6 +6,7 @@ import { useUiStore } from "../../stores/uiStore";
 import { PrComment, PrInfo, PrReviewState } from "../../types";
 import { openUrl } from "../../utils/openUrl";
 import { prChangesUrl } from "../../utils/prUrl";
+import { renderMarkdown } from "../../utils/renderMarkdown";
 
 function formatDateTime(iso: string): string {
   if (!iso) return "";
@@ -79,9 +80,10 @@ function CommentCard({ comment }: { comment: PrComment }) {
           {comment.filePath}
         </div>
       )}
-      <div className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-[var(--color-text)]">
-        {comment.body}
-      </div>
+      <div
+        className="rendered-markdown mt-1 break-words text-xs leading-relaxed text-[var(--color-text)]"
+        dangerouslySetInnerHTML={{ __html: renderMarkdown(comment.body) }}
+      />
     </div>
   );
 }
