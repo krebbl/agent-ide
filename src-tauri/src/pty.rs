@@ -917,6 +917,7 @@ pub async fn cmd_pty_register_ssh_project(
     auth_method: String,
     key_path: Option<String>,
     password: Option<String>,
+    proxy_jump: Option<String>,
 ) -> Result<(), String> {
     require_pty_client(state)?.register_ssh_project(
         project_id,
@@ -926,6 +927,7 @@ pub async fn cmd_pty_register_ssh_project(
         auth_method,
         key_path,
         password,
+        proxy_jump,
     )
 }
 
@@ -938,6 +940,7 @@ pub async fn pty_register_ssh_project(
     auth_method: String,
     key_path: Option<String>,
     password: Option<String>,
+    proxy_jump: Option<String>,
     state: tauri::State<'_, Arc<crate::AppState>>,
 ) -> Result<(), String> {
     crate::commands::pty_register_ssh_project(
@@ -949,6 +952,7 @@ pub async fn pty_register_ssh_project(
         auth_method,
         key_path,
         password,
+        proxy_jump,
     )
     .await
 }

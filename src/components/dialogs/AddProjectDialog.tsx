@@ -28,6 +28,7 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
   const [sshKeyPath, setSshKeyPath] = useState("");
   const [keyShowBrowser, setKeyShowBrowser] = useState(false);
   const [sshPassword, setSshPassword] = useState("");
+  const [sshProxyJump, setSshProxyJump] = useState("");
   const [sshTestStatus, setSshTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [sshTestMessage, setSshTestMessage] = useState("");
   const [sshRemotePath, setSshRemotePath] = useState("/");
@@ -177,6 +178,7 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
         authMethod: sshAuthMethod,
         keyPath: sshAuthMethod === "key" ? sshKeyPath || null : null,
         password: sshAuthMethod === "password" ? sshPassword || null : null,
+        proxyJump: sshProxyJump.trim() || null,
       });
       setSshTestStatus("success");
       setSshTestMessage("Connection successful");
@@ -219,6 +221,7 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
         username: sshUsername,
         authMethod: sshAuthMethod,
         keyPath: sshAuthMethod === "key" ? sshKeyPath : undefined,
+        proxyJump: sshProxyJump.trim() || undefined,
         path: sshRemotePath,
       };
       const projectId = crypto.randomUUID();
@@ -492,6 +495,23 @@ export default function AddProjectDialog({ onClose }: AddProjectDialogProps) {
               />
             </div>
           )}
+
+          <div>
+            <label className="mb-1 block text-xs font-medium text-[var(--color-subtext1)]">
+              Proxy Jump <span className="font-normal text-[var(--color-overlay1)]">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={sshProxyJump}
+              onChange={(e) => setSshProxyJump(e.target.value)}
+              placeholder="user@jump-host:22"
+              className="w-full rounded-md border border-[var(--color-surface0)] bg-[var(--color-base)] px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-overlay0)] focus:border-[var(--color-blue)] focus:outline-none"
+            />
+            <p className="mt-1 text-[11px] text-[var(--color-overlay1)]">
+              SSH jump host to reach the target (like ssh -J). Uses the same authentication as the
+              target.
+            </p>
+          </div>
 
           <button
             onClick={handleSshTest}

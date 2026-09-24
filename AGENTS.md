@@ -139,7 +139,7 @@ When generating tool calls, you must only call the explicitly provided tools. Do
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **agent-ide** (2846 symbols, 6000 relationships, 247 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **agent-ide** (3058 symbols, 6477 relationships, 266 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

@@ -81,6 +81,7 @@ pub enum DaemonRequest {
         auth_method: String,
         key_path: Option<String>,
         password: Option<String>,
+        proxy_jump: Option<String>,
     },
     Write {
         session_id: String,

@@ -120,6 +120,7 @@ struct SshProject {
     auth_method: String,
     key_path: Option<String>,
     password: Option<String>,
+    proxy_jump: Option<String>,
     session: Option<SessionHandle>,
 }
 
@@ -143,6 +144,7 @@ impl SshManager {
         auth_method: String,
         key_path: Option<String>,
         password: Option<String>,
+        proxy_jump: Option<String>,
     ) {
         let mut projects = self.projects.lock();
         projects.insert(
@@ -154,6 +156,7 @@ impl SshManager {
                 auth_method,
                 key_path,
                 password,
+                proxy_jump,
                 session: None,
             },
         );
@@ -175,6 +178,7 @@ impl SshManager {
             &project.auth_method,
             project.key_path.as_deref(),
             project.password.as_deref(),
+            project.proxy_jump.as_deref(),
         )
         .await?;
 
@@ -196,6 +200,7 @@ impl Clone for SshProject {
             auth_method: self.auth_method.clone(),
             key_path: self.key_path.clone(),
             password: self.password.clone(),
+            proxy_jump: self.proxy_jump.clone(),
             session: self.session.as_ref().map(Arc::clone),
         }
     }
@@ -771,6 +776,7 @@ impl PtyDaemon {
                 auth_method,
                 key_path,
                 password,
+                proxy_jump,
             } => {
                 let pid = project_id.clone();
                 ssh_manager.register(
@@ -781,6 +787,7 @@ impl PtyDaemon {
                     auth_method,
                     key_path,
                     password,
+                    proxy_jump,
                 );
                 self.respawn_remote_sessions(&pid);
             }

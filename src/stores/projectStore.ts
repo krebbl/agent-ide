@@ -74,7 +74,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
       for (const project of projects) {
         if (project.type === "ssh") {
-          const conn = project.connection as { host: string; port: number; username: string; authMethod: string; keyPath?: string };
+          const conn = project.connection as { host: string; port: number; username: string; authMethod: string; keyPath?: string; proxyJump?: string };
           const password = await invoke<string | null>("ssh_get_password", { projectId: project.id }).catch(() => null);
           invoke("ssh_connect", {
             projectId: project.id,
@@ -83,6 +83,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
             username: conn.username,
             authMethod: conn.authMethod,
             keyPath: conn.keyPath ?? null,
+            proxyJump: conn.proxyJump ?? null,
             password: password ?? null,
           }).catch(() => {});
           invoke("pty_register_ssh_project", {
@@ -92,6 +93,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
             username: conn.username,
             authMethod: conn.authMethod,
             keyPath: conn.keyPath ?? null,
+            proxyJump: conn.proxyJump ?? null,
             password: password ?? null,
           }).catch(() => {});
         }
@@ -119,7 +121,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     try {
       await invoke("save_projects", { projects: updated });
       if (project.type === "ssh") {
-        const conn = project.connection as { host: string; port: number; username: string; authMethod: string; keyPath?: string };
+        const conn = project.connection as { host: string; port: number; username: string; authMethod: string; keyPath?: string; proxyJump?: string };
         const password = await invoke<string | null>("ssh_get_password", { projectId: project.id }).catch(() => null);
         invoke("ssh_connect", {
           projectId: project.id,
@@ -128,6 +130,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
           username: conn.username,
           authMethod: conn.authMethod,
           keyPath: conn.keyPath ?? null,
+            proxyJump: conn.proxyJump ?? null,
           password: password ?? null,
         }).catch(() => {});
         invoke("pty_register_ssh_project", {
@@ -137,6 +140,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
           username: conn.username,
           authMethod: conn.authMethod,
           keyPath: conn.keyPath ?? null,
+            proxyJump: conn.proxyJump ?? null,
           password: password ?? null,
         }).catch(() => {});
       }

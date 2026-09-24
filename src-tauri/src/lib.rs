@@ -61,6 +61,8 @@ pub enum Connection {
         key_path: Option<String>,
         #[serde(skip)]
         password: Option<String>,
+        #[serde(rename = "proxyJump", default)]
+        proxy_jump: Option<String>,
         path: Option<String>,
     },
 }
@@ -1034,6 +1036,7 @@ pub struct SshCredentials {
     pub auth_method: String,
     pub key_path: Option<String>,
     pub password: Option<String>,
+    pub proxy_jump: Option<String>,
 }
 
 pub struct SshConnection {
@@ -3002,8 +3005,10 @@ async fn connect_ssh(
     auth_method: &str,
     key_path: Option<&str>,
     password: Option<&str>,
+    proxy_jump: Option<&str>,
 ) -> Result<(client::Handle<ClientHandler>, Option<SftpSession>), String> {
-    connect_ssh_with_sftp(host, port, username, auth_method, key_path, password, true).await
+    connect_ssh_with_sftp(host, port, username, auth_method, key_path, password, proxy_jump, true)
+        .await
 }
 
 async fn connect_ssh_with_sftp(
@@ -3013,137 +3018,23 @@ async fn connect_ssh_with_sftp(
     auth_method: &str,
     key_path: Option<&str>,
     password: Option<&str>,
+    proxy_jump: Option<&str>,
     init_sftp: bool,
 ) -> Result<(client::Handle<ClientHandler>, Option<SftpSession>), String> {
     info!(
-        "connect_ssh: host={} port={} username={} auth_method={}",
-        host, port, username, auth_method
+        "connect_ssh: host={} port={} username={} auth_method={} proxy_jump={:?}",
+        host, port, username, auth_method, proxy_jump
     );
-    let config = Arc::new(client::Config::default());
-
-    let connect_timeout = if auth_method == "agent" {
-        Duration::from_secs(120)
-    } else {
-        Duration::from_secs(15)
-    };
-
-    info!(
-        "connect_ssh: starting TCP connection with timeout {:?}",
-        connect_timeout
-    );
-    let mut session = tokio::time::timeout(
-        connect_timeout,
-        client::connect(config, (host, port), ClientHandler),
+    let mut session = remote_ssh::connect_ssh(
+        host,
+        port,
+        username,
+        auth_method,
+        key_path,
+        password,
+        proxy_jump,
     )
-    .await
-    .map_err(|_| {
-        warn!("connect_ssh: TCP connection timed out");
-        "Connection timed out".to_string()
-    })?
-    .map_err(|e| {
-        warn!("connect_ssh: TCP connection failed: {}", e);
-        format!("Failed to connect: {}", e)
-    })?;
-    info!("connect_ssh: TCP connection established");
-
-    match auth_method {
-        "key" => {
-            info!("connect_ssh: starting key auth");
-            let kp = key_path.ok_or("Key path is required for key authentication")?;
-            let key = russh_keys::load_secret_key(kp, None)
-                .map_err(|e| format!("Failed to load private key: {}", e))?;
-            let key_with_hash = PrivateKeyWithHashAlg::new(Arc::new(key), None);
-            let auth_result = session
-                .authenticate_publickey(username.to_string(), key_with_hash)
-                .await
-                .map_err(|e| format!("Key authentication failed: {}", e))?;
-            if !auth_result.success() {
-                return Err("Key authentication rejected".to_string());
-            }
-            info!("connect_ssh: key auth succeeded");
-        }
-        "agent" => {
-            info!("connect_ssh: starting agent auth");
-            let agent_path = one_password_agent_socket()
-                .or_else(|| {
-                    std::env::var("SSH_AUTH_SOCK")
-                        .ok()
-                        .filter(|s| !s.is_empty())
-                        .map(PathBuf::from)
-                })
-                .ok_or("No 1Password agent socket found and SSH_AUTH_SOCK is not set")?;
-
-            info!("connect_ssh: selected agent socket {:?}", agent_path);
-            info!("connect_ssh: connecting to agent socket");
-            let stream = UnixStream::connect(&agent_path).await.map_err(|e| {
-                warn!("connect_ssh: failed to connect to agent socket: {}", e);
-                format!("Failed to connect to SSH agent socket: {}", e)
-            })?;
-            info!("connect_ssh: agent socket connected");
-            let mut agent = AgentClient::connect(stream);
-            info!("connect_ssh: requesting agent identities");
-
-            let identities = agent.request_identities().await.map_err(|e| {
-                warn!("connect_ssh: request_identities failed: {}", e);
-                format!("Failed to get identities from SSH agent: {}", e)
-            })?;
-            info!("connect_ssh: {} identities returned", identities.len());
-            if identities.is_empty() {
-                warn!("connect_ssh: agent has no identities");
-                return Err("SSH agent has no keys. If you use 1Password, make sure it is unlocked and the SSH agent is enabled.".to_string());
-            }
-
-            let mut authenticated = false;
-            let mut last_error: Option<String> = None;
-            for key in &identities {
-                let comment = key.comment();
-                info!("connect_ssh: trying key '{}'", comment);
-                let result = session
-                    .authenticate_publickey_with(
-                        username.to_string(),
-                        key.clone(),
-                        None,
-                        &mut agent,
-                    )
-                    .await;
-                match result {
-                    Ok(auth) if auth.success() => {
-                        info!("connect_ssh: key '{}' accepted", comment);
-                        authenticated = true;
-                        break;
-                    }
-                    Ok(_) => {
-                        warn!("connect_ssh: key '{}' not accepted by server", comment);
-                    }
-                    Err(e) => {
-                        warn!("connect_ssh: key '{}' error: {}", comment, e);
-                        last_error = Some(format!("{}", e));
-                    }
-                }
-            }
-
-            if !authenticated {
-                warn!("connect_ssh: no agent key accepted");
-                return Err(last_error.unwrap_or_else(|| {
-                    "SSH agent authentication rejected. None of the available keys were accepted by the server.".to_string()
-                }));
-            }
-            info!("connect_ssh: agent auth succeeded");
-        }
-        "password" => {
-            info!("connect_ssh: starting password auth");
-            let pwd = password.ok_or("Password is required for password authentication")?;
-            let auth_result = session
-                .authenticate_password(username.to_string(), pwd.to_string())
-                .await
-                .map_err(|e| format!("Password authentication failed: {}", e))?;
-            if !auth_result.success() {
-                return Err("Password authentication rejected".to_string());
-            }
-            info!("connect_ssh: password auth succeeded");
-        }
-        _ => return Err(format!("Unsupported auth method: {}", auth_method)),
-    }
+    .await?;
 
     info!("connect_ssh: opening SSH channel");
     let channel = session
@@ -3338,8 +3229,9 @@ async fn ssh_test_connection(
     auth_method: String,
     key_path: Option<String>,
     password: Option<String>,
+    proxy_jump: Option<String>,
 ) -> Result<String, String> {
-    cmd_ssh_test_connection(host, port, username, auth_method, key_path, password).await
+    cmd_ssh_test_connection(host, port, username, auth_method, key_path, password, proxy_jump).await
 }
 
 pub async fn cmd_ssh_test_connection(
@@ -3349,6 +3241,7 @@ pub async fn cmd_ssh_test_connection(
     auth_method: String,
     key_path: Option<String>,
     password: Option<String>,
+    proxy_jump: Option<String>,
 ) -> Result<String, String> {
     info!("ssh_test_connection: starting connect with SFTP");
     let (session, sftp) = connect_ssh(
@@ -3358,6 +3251,7 @@ pub async fn cmd_ssh_test_connection(
         &auth_method,
         key_path.as_deref(),
         password.as_deref(),
+        proxy_jump.as_deref(),
     )
     .await?;
     info!(
@@ -3382,6 +3276,7 @@ async fn ssh_connect(
     auth_method: String,
     key_path: Option<String>,
     password: Option<String>,
+    proxy_jump: Option<String>,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     cmd_ssh_connect(
@@ -3393,6 +3288,7 @@ async fn ssh_connect(
         auth_method,
         key_path,
         password,
+        proxy_jump,
     )
     .await
 }
@@ -3406,10 +3302,11 @@ pub async fn cmd_ssh_connect(
     auth_method: String,
     key_path: Option<String>,
     password: Option<String>,
+    proxy_jump: Option<String>,
 ) -> Result<(), String> {
     info!(
-        "ssh_connect: project_id={} host={} port={} username={} auth_method={}",
-        project_id, host, port, username, auth_method
+        "ssh_connect: project_id={} host={} port={} username={} auth_method={} proxy_jump={:?}",
+        project_id, host, port, username, auth_method, proxy_jump
     );
     {
         let connections = state.ssh_connections.lock().await;
@@ -3442,6 +3339,7 @@ pub async fn cmd_ssh_connect(
         auth_method: auth_method.clone(),
         key_path: key_path.clone(),
         password: password.clone(),
+        proxy_jump: proxy_jump.clone(),
     };
 
     let (session, sftp) = match connect_ssh(
@@ -3451,6 +3349,7 @@ pub async fn cmd_ssh_connect(
         &auth_method,
         key_path.as_deref(),
         password.as_deref(),
+        proxy_jump.as_deref(),
     )
     .await
     {
@@ -3740,6 +3639,7 @@ async fn ensure_ssh_connection(project_id: &str, state: &AppState) -> Result<(),
                     username,
                     auth_method,
                     key_path,
+                    proxy_jump,
                     ..
                 } => {
                     let password = secrets::get_secret(project_id).ok().flatten();
@@ -3750,6 +3650,7 @@ async fn ensure_ssh_connection(project_id: &str, state: &AppState) -> Result<(),
                         auth_method: auth_method.clone(),
                         key_path: key_path.clone(),
                         password,
+                        proxy_jump: proxy_jump.clone(),
                     }
                 }
                 Connection::Local { .. } => {
@@ -3769,6 +3670,7 @@ async fn ensure_ssh_connection(project_id: &str, state: &AppState) -> Result<(),
         &credentials.auth_method,
         credentials.key_path.as_deref(),
         credentials.password.as_deref(),
+        credentials.proxy_jump.as_deref(),
     )
     .await
     {
@@ -3843,6 +3745,7 @@ async fn check_and_reconnect(project_id: &str, state: &AppState) {
             &credentials.auth_method,
             credentials.key_path.as_deref(),
             credentials.password.as_deref(),
+            credentials.proxy_jump.as_deref(),
         )
         .await;
 
@@ -3898,6 +3801,7 @@ async fn check_and_reconnect(project_id: &str, state: &AppState) {
                                         &credentials_clone.auth_method,
                                         credentials_clone.key_path.as_deref(),
                                         credentials_clone.password.as_deref(),
+                                        credentials_clone.proxy_jump.as_deref(),
                                     )
                                     .await;
                                     match result {

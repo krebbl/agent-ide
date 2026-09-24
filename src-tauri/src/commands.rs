@@ -163,10 +163,10 @@ pub async fn dispatch(state: &AppState, command: &str, payload: Value) -> Result
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "ssh_test_connection" => {
-            cmd_plain!(SshTestConnectionReq, ssh_test_connection, [host: String, port: u16, username: String, auth_method: String, key_path: Option<String>, password: Option<String>])
+            cmd_plain!(SshTestConnectionReq, ssh_test_connection, [host: String, port: u16, username: String, auth_method: String, key_path: Option<String>, password: Option<String>, proxy_jump: Option<String>])
         }
         "ssh_connect" => {
-            cmd_state!(SshConnectReq, ssh_connect, [project_id: String, host: String, port: u16, username: String, auth_method: String, key_path: Option<String>, password: Option<String>])
+            cmd_state!(SshConnectReq, ssh_connect, [project_id: String, host: String, port: u16, username: String, auth_method: String, key_path: Option<String>, password: Option<String>, proxy_jump: Option<String>])
         }
         "ssh_disconnect" => cmd_state!(SshDisconnectReq, ssh_disconnect, [project_id: String]),
         "ssh_list_directory" => {
@@ -203,7 +203,7 @@ pub async fn dispatch(state: &AppState, command: &str, payload: Value) -> Result
         }
         "pty_set_active" => cmd_state!(PtySetActiveReq, pty_set_active, [pty_id: Option<String>]),
         "pty_register_ssh_project" => {
-            cmd_state!(PtyRegisterSshProjectReq, pty_register_ssh_project, [project_id: String, host: String, port: u16, username: String, auth_method: String, key_path: Option<String>, password: Option<String>])
+            cmd_state!(PtyRegisterSshProjectReq, pty_register_ssh_project, [project_id: String, host: String, port: u16, username: String, auth_method: String, key_path: Option<String>, password: Option<String>, proxy_jump: Option<String>])
         }
         "pr_for_branch" => {
             cmd_state!(PrForBranchReq, pr_for_branch, [project_id: String, branch: String])

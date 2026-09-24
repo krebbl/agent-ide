@@ -247,6 +247,7 @@ impl PtyClient {
         auth_method: String,
         key_path: Option<String>,
         password: Option<String>,
+        proxy_jump: Option<String>,
     ) -> Result<(), String> {
         self.request_tx
             .send(DaemonRequest::RegisterSshProject {
@@ -257,6 +258,7 @@ impl PtyClient {
                 auth_method,
                 key_path,
                 password,
+                proxy_jump,
             })
             .map_err(|_| "pty daemon disconnected".to_string())
     }

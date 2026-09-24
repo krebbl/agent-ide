@@ -15,7 +15,7 @@ use russh::keys::PrivateKeyWithHashAlg;
 use std::path::PathBuf;
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
-use tracing::info;
+use tracing::{info, warn};
 
 use std::time::{Duration, Instant};
 
@@ -38,37 +38,75 @@ impl client::Handler for ClientHandler {
     }
 }
 
-pub async fn connect_ssh(
+/// Parses a ProxyJump spec in OpenSSH `-J` form: `[user@]host[:port]`.
+/// A missing user falls back to the target username, a missing port to 22.
+pub fn parse_proxy_jump(
+    spec: &str,
+    fallback_username: &str,
+) -> Result<(String, String, u16), String> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return Err("Proxy jump is empty".to_string());
+    }
+    let (username, rest) = match spec.split_once('@') {
+        Some((u, r)) if !u.trim().is_empty() && !r.trim().is_empty() => {
+            (Some(u.trim()), r.trim())
+        }
+        Some(_) => return Err(format!("Invalid proxy jump '{}': missing user or host", spec)),
+        None => (None, spec),
+    };
+    let (host, port) = match rest.rsplit_once(':') {
+        Some((h, p)) => {
+            if h.trim().is_empty() {
+                return Err(format!("Invalid proxy jump '{}': missing host", spec));
+            }
+            let port: u16 = p
+                .trim()
+                .parse()
+                .map_err(|_| format!("Invalid proxy jump '{}': port must be a number", spec))?;
+            (h.trim(), port)
+        }
+        None => (rest, 22),
+    };
+    Ok((
+        username.unwrap_or(fallback_username).to_string(),
+        host.to_string(),
+        port,
+    ))
+}
+
+async fn tcp_connect(
     host: &str,
     port: u16,
-    username: &str,
     auth_method: &str,
-    key_path: Option<&str>,
-    password: Option<&str>,
 ) -> Result<client::Handle<ClientHandler>, String> {
-    info!(
-        "remote_ssh: host={} port={} username={} auth_method={}",
-        host, port, username, auth_method
-    );
-    let config = Arc::new(client::Config::default());
-
     let connect_timeout = if auth_method == "agent" {
         Duration::from_secs(120)
     } else {
         Duration::from_secs(15)
     };
-
-    let mut session = tokio::time::timeout(
+    let config = Arc::new(client::Config::default());
+    tokio::time::timeout(
         connect_timeout,
         client::connect(config, (host, port), ClientHandler),
     )
     .await
     .map_err(|_| "Connection timed out".to_string())?
-    .map_err(|e| format!("Failed to connect: {}", e))?;
+    .map_err(|e| format!("Failed to connect: {}", e))
+}
 
+pub(crate) async fn authenticate_session(
+    session: client::Handle<ClientHandler>,
+    username: &str,
+    auth_method: &str,
+    key_path: Option<&str>,
+    password: Option<&str>,
+) -> Result<client::Handle<ClientHandler>, String> {
+    let mut session = session;
     let auth = tokio::time::timeout(Duration::from_secs(60), async {
     match auth_method {
         "key" => {
+            info!("connect_ssh: starting key auth");
             let kp = key_path.ok_or("Key path is required for key authentication")?;
             let key = russh_keys::load_secret_key(kp, None)
                 .map_err(|e| format!("Failed to load private key: {}", e))?;
@@ -80,46 +118,78 @@ pub async fn connect_ssh(
             if !auth_result.success() {
                 return Err("Key authentication rejected".to_string());
             }
+            info!("connect_ssh: key auth succeeded");
         }
         "agent" => {
+            info!("connect_ssh: starting agent auth");
             let agent_path = one_password_agent_socket()
-                .or_else(|| std::env::var("SSH_AUTH_SOCK").ok().filter(|s| !s.is_empty()).map(PathBuf::from))
+                .or_else(|| {
+                    std::env::var("SSH_AUTH_SOCK")
+                        .ok()
+                        .filter(|s| !s.is_empty())
+                        .map(PathBuf::from)
+                })
                 .ok_or("No 1Password agent socket found and SSH_AUTH_SOCK is not set")?;
 
-            let stream = UnixStream::connect(&agent_path)
-                .await
-                .map_err(|e| format!("Failed to connect to SSH agent socket: {}", e))?;
+            info!("connect_ssh: selected agent socket {:?}", agent_path);
+            info!("connect_ssh: connecting to agent socket");
+            let stream = UnixStream::connect(&agent_path).await.map_err(|e| {
+                warn!("connect_ssh: failed to connect to agent socket: {}", e);
+                format!("Failed to connect to SSH agent socket: {}", e)
+            })?;
+            info!("connect_ssh: agent socket connected");
             let mut agent = AgentClient::connect(stream);
-            let identities = agent
-                .request_identities()
-                .await
-                .map_err(|e| format!("Failed to get identities from SSH agent: {}", e))?;
+            info!("connect_ssh: requesting agent identities");
+
+            let identities = agent.request_identities().await.map_err(|e| {
+                warn!("connect_ssh: request_identities failed: {}", e);
+                format!("Failed to get identities from SSH agent: {}", e)
+            })?;
+            info!("connect_ssh: {} identities returned", identities.len());
             if identities.is_empty() {
+                warn!("connect_ssh: agent has no identities");
                 return Err("SSH agent has no keys. If you use 1Password, make sure it is unlocked and the SSH agent is enabled.".to_string());
             }
 
             let mut authenticated = false;
             let mut last_error: Option<String> = None;
             for key in &identities {
-                match session
-                    .authenticate_publickey_with(username.to_string(), key.clone(), None, &mut agent)
-                    .await
-                {
+                let comment = key.comment();
+                info!("connect_ssh: trying key '{}'", comment);
+                let result = session
+                    .authenticate_publickey_with(
+                        username.to_string(),
+                        key.clone(),
+                        None,
+                        &mut agent,
+                    )
+                    .await;
+                match result {
                     Ok(auth) if auth.success() => {
+                        info!("connect_ssh: key '{}' accepted", comment);
                         authenticated = true;
                         break;
                     }
-                    Ok(_) => {}
-                    Err(e) => last_error = Some(format!("{}", e)),
+                    Ok(_) => {
+                        warn!("connect_ssh: key '{}' not accepted by server", comment);
+                    }
+                    Err(e) => {
+                        warn!("connect_ssh: key '{}' error: {}", comment, e);
+                        last_error = Some(format!("{}", e));
+                    }
                 }
             }
+
             if !authenticated {
+                warn!("connect_ssh: no agent key accepted");
                 return Err(last_error.unwrap_or_else(|| {
                     "SSH agent authentication rejected. None of the available keys were accepted by the server.".to_string()
                 }));
             }
+            info!("connect_ssh: agent auth succeeded");
         }
         "password" => {
+            info!("connect_ssh: starting password auth");
             let pwd = password.ok_or("Password is required for password authentication")?;
             let auth_result = session
                 .authenticate_password(username.to_string(), pwd.to_string())
@@ -128,6 +198,7 @@ pub async fn connect_ssh(
             if !auth_result.success() {
                 return Err("Password authentication rejected".to_string());
             }
+            info!("connect_ssh: password auth succeeded");
         }
         _ => return Err(format!("Unsupported auth method: {}", auth_method)),
     }
@@ -138,6 +209,76 @@ pub async fn connect_ssh(
     auth?;
 
     Ok(session)
+}
+
+/// Connects to `host:port` as `username`, optionally tunneling through a
+/// ProxyJump host (`[user@]host[:port]`). The jump host is authenticated with
+/// the same credentials as the target. The returned session keeps the jump
+/// tunnel alive; the jump `Handle` may be dropped.
+pub async fn connect_ssh(
+    host: &str,
+    port: u16,
+    username: &str,
+    auth_method: &str,
+    key_path: Option<&str>,
+    password: Option<&str>,
+    proxy_jump: Option<&str>,
+) -> Result<client::Handle<ClientHandler>, String> {
+    info!(
+        "remote_ssh: host={} port={} username={} auth_method={} proxy_jump={:?}",
+        host, port, username, auth_method, proxy_jump
+    );
+
+    let jump = match proxy_jump {
+        Some(spec) if !spec.trim().is_empty() => Some(parse_proxy_jump(spec, username)?),
+        _ => None,
+    };
+
+    match jump {
+        None => {
+            let session = tcp_connect(host, port, auth_method).await?;
+            authenticate_session(session, username, auth_method, key_path, password).await
+        }
+        Some((jump_username, jump_host, jump_port)) => {
+            let jump_session = tcp_connect(&jump_host, jump_port, auth_method).await?;
+            let jump_session = authenticate_session(
+                jump_session,
+                &jump_username,
+                auth_method,
+                key_path,
+                password,
+            )
+            .await?;
+
+            let channel = jump_session
+                .channel_open_direct_tcpip(host, port as u32, "127.0.0.1", 0)
+                .await
+                .map_err(|e| format!("Failed to open tunnel through jump host: {}", e))?;
+            let stream = channel.into_stream();
+
+            let connect_timeout = if auth_method == "agent" {
+                Duration::from_secs(120)
+            } else {
+                Duration::from_secs(15)
+            };
+            let config = Arc::new(client::Config::default());
+            let session = tokio::time::timeout(
+                connect_timeout,
+                client::connect_stream(config, stream, ClientHandler),
+            )
+            .await
+            .map_err(|_| "Connection timed out".to_string())?
+            .map_err(|e| format!("Failed to connect through jump host: {}", e))?;
+
+            let session =
+                authenticate_session(session, username, auth_method, key_path, password).await?;
+            info!(
+                "remote_ssh: connected to {}:{} through jump host {}:{}",
+                host, port, jump_host, jump_port
+            );
+            Ok(session)
+        }
+    }
 }
 
 fn one_password_agent_socket() -> Option<PathBuf> {
@@ -581,4 +722,40 @@ async fn run_probe_loop(
 
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_proxy_jump;
+
+    #[test]
+    fn parse_proxy_jump_defaults_user_and_port() {
+        let (user, host, port) = parse_proxy_jump("jump.example.com", "targetuser").unwrap();
+        assert_eq!(user, "targetuser");
+        assert_eq!(host, "jump.example.com");
+        assert_eq!(port, 22);
+    }
+
+    #[test]
+    fn parse_proxy_jump_parses_user_and_port() {
+        let (user, host, port) = parse_proxy_jump("joe@jump.example.com:2200", "targetuser").unwrap();
+        assert_eq!(user, "joe");
+        assert_eq!(host, "jump.example.com");
+        assert_eq!(port, 2200);
+    }
+
+    #[test]
+    fn parse_proxy_jump_user_without_port() {
+        let (user, host, port) = parse_proxy_jump("joe@jump.example.com", "targetuser").unwrap();
+        assert_eq!(user, "joe");
+        assert_eq!(host, "jump.example.com");
+        assert_eq!(port, 22);
+    }
+
+    #[test]
+    fn parse_proxy_jump_rejects_bad_specs() {
+        for spec in ["", "   ", "user@", "@host", "host:notaport", "a@b:99999"] {
+            assert!(parse_proxy_jump(spec, "u").is_err(), "expected error for '{spec}'");
+        }
+    }
 }
