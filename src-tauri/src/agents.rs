@@ -316,7 +316,7 @@ pub async fn generate_worktree_name(
     prompt: &str,
     cwd: Option<String>,
 ) -> Result<String, String> {
-    const META_PROMPT: &str = "You generate git worktree names. Reply with ONLY a short kebab-case name (2-4 words, lowercase letters, digits and hyphens, at most 30 characters) that summarizes this task. No quotes, no backticks, no explanation.\n\nTask: ";
+    const META_PROMPT: &str = "You generate git worktree names. Reply with ONLY a short kebab-case name (2-4 words, lowercase letters, digits and hyphens, at most 30 characters). If the task contains a ticket URL (Jira, Linear, GitHub issue, etc.), fetch that ticket with your available tools, take its id and summary, and derive the name from them: the ticket id in kebab-case first (e.g. \"abc-123\"), followed by 1-3 kebab-case words from the ticket summary (e.g. \"abc-123-fix-login-bug\"). If fetching the ticket fails or there is no ticket URL, summarize the task itself. No quotes, no backticks, no explanation.\n\nTask: ";
     let clipped: String = prompt.trim().chars().take(600).collect();
     if clipped.is_empty() {
         return Err("Prompt is empty".to_string());
@@ -335,7 +335,8 @@ pub async fn generate_worktree_name(
         command.current_dir(dir);
     }
 
-    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    // An agent may run a ticket fetch round-trip before answering.
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
     let output = tokio::time::timeout(TIMEOUT, command.output())
         .await
         .map_err(|_| "Agent took too long to answer".to_string())?
