@@ -338,16 +338,6 @@ export default function NewAgentSessionDialog({
             <div className="mt-3 space-y-3 rounded-md border border-[var(--color-surface0)] bg-[var(--color-surface0)]/30 p-3">
               <div className="flex gap-2">
                 <button
-                  onClick={() => updateDraft({ createNew: false })}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                    !createNew
-                      ? "bg-[var(--color-blue)]/20 text-[var(--color-blue)]"
-                      : "bg-[var(--color-surface0)] text-[var(--color-overlay1)] hover:bg-[var(--color-surface1)]"
-                  }`}
-                >
-                  Use existing worktree
-                </button>
-                <button
                   onClick={() => updateDraft({ createNew: true })}
                   className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                     createNew
@@ -356,6 +346,16 @@ export default function NewAgentSessionDialog({
                   }`}
                 >
                   New worktree
+                </button>
+                <button
+                  onClick={() => updateDraft({ createNew: false })}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    !createNew
+                      ? "bg-[var(--color-blue)]/20 text-[var(--color-blue)]"
+                      : "bg-[var(--color-surface0)] text-[var(--color-overlay1)] hover:bg-[var(--color-surface1)]"
+                  }`}
+                >
+                  Use existing worktree
                 </button>
               </div>
               {!createNew ? (
