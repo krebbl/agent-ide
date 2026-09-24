@@ -259,9 +259,329 @@ pub fn scan_osc_title(state: &mut Vec<u8>, data: &[u8]) -> Option<String> {
     result
 }
 
+// Catppuccin Mocha palette, mirrored from the xterm theme object in
+// `src/components/main/TerminalView.tsx`. The backend answers OSC color
+// queries with these values; keep both in sync.
+const OSC_QUERY_FG: [u8; 3] = [0xcd, 0xd6, 0xf4]; // #cdd6f4
+const OSC_QUERY_BG: [u8; 3] = [0x1e, 0x1e, 0x2e]; // #1e1e2e
+const OSC_QUERY_CURSOR: [u8; 3] = [0xf5, 0xe0, 0xdc]; // #f5e0dc
+const OSC_QUERY_ANSI: [[u8; 3]; 16] = [
+    [0x45, 0x47, 0x5a], // 0 black
+    [0xf3, 0x8b, 0xa8], // 1 red
+    [0xa6, 0xe3, 0xa1], // 2 green
+    [0xf9, 0xe2, 0xaf], // 3 yellow
+    [0x89, 0xb4, 0xfa], // 4 blue
+    [0xf5, 0xc2, 0xe7], // 5 magenta
+    [0x89, 0xdc, 0xeb], // 6 cyan
+    [0xba, 0xc2, 0xde], // 7 white
+    [0x58, 0x5b, 0x70], // 8 bright black
+    [0xf3, 0x8b, 0xa8], // 9 bright red
+    [0xa6, 0xe3, 0xa1], // 10 bright green
+    [0xf9, 0xe2, 0xaf], // 11 bright yellow
+    [0x89, 0xb4, 0xfa], // 12 bright blue
+    [0xf5, 0xc2, 0xe7], // 13 bright magenta
+    [0x89, 0xdc, 0xeb], // 14 bright cyan
+    [0xcd, 0xd6, 0xf4], // 15 bright white
+];
+
+/// Maximum bytes of a pending (unterminated) sequence to carry across
+/// chunks; longer ones are treated as noise.
+const OSC_QUERY_CARRY_LIMIT: usize = 8192;
+
+fn osc_query_rgb(color: [u8; 3]) -> String {
+    format!(
+        "rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}",
+        color[0], color[0], color[1], color[1], color[2], color[2]
+    )
+}
+
+/// The xterm-256color palette entry for `index`: 0-15 from the theme,
+/// 16-231 the 6x6x6 color cube, 232-255 the grayscale ramp.
+fn osc_query_indexed(index: u8) -> [u8; 3] {
+    match index {
+        0..=15 => OSC_QUERY_ANSI[index as usize],
+        16..=231 => {
+            let i = (index - 16) as usize;
+            let levels = [0u8, 95, 135, 175, 215, 255];
+            [levels[i / 36], levels[(i % 36) / 6], levels[i % 6]]
+        }
+        _ => {
+            let v = 8 + (index - 232) * 10;
+            [v, v, v]
+        }
+    }
+}
+
+enum ColorQueryScan {
+    NotQuery,
+    Partial,
+    /// Reply bytes plus the number of bytes consumed from the slice start.
+    Query(Vec<u8>, usize),
+}
+
+fn parse_color_query(buf: &[u8]) -> ColorQueryScan {
+    let mut i = 2; // past ESC ]
+    let ident_start = i;
+    while i < buf.len() && buf[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == ident_start {
+        return ColorQueryScan::NotQuery;
+    }
+    if i >= buf.len() {
+        // The ident itself may continue in the next chunk.
+        return ColorQueryScan::Partial;
+    }
+    let ident: u32 = std::str::from_utf8(&buf[ident_start..i])
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(u32::MAX);
+    if !matches!(ident, 4 | 10 | 11 | 12) || buf[i] != b';' {
+        return ColorQueryScan::NotQuery;
+    }
+    i += 1;
+    let payload_start = i;
+    let mut end = None;
+    while i < buf.len() {
+        match buf[i] {
+            0x07 | 0x9c => {
+                end = Some((i, i + 1));
+                break;
+            }
+            0x1b => match buf.get(i + 1) {
+                Some(&b'\\') => {
+                    end = Some((i, i + 2));
+                    break;
+                }
+                Some(_) => return ColorQueryScan::NotQuery,
+                None => return ColorQueryScan::Partial,
+            },
+            _ => i += 1,
+        }
+    }
+    let Some((payload_end, consumed)) = end else {
+        return ColorQueryScan::Partial;
+    };
+    let payload = &buf[payload_start..payload_end];
+    if !payload.split(|&b| b == b';').any(|p| p == b"?") {
+        return ColorQueryScan::NotQuery;
+    }
+
+    let mut reply = format!("\x1b]{}", ident);
+    match ident {
+        10 | 11 | 12 => {
+            let color = match ident {
+                10 => OSC_QUERY_FG,
+                11 => OSC_QUERY_BG,
+                _ => OSC_QUERY_CURSOR,
+            };
+            reply.push_str(&format!(";{}", osc_query_rgb(color)));
+        }
+        _ => {
+            let params: Vec<&[u8]> = payload.split(|&b| b == b';').collect();
+            let mut answered = 0;
+            let mut k = 0;
+            while k + 1 < params.len() {
+                if params[k + 1] == b"?" {
+                    if let Some(index) =
+                        std::str::from_utf8(params[k]).map(str::trim).ok().and_then(|s| s.parse::<u8>().ok())
+                    {
+                        reply.push_str(&format!(";{};{}", index, osc_query_rgb(osc_query_indexed(index))));
+                        answered += 1;
+                    }
+                }
+                k += 2;
+            }
+            if answered == 0 {
+                return ColorQueryScan::NotQuery;
+            }
+        }
+    }
+    reply.push_str("\x1b\\");
+    ColorQueryScan::Query(reply.into_bytes(), consumed)
+}
+
+/// Scan `data` (with `state` carrying partial sequences across chunks) for
+/// OSC color queries — `OSC 10/11/12 ; ?` and `OSC 4 ; <index> ; ?` — and
+/// return one reply per query, in order. The caller MUST write each reply
+/// into the pty input stream immediately: query senders (shell prompt
+/// frameworks, tmux, fzf) read the answer synchronously, and a late reply
+/// would sit in the input queue until the next interactive program — e.g.
+/// `gh auth login` — consumes it and dies on the stale `ESC ]`.
+pub fn scan_osc_color_queries(state: &mut Vec<u8>, data: &[u8]) -> Vec<Vec<u8>> {
+    let mut buffer = std::mem::take(state);
+    buffer.extend_from_slice(data);
+    let mut replies = Vec::new();
+    let mut pos = 0;
+
+    loop {
+        let osc_start =
+            match buffer[pos.min(buffer.len())..].windows(2).position(|w| w == b"\x1b]") {
+                Some(rel) => pos + rel,
+                None => {
+                    // Only a lone trailing ESC can be a partial introducer;
+                    // a trailing `ESC ]` would have matched the window above.
+                    let keep = if buffer.last() == Some(&0x1b) { 1 } else { 0 };
+                    state.extend_from_slice(&buffer[buffer.len() - keep..]);
+                    break;
+                }
+            };
+
+        match parse_color_query(&buffer[osc_start..]) {
+            ColorQueryScan::NotQuery => pos = osc_start + 2,
+            ColorQueryScan::Partial => {
+                if buffer.len() - osc_start <= OSC_QUERY_CARRY_LIMIT {
+                    state.extend_from_slice(&buffer[osc_start..]);
+                }
+                break;
+            }
+            ColorQueryScan::Query(reply, consumed) => {
+                replies.push(reply);
+                pos = osc_start + consumed;
+            }
+        }
+    }
+    replies
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn replies(state: &mut Vec<u8>, data: &[u8]) -> Vec<String> {
+        scan_osc_color_queries(state, data)
+            .into_iter()
+            .map(|r| String::from_utf8(r).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn answers_osc11_query_bel() {
+        let mut state = Vec::new();
+        assert_eq!(
+            replies(&mut state, b"\x1b]11;?\x07"),
+            vec!["\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\"]
+        );
+    }
+
+    #[test]
+    fn answers_osc10_and_12_query_st() {
+        let mut state = Vec::new();
+        assert_eq!(
+            replies(&mut state, b"\x1b]10;?\x1b\\"),
+            vec!["\x1b]10;rgb:cdcd/d6d6/f4f4\x1b\\"]
+        );
+        assert_eq!(
+            replies(&mut state, b"\x1b]12;?\x07"),
+            vec!["\x1b]12;rgb:f5f5/e0e0/dcdc\x1b\\"]
+        );
+    }
+
+    #[test]
+    fn answers_osc4_query_with_theme_and_cube() {
+        let mut state = Vec::new();
+        assert_eq!(
+            replies(&mut state, b"\x1b]4;1;?\x07"),
+            vec!["\x1b]4;1;rgb:f3f3/8b8b/a8a8\x1b\\"]
+        );
+        assert_eq!(
+            replies(&mut state, b"\x1b]4;16;?\x07"),
+            vec!["\x1b]4;16;rgb:0000/0000/0000\x1b\\"]
+        );
+        assert_eq!(
+            replies(&mut state, b"\x1b]4;17;?\x07"),
+            vec!["\x1b]4;17;rgb:0000/0000/5f5f\x1b\\"]
+        );
+        assert_eq!(
+            replies(&mut state, b"\x1b]4;255;?\x07"),
+            vec!["\x1b]4;255;rgb:eeee/eeee/eeee\x1b\\"]
+        );
+    }
+
+    #[test]
+    fn answers_multiple_queries_and_mixed_output() {
+        let mut state = Vec::new();
+        assert_eq!(
+            replies(
+                &mut state,
+                b"prompt \x1b]11;?\x07 mid \x1b]10;?\x1b\\ tail"
+            ),
+            vec![
+                "\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\",
+                "\x1b]10;rgb:cdcd/d6d6/f4f4\x1b\\",
+            ]
+        );
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn reassembles_query_split_across_chunks() {
+        let mut state = Vec::new();
+        assert!(replies(&mut state, b"\x1b]1").is_empty());
+        assert!(replies(&mut state, b"1;").is_empty());
+        assert_eq!(
+            replies(&mut state, b"?\x07"),
+            vec!["\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\"]
+        );
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn reassembles_split_terminator() {
+        let mut state = Vec::new();
+        assert!(replies(&mut state, b"\x1b]11;?\x1b").is_empty());
+        assert_eq!(
+            replies(&mut state, b"\\"),
+            vec!["\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\"]
+        );
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn ignores_sets_and_other_osc_sequences() {
+        let mut state = Vec::new();
+        assert!(replies(&mut state, b"\x1b]11;rgb:ff/00/00\x07").is_empty());
+        assert!(replies(&mut state, b"\x1b]0;title\x07").is_empty());
+        assert!(replies(&mut state, b"\x1b]133;C\x07").is_empty());
+        assert!(replies(&mut state, b"\x1b]8;;http://x\x1b\\").is_empty());
+        assert!(replies(&mut state, b"\x1b]4;1;rgb:ff/00/00\x07").is_empty());
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn does_not_reply_to_color_set() {
+        let mut state = Vec::new();
+        assert!(replies(&mut state, b"\x1b]11;#1e1e2e\x07").is_empty());
+        assert!(replies(&mut state, b"\x1b]10;rgb:1e1e/1e1e/2e2e\x1b\\").is_empty());
+    }
+
+    #[test]
+    fn dangling_esc_carries_to_next_chunk() {
+        let mut state = Vec::new();
+        assert!(replies(&mut state, b"text \x1b").is_empty());
+        assert_eq!(
+            replies(&mut state, b"]11;?\x07"),
+            vec!["\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\"]
+        );
+        // The consumed tail must not leak into state.
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn osc4_multiple_queries_in_one_sequence() {
+        let mut state = Vec::new();
+        assert_eq!(
+            replies(&mut state, b"\x1b]4;1;?;2;?\x07"),
+            vec!["\x1b]4;1;rgb:f3f3/8b8b/a8a8;2;rgb:a6a6/e3e3/a1a1\x1b\\"]
+        );
+    }
+
+    #[test]
+    fn malformed_inner_escape_is_skipped() {
+        let mut state = Vec::new();
+        assert!(replies(&mut state, b"\x1b]11;?x\x1bZ\x07").is_empty());
+        assert!(state.is_empty());
+    }
 
     fn scan_once(data: &[u8]) -> Option<Osc133Event> {
         let mut state = Vec::new();

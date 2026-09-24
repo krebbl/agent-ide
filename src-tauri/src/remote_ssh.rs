@@ -389,6 +389,7 @@ async fn run_remote_terminal(
     let mut osc_state = Vec::new();
     let mut title_state = Vec::new();
     let mut tty_marker_state = Vec::new();
+    let mut color_query_state = Vec::new();
     let mut exit_code: Option<i32> = None;
     let mut last_agent_probe: Option<Instant> = None;
     let mut probe_in_flight = false;
@@ -423,6 +424,17 @@ async fn run_remote_terminal(
             msg = channel.wait() => {
                 match msg {
                     Some(ChannelMsg::Data { data }) => {
+                        // Answer terminal color queries (OSC 10/11/12;4 ; ?)
+                        // immediately in the SSH input stream. Query senders
+                        // (shell prompts, tmux, fzf) read the reply
+                        // synchronously; a late answer would sit in the
+                        // remote tty's input queue until the next interactive
+                        // program chokes on the stale escape bytes.
+                        let replies =
+                            crate::pty::scan_osc_color_queries(&mut color_query_state, data.as_ref());
+                        for reply in replies {
+                            let _ = channel.data(std::io::Cursor::new(reply)).await;
+                        }
                         if let Some(tty) = agent_detect::scan_ai_tty_marker(&mut tty_marker_state, data.as_ref()) {
                             *session_key.lock().unwrap() = Some(tty);
                         }

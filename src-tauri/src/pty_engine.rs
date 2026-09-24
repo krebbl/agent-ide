@@ -1,12 +1,13 @@
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{info, trace};
 
 use crate::agent_detect;
-use crate::pty::{scan_osc133_command, scan_osc_title};
+use crate::pty::{scan_osc133_command, scan_osc_color_queries, scan_osc_title};
 use crate::pty_protocol::ProcessInfo;
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -30,7 +31,7 @@ pub trait PtyEngine: Send + Sync {
 #[async_trait]
 impl PtyEngine for LocalPtyEngine {
     fn write(&self, data: &[u8]) -> Result<(), String> {
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = self.writer.lock();
         writer
             .write_all(data)
             .and_then(|_| writer.flush())
@@ -38,7 +39,7 @@ impl PtyEngine for LocalPtyEngine {
     }
 
     fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
-        let master = self.master.lock().unwrap();
+        let master = self.master.lock();
         master
             .resize(PtySize {
                 rows,
@@ -55,7 +56,7 @@ impl PtyEngine for LocalPtyEngine {
     }
 
     fn kill(&self) -> Result<(), String> {
-        let mut child = self.child.lock().unwrap();
+        let mut child = self.child.lock();
         child
             .kill()
             .map_err(|e| format!("Failed to kill PTY: {}", e))
@@ -205,14 +206,17 @@ impl LocalPtyEngine {
             .take_writer()
             .map_err(|e| format!("Failed to take PTY writer: {}", e))?;
         let master = pair.master;
+        let writer_arc = Arc::new(Mutex::new(master_writer));
 
         let reader_session_id = session_id.clone();
         let reader_event_tx = event_tx.clone();
+        let reader_writer = writer_arc.clone();
         let reader_handle = thread::spawn(move || {
             let mut reader = master_reader;
             let mut buffer = [0u8; 4096];
             let mut osc_state = Vec::new();
             let mut title_state = Vec::new();
+            let mut color_query_state = Vec::new();
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
@@ -233,6 +237,20 @@ impl LocalPtyEngine {
                                 reader_session_id.clone(),
                                 EngineEvent::Title(title),
                             ));
+                        }
+                        // Answer terminal color queries (OSC 10/11/12;4 ; ?)
+                        // immediately in the input stream. Query senders read
+                        // the reply synchronously; a late answer would sit in
+                        // the input queue until the next interactive program
+                        // chokes on the stale escape bytes.
+                        let replies = scan_osc_color_queries(&mut color_query_state, &buffer[..n]);
+                        if !replies.is_empty() {
+                            let mut writer = reader_writer.lock();
+                            for reply in &replies {
+                                if writer.write_all(reply).and_then(|_| writer.flush()).is_err() {
+                                    break;
+                                }
+                            }
                         }
                         let data = STANDARD.encode(&buffer[..n]);
                         let _ = reader_event_tx
@@ -276,7 +294,7 @@ impl LocalPtyEngine {
                 session_id = monitor_session_id,
                 "daemon local pty monitor started"
             );
-            let mut child = monitor_child.lock().unwrap();
+            let mut child = monitor_child.lock();
             let mut command_running = false;
             let mut agent_name: Option<String> = None;
             let mut last_agent_probe: Option<Instant> = None;
@@ -373,7 +391,7 @@ impl LocalPtyEngine {
 
                 drop(child);
                 thread::sleep(Duration::from_millis(100));
-                child = monitor_child.lock().unwrap();
+                child = monitor_child.lock();
             }
             info!(
                 session_id = monitor_session_id,
@@ -383,7 +401,7 @@ impl LocalPtyEngine {
 
         Ok(Self {
             child: child_arc,
-            writer: Arc::new(Mutex::new(master_writer)),
+            writer: writer_arc,
             master: Arc::new(Mutex::new(master)),
             shell_pgid,
             _reader_handle: reader_handle,

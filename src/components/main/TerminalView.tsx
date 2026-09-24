@@ -244,6 +244,16 @@ export default function TerminalView({
 
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
+    // The backend answers OSC color queries (OSC 10/11/12;4 ; ?) directly in
+    // the pty input stream (src-tauri/src/pty.rs scan_osc_color_queries).
+    // xterm's built-in reply travels webview -> IPC -> daemon -> SSH and
+    // would land in the remote tty's input queue after the query sender
+    // stopped reading — the next interactive program (e.g. `gh auth login`)
+    // then consumes the stale `ESC ]` and dies on it. Suppress the query
+    // form here; color sets fall through to xterm.
+    for (const osc of [4, 10, 11, 12]) {
+      terminal.parser.registerOscHandler(osc, (data) => data.split(";").includes("?"));
+    }
     terminal.loadAddon(new ClipboardAddon());
     terminal.loadAddon(
       new WebLinksAddon(async (_event, uri) => {
