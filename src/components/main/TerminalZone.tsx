@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronUp,
   ChevronRight,
+  ChevronLeft,
   Loader2,
   Bot,
 } from "lucide-react";
@@ -11,9 +12,10 @@ import { useEffect, useMemo, useCallback } from "react";
 import type { TerminalTab } from "../../types";
 import type { TerminalSession } from "../../stores/terminalStore";
 import { invoke } from "../../services/ipc";
-import { useTerminalStore, collectLeaves, findLeaf } from "../../stores/terminalStore";
+import { useTerminalStore, collectLeaves, findLeaf, canNavigateTabHistory } from "../../stores/terminalStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { useUiStore } from "../../stores/uiStore";
+import { useTabHistoryNavigation } from "../../hooks/useTabHistoryNavigation";
 import SplitPaneContainer from "./SplitPaneContainer";
 import RecentAgentSessions from "./RecentAgentSessions";
 import TabStrip from "../ui/TabStrip";
@@ -93,6 +95,13 @@ export default function TerminalZone({
   const removeSession = useTerminalStore((s) => s.removeSession);
   const splitPane = useTerminalStore((s) => s.splitPane);
   const navigatePane = useTerminalStore((s) => s.navigatePane);
+  const navigateTabHistory = useTerminalStore((s) => s.navigateTabHistory);
+  const canGoBack = useTerminalStore((s) => canNavigateTabHistory(s, "back"));
+  const canGoForward = useTerminalStore((s) =>
+    canNavigateTabHistory(s, "forward"),
+  );
+
+  useTabHistoryNavigation();
 
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const selectedWorktreeId = useProjectStore((s) => s.selectedWorktreeId);
@@ -249,6 +258,25 @@ export default function TerminalZone({
         <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-subtext1)]">
           Terminal
         </span>
+
+        <div className="flex shrink-0 items-center">
+          <button
+            onClick={() => navigateTabHistory("back")}
+            disabled={!canGoBack}
+            className="shrink-0 text-[var(--color-overlay1)] transition-colors hover:text-[var(--color-text)] disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Back to previous tab (two-finger swipe right)"
+          >
+            <ChevronLeft size={15} />
+          </button>
+          <button
+            onClick={() => navigateTabHistory("forward")}
+            disabled={!canGoForward}
+            className="shrink-0 text-[var(--color-overlay1)] transition-colors hover:text-[var(--color-text)] disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Forward to next tab (two-finger swipe left)"
+          >
+            <ChevronRight size={15} />
+          </button>
+        </div>
 
         <TabStrip
           tabs={visibleTabs.map((tab) => {

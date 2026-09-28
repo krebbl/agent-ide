@@ -9,6 +9,7 @@ mod jira;
 pub mod lsp;
 mod mac_badge;
 mod notification;
+mod webview_gestures;
 mod pr_info;
 mod pty;
 pub mod pty_client;
@@ -3937,6 +3938,10 @@ pub fn run() {
 
             let dock_badge = Arc::new(crate::badge::DockBadge::new(app.handle().clone()));
             app.manage(dock_badge.clone());
+
+            if let Some(main_window) = app.get_webview_window("main") {
+                crate::webview_gestures::enable(&main_window);
+            }
 
             let state_clone = state.clone();
             tauri::async_runtime::spawn(async move {

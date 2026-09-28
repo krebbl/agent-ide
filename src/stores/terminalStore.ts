@@ -141,6 +141,11 @@ interface TerminalStore {
   isCollapsed: boolean;
   searchOpenSessionId: string | null;
   worktreeTabMap: Record<string, string>;
+  tabHistory: string[];
+  tabHistoryIndex: number;
+
+  navigateTabHistory: (direction: "back" | "forward") => void;
+  handleTabHistoryPop: (entry: unknown) => void;
 
   getWorktreeTabId: (projectId: string, worktreeId: string) => string | null;
 
@@ -332,6 +337,34 @@ function removePaneFromTree(root: Pane, paneId: string): Pane | null {
   return root;
 }
 
+let navigatingTabHistory = false;
+let historyRooted = false;
+let popStateSkips = 0;
+
+export function canNavigateTabHistory(
+  state: Pick<
+    TerminalStore,
+    "tabHistory" | "tabHistoryIndex" | "tabs" | "sessions"
+  >,
+  direction: "back" | "forward",
+): boolean {
+  const step = direction === "back" ? -1 : 1;
+  for (
+    let idx = state.tabHistoryIndex + step;
+    idx >= 0 && idx < state.tabHistory.length;
+    idx += step
+  ) {
+    const tab = state.tabs.find((t) => t.id === state.tabHistory[idx]);
+    if (!tab) continue;
+    const leaf =
+      findLeaf(tab.rootPane, tab.focusedPaneId) ?? getFirstLeaf(tab.rootPane);
+    if (leaf && state.sessions.some((s) => s.id === leaf.sessionId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export const useTerminalStore = create<TerminalStore>((set, get) => ({
   sessions: [],
   tabs: [],
@@ -340,6 +373,53 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   isCollapsed: false,
   searchOpenSessionId: null,
   worktreeTabMap: loadWorktreeTabMap(),
+  tabHistory: [],
+  tabHistoryIndex: -1,
+
+  navigateTabHistory: (direction) => {
+    if (navigatingTabHistory) return;
+    if (!canNavigateTabHistory(get(), direction)) return;
+    try {
+      if (direction === "back") window.history.back();
+      else window.history.forward();
+    } catch {
+      /* history unavailable */
+    }
+  },
+
+  handleTabHistoryPop: (entry) => {
+    const state = get();
+    const data = entry && typeof entry === "object" ? (entry as { tabId?: unknown; n?: unknown }) : null;
+    const tabId = typeof data?.tabId === "string" ? data.tabId : null;
+    const n = typeof data?.n === "number" ? data.n : null;
+    if (!tabId || n === null) return;
+    const tab = state.tabs.find((t) => t.id === tabId);
+    const leaf = tab
+      ? findLeaf(tab.rootPane, tab.focusedPaneId) ?? getFirstLeaf(tab.rootPane)
+      : null;
+    const session = leaf
+      ? state.sessions.find((s) => s.id === leaf.sessionId)
+      : null;
+    if (session) {
+      popStateSkips = 0;
+      navigatingTabHistory = true;
+      try {
+        get().focusSession(session.id);
+      } finally {
+        navigatingTabHistory = false;
+      }
+      set({ tabHistoryIndex: n });
+      return;
+    }
+    if (popStateSkips >= 25) return;
+    popStateSkips++;
+    try {
+      if (n > state.tabHistoryIndex) window.history.forward();
+      else window.history.back();
+    } catch {
+      /* history unavailable */
+    }
+  },
 
   getWorktreeTabId: (projectId, worktreeId) => {
     return get().worktreeTabMap[worktreeKey(projectId, worktreeId)] ?? null;
@@ -867,6 +947,32 @@ useTerminalStore.subscribe((state, prevState) => {
 
   if (state.tabs !== prevState.tabs || state.activeTabId !== prevState.activeTabId) {
     persistLayout(state);
+  }
+
+  if (
+    state.activeTabId !== prevState.activeTabId &&
+    state.activeTabId &&
+    !navigatingTabHistory
+  ) {
+    const nextActiveTabId = state.activeTabId;
+    useTerminalStore.setState((s) => {
+      const truncated = s.tabHistory.slice(0, s.tabHistoryIndex + 1);
+      if (truncated[truncated.length - 1] === nextActiveTabId) return {};
+      const next = [...truncated, nextActiveTabId];
+      const trimmed = next.length > 100 ? next.slice(next.length - 100) : next;
+      const idx = trimmed.length - 1;
+      try {
+        if (historyRooted) {
+          window.history.pushState({ tabId: nextActiveTabId, n: idx }, "");
+        } else {
+          window.history.replaceState({ tabId: nextActiveTabId, n: idx }, "");
+          historyRooted = true;
+        }
+      } catch {
+        /* history unavailable */
+      }
+      return { tabHistory: trimmed, tabHistoryIndex: idx };
+    });
   }
 
   const updates: Array<{ id: string; hasUnseenActivity: true }> = [];

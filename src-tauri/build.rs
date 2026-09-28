@@ -5,12 +5,16 @@ fn main() {
     {
         println!("cargo:rerun-if-changed=objc/notification.m");
         println!("cargo:rerun-if-changed=objc/notification.h");
+        println!("cargo:rerun-if-changed=objc/webview_gestures.m");
+        println!("cargo:rerun-if-changed=objc/webview_gestures.h");
         cc::Build::new()
             .file("objc/notification.m")
+            .file("objc/webview_gestures.m")
             .flag("-fmodules")
             .flag("-fobjc-arc")
             .compile("agent_ide_notification");
         println!("cargo:rustc-link-lib=framework=UserNotifications");
+        println!("cargo:rustc-link-lib=framework=WebKit");
     }
     // Refresh AGENT_IDE_DAEMON_TOKEN whenever Rust code changes, so the
     // running app replaces stale PTY daemons built from older sources.
