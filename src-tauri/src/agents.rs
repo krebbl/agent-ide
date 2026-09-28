@@ -62,9 +62,10 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
             model_flag: "--model".to_string(),
             prompt_flag: None,
             models: vec![
-                AgentModel { id: "opus".to_string(), label: "Claude Opus 4.5".to_string() },
-                AgentModel { id: "sonnet".to_string(), label: "Claude Sonnet 4.5".to_string() },
-                AgentModel { id: "haiku".to_string(), label: "Claude Haiku 4.5".to_string() },
+                AgentModel { id: "opus".to_string(), label: "Claude Opus (latest)".to_string() },
+                AgentModel { id: "sonnet".to_string(), label: "Claude Sonnet (latest)".to_string() },
+                AgentModel { id: "fable".to_string(), label: "Claude Fable (latest)".to_string() },
+                AgentModel { id: "haiku".to_string(), label: "Claude Haiku (latest)".to_string() },
             ],
         },
         AgentDefinition {
@@ -316,7 +317,7 @@ pub async fn generate_worktree_name(
     prompt: &str,
     cwd: Option<String>,
 ) -> Result<String, String> {
-    const META_PROMPT: &str = "You generate git worktree names. Reply with ONLY a short kebab-case name (2-4 words, lowercase letters, digits and hyphens, at most 30 characters). If the task contains a ticket URL (Jira, Linear, GitHub issue, etc.), fetch that ticket with your available tools, take its id and summary, and derive the name from them: the ticket id in kebab-case first (e.g. \"abc-123\"), followed by 1-3 kebab-case words from the ticket summary (e.g. \"abc-123-fix-login-bug\"). If fetching the ticket fails or there is no ticket URL, summarize the task itself. No quotes, no backticks, no explanation.\n\nTask: ";
+    const META_PROMPT: &str = "You generate git worktree names. Reply with ONLY a short kebab-case name (3-6 words, lowercase letters, digits and hyphens, at most 40 characters). If the task contains a ticket URL (Jira, Linear, GitHub issue, etc.), fetch that ticket with your available tools, take its id and summary, and derive the name from them: the ticket id first, keeping its original casing exactly (e.g. \"MNT-123\", never \"mnt-123\"), followed by 1-4 lowercase kebab-case words from the ticket summary (e.g. \"MNT-123-fix-login-bug\"). If fetching the ticket fails or there is no ticket URL, summarize the task itself. No quotes, no backticks, no explanation.\n\nTask: ";
     let clipped: String = prompt.trim().chars().take(600).collect();
     if clipped.is_empty() {
         return Err("Prompt is empty".to_string());
@@ -359,7 +360,9 @@ pub async fn generate_worktree_name(
 /// line (courtesy preambles come first, the answer last), punctuation
 /// collapsed to hyphens, empty segments dropped, capped at 40 chars. Code
 /// fences and backtick-quoted answers degrade to "" or a clean name
-/// respectively instead of leaking markdown.
+/// respectively instead of leaking markdown. Words are lowercased, except
+/// ticket keys (an all-uppercase segment directly followed by a number
+/// segment, e.g. `MNT-123`), which keep their original casing.
 fn sanitize_worktree_name(raw: &str) -> Option<String> {
     raw.lines()
         .filter_map(|line| {
@@ -368,7 +371,7 @@ fn sanitize_worktree_name(raw: &str) -> Option<String> {
                 .chars()
                 .map(|c| {
                     if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                        c.to_ascii_lowercase()
+                        c
                     } else {
                         '-'
                     }
@@ -382,10 +385,38 @@ fn sanitize_worktree_name(raw: &str) -> Option<String> {
             if collapsed.is_empty() {
                 None
             } else {
-                Some(collapsed.chars().take(40).collect::<String>())
+                Some(
+                    keep_ticket_key_case(&collapsed)
+                        .chars()
+                        .take(40)
+                        .collect::<String>(),
+                )
             }
         })
         .last()
+}
+
+/// Lowercase every hyphen-separated segment except ticket keys: an
+/// all-uppercase segment of 2+ letters whose next segment is all digits
+/// (e.g. `MNT-123`) keeps its casing.
+fn keep_ticket_key_case(name: &str) -> String {
+    let segments: Vec<&str> = name.split('-').collect();
+    segments
+        .iter()
+        .enumerate()
+        .map(|(i, seg)| {
+            let next_is_number = segments
+                .get(i + 1)
+                .is_some_and(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()));
+            let is_upper_key = seg.len() >= 2 && seg.chars().all(|c| c.is_ascii_uppercase());
+            if is_upper_key && next_is_number {
+                (*seg).to_string()
+            } else {
+                (*seg).to_lowercase()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 /// argv that launches `agent` resumed onto a specific conversation, e.g.
@@ -1180,6 +1211,24 @@ mod tests {
         assert_eq!(
             sanitize_worktree_name("```\nfoo-bar\n```\nHope that helps!"),
             Some("hope-that-helps".to_string())
+        );
+        // Ticket keys keep their original casing.
+        assert_eq!(
+            sanitize_worktree_name("MNT-123-fix-login-bug"),
+            Some("MNT-123-fix-login-bug".to_string())
+        );
+        assert_eq!(
+            sanitize_worktree_name("\"Fix MNT-123 login bug!\""),
+            Some("fix-MNT-123-login-bug".to_string())
+        );
+        // Lowercase ids and single-letter prefixes are not ticket keys.
+        assert_eq!(
+            sanitize_worktree_name("mnt-123-fix-login-bug"),
+            Some("mnt-123-fix-login-bug".to_string())
+        );
+        assert_eq!(
+            sanitize_worktree_name("Fix T-123 bug"),
+            Some("fix-t-123-bug".to_string())
         );
         // Overlong answers are capped.
         assert_eq!(
