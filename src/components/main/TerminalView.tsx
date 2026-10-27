@@ -26,6 +26,38 @@ interface TerminalViewProps {
   isCollapsed: boolean;
 }
 
+// Chrome throttles setTimeout (which drives xterm's write-parse loop) in
+// hidden/occluded windows and delivers everything queued during a freeze in
+// one burst on return. Writing that backlog straight into xterm renders every
+// intermediate frame, so the user watches the terminal scroll through the
+// entire backlog. Instead: once the unparsed backlog passes
+// WRITE_BACKLOG_LIMIT, queue incoming output and drain it in slices with
+// rendering suppressed until the terminal is caught up.
+const WRITE_BACKLOG_LIMIT = 2 * 1024 * 1024;
+// Queue mode stays on until the unparsed backlog falls back under this, so
+// bursty delivery around the entry threshold does not toggle it constantly.
+const WRITE_BACKLOG_EXIT_BYTES = WRITE_BACKLOG_LIMIT / 4;
+const WRITE_SLICE_BYTES = 1024 * 1024;
+const WRITE_QUEUE_CAP_BYTES = 32 * 1024 * 1024;
+// While a large unparsed backlog exists, keep the terminal blank instead of
+// letting intermediate frames fly by.
+const VISIBLE_BACKLOG_LIMIT = 4 * 1024 * 1024;
+
+const OUTPUT_TRIMMED_NOTICE = new TextEncoder().encode(
+  "\r\n\x1b[2m— older output trimmed while the window was in the background —\r\n\x1b[0m\r\n",
+);
+
+function concatChunks(chunks: Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
 export default function TerminalView({
   sessionId,
   ptyId,
@@ -269,10 +301,87 @@ export default function TerminalView({
     xtermRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
+    const writeQueue: Uint8Array[] = [];
+    let queuedBytes = 0;
+    let outstandingBytes = 0;
+    let drainingBurst = false;
+    let trimmedNoticeQueued = false;
+
+    let backlogHidden = false;
+    const updateBacklogVisibility = () => {
+      const pending = outstandingBytes + queuedBytes;
+      if (pending > VISIBLE_BACKLOG_LIMIT) backlogHidden = true;
+      else if (pending < VISIBLE_BACKLOG_LIMIT / 4) backlogHidden = false;
+      container.style.visibility = backlogHidden ? "hidden" : "";
+    };
+
+    const drainWriteQueue = () => {
+      if (!drainingBurst || outstandingBytes > 0) return;
+      const target = xtermRef.current;
+      if (!target) return;
+      if (writeQueue.length === 0) {
+        if (outstandingBytes <= WRITE_BACKLOG_EXIT_BYTES) {
+          drainingBurst = false;
+          trimmedNoticeQueued = false;
+          updateBacklogVisibility();
+          return;
+        }
+        return;
+      }
+      let sliceBytes = 0;
+      let count = 0;
+      while (count < writeQueue.length && sliceBytes < WRITE_SLICE_BYTES) {
+        sliceBytes += writeQueue[count].length;
+        count++;
+      }
+      const chunks = writeQueue.splice(0, count);
+      const slice = count === 1 ? chunks[0] : concatChunks(chunks);
+      queuedBytes -= sliceBytes;
+      updateBacklogVisibility();
+      outstandingBytes = sliceBytes;
+      target.write(slice, () => {
+        outstandingBytes = 0;
+        drainWriteQueue();
+      });
+    };
+
+    const enqueueOutput = (data: Uint8Array) => {
+      writeQueue.push(data);
+      queuedBytes += data.length;
+      if (queuedBytes > WRITE_QUEUE_CAP_BYTES) {
+        let drop = queuedBytes - WRITE_QUEUE_CAP_BYTES;
+        while (drop > 0 && writeQueue.length > 0) {
+          const chunk = writeQueue.shift();
+          if (!chunk) break;
+          queuedBytes -= chunk.length;
+          drop -= chunk.length;
+        }
+        if (!trimmedNoticeQueued) {
+          trimmedNoticeQueued = true;
+          writeQueue.unshift(OUTPUT_TRIMMED_NOTICE);
+          queuedBytes += OUTPUT_TRIMMED_NOTICE.length;
+        }
+      }
+      updateBacklogVisibility();
+      drainWriteQueue();
+    };
+
     registerTerminal(ptyId, {
       onOutput: (data) => {
-        terminal.write(data);
         extendProcess();
+        if (drainingBurst) {
+          enqueueOutput(data);
+          return;
+        }
+        outstandingBytes += data.length;
+        terminal.write(data, () => {
+          outstandingBytes -= data.length;
+          updateBacklogVisibility();
+          if (drainingBurst) drainWriteQueue();
+        });
+        if (outstandingBytes > WRITE_BACKLOG_LIMIT) {
+          drainingBurst = true;
+        }
       },
       onExit: () => {
         endProcess();
